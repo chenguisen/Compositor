@@ -106,13 +106,34 @@ public class TiledRenderTests
         using var whole = DocumentRenderer.Render(document);
         Assert.Equal(37, whole.Width);
         Assert.Equal(29, whole.Height);
+        Assert.Equal(20, AssertPiecesMatchWhole(document, Tile));
+    }
 
+    /// <summary>
+    /// The same contract for a blur the boxes make: past a sigma of eight the blur is four box passes rather
+    /// than the exact kernel, and their reach is a little wider, so a tile's halo has to be wide enough all
+    /// the same. A canvas this much bigger than the halo is what puts pieces next to each other mid-canvas.
+    /// </summary>
+    [Fact]
+    public void RenderingInPiecesMatchesRenderingWholeAtAWideBlur()
+    {
+        using var document = new CanvasDocument(Guid.NewGuid(), 200, 160);
+        document.Layers.Add(Solid(new SKColor(200, 180, 160), 0, 0, 200, 160));
+        document.Layers.Add(Empty("Blur", 12, AdjustmentKind.GaussianBlur));
+        document.Layers.Add(Empty("Invert", 0, AdjustmentKind.Invert, opacity: 0.5));
+        Assert.Equal(500, AssertPiecesMatchWhole(document, Tile));
+    }
+
+    /// <summary>Every pixel of every piece against the same pixel of a whole-canvas render. The count of pieces.</summary>
+    private static int AssertPiecesMatchWhole(CanvasDocument document, int tile)
+    {
+        using var whole = DocumentRenderer.Render(document);
         var pieces = 0;
-        for (var y = 0; y < document.Height; y += Tile)
+        for (var y = 0; y < document.Height; y += tile)
         {
-            for (var x = 0; x < document.Width; x += Tile)
+            for (var x = 0; x < document.Width; x += tile)
             {
-                var region = SKRectI.Create(x, y, Math.Min(Tile, document.Width - x), Math.Min(Tile, document.Height - y));
+                var region = SKRectI.Create(x, y, Math.Min(tile, document.Width - x), Math.Min(tile, document.Height - y));
                 using var piece = DocumentRenderer.RenderRegion(document, region);
                 Assert.Equal(region.Width, piece.Width);
                 Assert.Equal(region.Height, piece.Height);
@@ -129,7 +150,7 @@ public class TiledRenderTests
                 pieces++;
             }
         }
-        Assert.Equal(20, pieces);
+        return pieces;
     }
 
     [Fact]

@@ -78,7 +78,12 @@ public static class AdjustmentOperators
                 ApplyColorBalance(adjustment, rgba, width, height, stride);
                 break;
             case AdjustmentKind.GaussianBlur:
-                ApplyGaussianBlur(Clamp(adjustment.GaussianRadius, 0.1, 250), rgba, width, height, stride);
+                // Outside the buffer is transparent black rather than an edge smear, as on the Mac, where the
+                // layer is padded out first and the padded grid is what gets blurred: give this buffer
+                // radius * 3 + 2 pixels of margin (LayerAdjustment.SamplingMargin) to keep the fade off the
+                // visible area.
+                GaussianBlur.ZeroPadded(rgba, width, height, 4, stride,
+                    Clamp(adjustment.GaussianRadius, 0.1, 250));
                 break;
             case AdjustmentKind.MotionBlur:
                 // The filter's own settings clamp: distance 1…2000, angle −90…90.
@@ -478,94 +483,11 @@ public static class AdjustmentOperators
     // ---------------------------------------------------------------- Blurs
 
     /// <summary>
-    /// Gaussian blur at <paramref name="radius"/> pixels of standard deviation, the radius Core Image takes.
-    /// The Mac build pads the layer out first and blurs the padded grid, so pixels outside are transparent
-    /// black rather than an edge smear; the same is done here, inside whatever buffer the caller supplies —
-    /// give it <c>radius * 3 + 2</c> pixels of margin (LayerAdjustment.samplingMargin) to keep the fade off
-    /// the visible area. One float plane holds a channel between the two passes.
-    /// </summary>
-    private static void ApplyGaussianBlur(double radius, Span<byte> rgba, int width, int height, int stride)
-    {
-        float sigma = (float)radius;
-        float[] weights = GaussianWeights(sigma, out int half);
-        float[] plane;
-        float[] row;
-        try
-        {
-            plane = new float[width * height];
-            row = new float[width];
-        }
-        catch (OutOfMemoryException)
-        {
-            return;
-        }
-        for (int channel = 0; channel < 4; channel++)
-        {
-            for (int y = 0; y < height; y++)
-            {
-                int source = y * stride + channel;
-                int target = y * width;
-                for (int x = 0; x < width; x++) plane[target + x] = rgba[source + x * 4];
-            }
-            for (int y = 0; y < height; y++)
-            {
-                int line = y * width;
-                for (int x = 0; x < width; x++)
-                {
-                    float sum = 0;
-                    if (x >= half && x < width - half)
-                    {
-                        for (int k = -half; k <= half; k++) sum += weights[k + half] * plane[line + x + k];
-                    }
-                    else
-                    {
-                        for (int k = -half; k <= half; k++)
-                        {
-                            int sx = x + k;
-                            if ((uint)sx < (uint)width) sum += weights[k + half] * plane[line + sx];
-                        }
-                    }
-                    row[x] = sum;
-                }
-                row.AsSpan(0, width).CopyTo(plane.AsSpan(line, width));
-            }
-            // Columns in blocks: the rows the taps read stay in cache instead of being walked one column at a time.
-            const int Block = 16;
-            for (int x0 = 0; x0 < width; x0 += Block)
-            {
-                int x1 = Math.Min(width, x0 + Block);
-                for (int y = 0; y < height; y++)
-                {
-                    bool inside = y >= half && y < height - half;
-                    for (int x = x0; x < x1; x++)
-                    {
-                        float sum = 0;
-                        if (inside)
-                        {
-                            int index = (y - half) * width + x;
-                            for (int k = -half; k <= half; k++, index += width)
-                                sum += weights[k + half] * plane[index];
-                        }
-                        else
-                        {
-                            for (int k = -half; k <= half; k++)
-                            {
-                                int sy = y + k;
-                                if ((uint)sy < (uint)height) sum += weights[k + half] * plane[sy * width + x];
-                            }
-                        }
-                        rgba[y * stride + x * 4 + channel] =
-                            (byte)MathF.Min(255f, MathF.Max(0f, MathF.Round(sum, MidpointRounding.AwayFromZero)));
-                    }
-                }
-            }
-        }
-    }
-
-    /// <summary>
-    /// A Gaussian kernel one tap per pixel, three standard deviations wide, normalized. Sampling a Gaussian
-    /// kernel coarsely would fold fine detail back in — a checkerboard sits unattenuated under an even tap
-    /// stride whatever the spread — so every pixel is a tap and a large radius costs its width.
+    /// Motion Blur's kernel: a Gaussian one tap per pixel, three standard deviations wide, normalized.
+    /// Sampling a Gaussian kernel coarsely would fold fine detail back in — a checkerboard sits unattenuated
+    /// under an even tap stride whatever the spread — so every pixel is a tap and a long streak costs its
+    /// length. The Gaussian Blur adjustment no longer comes through here: its radius reaches 250, which is
+    /// where the tap-per-pixel cost became minutes, and <see cref="GaussianBlur"/> stands boxes in for it.
     /// </summary>
     private static float[] GaussianWeights(float sigma, out int half)
     {
