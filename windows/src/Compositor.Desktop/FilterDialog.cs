@@ -13,8 +13,13 @@ namespace Compositor.Desktop;
 /// </summary>
 internal sealed class FilterDialog : DialogWindow
 {
-    /// <summary>Asks for the picture to be shown with this filter's amounts as they stand.</summary>
-    public Action<FilterSettings>? Preview { get; set; }
+    /// <summary>
+    /// Asks for the picture to be shown with this filter's amounts as they stand, or — with nothing — shown as
+    /// it is, which is what the Preview tick being off means. The Mac's own filter sheets have that tick.
+    /// </summary>
+    public Action<FilterSettings?>? Preview { get; set; }
+
+    private readonly CheckBox _preview = new() { Content = "Preview", IsChecked = true };
 
     private readonly List<(Slider Slider, Action<FilterSettings, double> Set)> _rows = [];
     private readonly List<double> _fallbacks = [];
@@ -86,14 +91,15 @@ internal sealed class FilterDialog : DialogWindow
         ok.Click += (_, _) => Accept();
         cancel.Click += (_, _) => Close();
         reset.Click += (_, _) => Restore();
-        group.Children.Add(new StackPanel
+        _preview.IsCheckedChanged += (_, _) => Preview?.Invoke(_preview.IsChecked == true ? Current() : null);
+        var buttons = new StackPanel
         {
             Orientation = Orientation.Horizontal,
             Spacing = 8,
             Margin = new Thickness(0, 14, 0, 0),
-            HorizontalAlignment = HorizontalAlignment.Right,
-            Children = { reset, cancel, ok },
-        });
+            Children = { _preview, new TextBlock { Text = "", Width = 8 }, reset, cancel, ok },
+        };
+        group.Children.Add(buttons);
 
         Content = new ScrollViewer { Content = group };
     }
@@ -158,7 +164,7 @@ internal sealed class FilterDialog : DialogWindow
 
     /// <summary>The amounts to apply, or null when the panel was dismissed or asks for nothing.</summary>
     public static async Task<FilterSettings?> Ask(Window owner, FilterKind kind, FilterSettings start,
-        Action<FilterSettings>? preview = null)
+        Action<FilterSettings?>? preview = null)
     {
         var dialog = new FilterDialog(kind, start) { Preview = preview };
         await dialog.ShowDialog(owner);

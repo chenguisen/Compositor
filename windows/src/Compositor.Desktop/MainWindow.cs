@@ -1677,6 +1677,21 @@ public sealed class MainWindow : Window
         if (!document.Selection.Antialiased) throw new InvalidOperationException("the tick back on did not take");
         if (PartCovered(document) < 20) throw new InvalidOperationException("the edge did not come out soft again");
 
+        // The filter panel's Preview tick, from the window's side of it: with the tick on the canvas draws the
+        // filter, and with it off it draws the document as it stands. (The tick itself is a checkbox whose
+        // IsCheckedChanged does the asking, which is the same mechanism the selection's Anti-alias tick above
+        // was driven through.)
+        StartPreview(document, target.ID);
+        RequestPreview((preview, layer) => FilterEdits.Apply(preview, layer, FilterKind.GaussianBlur,
+            new FilterSettings { BlurRadius = 8 }));
+        ShowPreviewOnce(null, EventArgs.Empty);
+        var previewing = _canvas.PreviewDocument is not null;
+        HidePreview();
+        var hidden = _canvas.PreviewDocument is null;
+        report.Add($"the filter preview: shown {previewing}, and with the Preview tick off {hidden}");
+        if (!previewing || !hidden) throw new InvalidOperationException("the Preview tick's two states did not take");
+        StopPreview();
+
         // The wand: one click, on a colour the picture actually has.
         SetTool(Tool.Wand);
         Click(Aim(new SKPoint(60, 60)));
@@ -2923,8 +2938,15 @@ public sealed class MainWindow : Window
             return;
         }
         StartPreview(document, id);
-        var asked = await FilterDialog.Ask(this, kind, new FilterSettings(),
-            settings => RequestPreview((target, layer) => FilterEdits.Apply(target, layer, kind, settings)));
+        var asked = await FilterDialog.Ask(this, kind, new FilterSettings(), settings =>
+        {
+            if (settings is { } amounts)
+            {
+                RequestPreview((target, layer) => FilterEdits.Apply(target, layer, kind, amounts));
+                return;
+            }
+            HidePreview();
+        });
         StopPreview();
         if (asked is not { } settings) return;
         if (_document is not { } current) return;
@@ -3710,6 +3732,9 @@ public sealed class MainWindow : Window
         _previewTimer?.Stop();
         if (_preview is not { } preview || _previewApply is not { } apply) return;
         if (!preview.Show(apply)) return;
+        // The canvas is put back on the preview every time it is shown: the panel's Preview tick may have been
+        // off, which takes the canvas back to the document as it stands.
+        _canvas.PreviewDocument = preview.Document;
         // The panel's scope describes the picture the canvas has just been given, so the two are shown together.
         if (_cameraRaw is { } panel) panel.ShowScope(_cameraRawScope);
         _canvas.InvalidateVisual();
@@ -3719,6 +3744,19 @@ public sealed class MainWindow : Window
     /// Puts the preview away. The canvas is told to stop drawing it before it is disposed, or a redraw could
     /// reach pixels that have just been freed.
     /// </summary>
+    /// <summary>
+    /// Shows the picture as it is, with no filter on it, which is what a panel's Preview tick being off means.
+    /// The preview is kept rather than thrown away, so ticking it back on has something to show again — that is
+    /// the difference between this and <see cref="StopPreview"/>.
+    /// </summary>
+    private void HidePreview()
+    {
+        _previewTimer?.Stop();
+        if (_preview is null) return;
+        _canvas.PreviewDocument = null;
+        _canvas.InvalidateVisual();
+    }
+
     private void StopPreview()
     {
         _previewTimer?.Stop();
