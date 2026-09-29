@@ -1,7 +1,5 @@
-using Compositor.Core.Format;
 using Compositor.Core.Model;
 using Compositor.Core.Pixels;
-using Compositor.Core.Rendering;
 using SkiaSharp;
 
 namespace Compositor.Core.Document;
@@ -133,30 +131,12 @@ public static class CameraRawEdits
     public static bool Apply(CanvasDocument document, Guid layerID, CameraRawSettings settings, uint seed = 0)
     {
         if (settings.IsIdentity || !settings.IsValid) return false;
-        if (document.Layers.FirstOrDefault(layer => layer.ID == layerID) is not { Asset: { } asset } layer) return false;
-        if (layer.IsGroup) return false;
-        var width = asset.Width;
-        var height = asset.Height;
-        if (width <= 0 || height <= 0) return false;
-        if (width > DocumentLimits.MaxSide || height > DocumentLimits.MaxSide
-            || (long)width * height > DocumentLimits.MaxSurfacePixels)
-        {
-            return false;
-        }
-
-        // The kernels read premultiplied pixels — they divide the colour back out themselves — so the layer
-        // is drawn into the same kind of buffer the compositor works in, and the result is turned back into
-        // the straight-alpha pixels a layer is held in.
-        using var work = DocumentRenderer.Allocate(width, height);
-        using (var canvas = new SKCanvas(work))
-        {
-            using var paint = new SKPaint { BlendMode = SKBlendMode.Src };
-            using var source = SKImage.FromBitmap(asset.Image);
-            canvas.DrawImage(source, SKRect.Create(0, 0, width, height),
-                new SKSamplingOptions(SKFilterMode.Nearest), paint);
-        }
-
+        if (document.Layers.FirstOrDefault(layer => layer.ID == layerID) is not { } layer) return false;
+        if (!FilterSurface.Begin(layer, out var work)) return false;
+        using var _ = work;
         var pixels = work.GetPixelSpan();
+        var width = work.Width;
+        var height = work.Height;
         var stride = work.RowBytes;
         if (settings.AdjustsLight || settings.AdjustsColor)
         {
@@ -180,63 +160,7 @@ public static class CameraRawEdits
                     settings.GrainRoughness, seed != 0 ? seed : (uint)Random.Shared.Next(1, int.MaxValue), 0, 0, 1);
             }
         }
-
-        var result = Bitmaps.Allocate(Bitmaps.ColorInfo(width, height));
-        using (var canvas = new SKCanvas(result))
-        {
-            using var paint = new SKPaint { BlendMode = SKBlendMode.Src };
-            canvas.DrawBitmap(work, SKRect.Create(0, 0, width, height),
-                new SKSamplingOptions(SKFilterMode.Nearest), paint);
-        }
-        // A filter is held to the selection, as every other edit is: outside it the pixels are what they were.
-        ApplySelection(document, asset.Image, result, layer.Transform);
-        layer.Asset = ImportedImage.Create(result, asset.Name);
+        FilterSurface.Finish(document, layer, work);
         return true;
-    }
-
-    /// <summary>
-    /// Mixes the filtered pixels over the original where the selection says so, which is how a filter inside
-    /// a selection leaves everything else alone. Nothing to mix when there is no selection at all.
-    /// </summary>
-    private static void ApplySelection(CanvasDocument document, SKBitmap original, SKBitmap filtered,
-        Model.LayerTransform placement)
-    {
-        var region = document.Selection.CoverageRect(document.Width, document.Height);
-        if (document.Selection.Path is null) return;
-        SKBitmap? coverage;
-        try
-        {
-            coverage = document.Selection.Coverage(region);
-        }
-        catch (InvalidOperationException)
-        {
-            return;
-        }
-        if (coverage is null) return;
-        using var _ = coverage;
-        var toDocument = BrushEdits.PixelToDocument(placement, filtered.Width, filtered.Height);
-        var clip = coverage.GetPixelSpan();
-        var was = original.GetPixelSpan();
-        var now = filtered.GetPixelSpan();
-        var stride = filtered.RowBytes;
-        for (var y = 0; y < filtered.Height; y++)
-        {
-            for (var x = 0; x < filtered.Width; x++)
-            {
-                var at = toDocument.MapPoint(x + 0.5f, y + 0.5f);
-                var column = (int)Math.Floor(at.X) - region.Left;
-                var row = (int)Math.Floor(at.Y) - region.Top;
-                var amount = column < 0 || row < 0 || column >= region.Width || row >= region.Height
-                    ? 0.0
-                    : clip[row * coverage.RowBytes + column] / 255.0;
-                if (amount >= 1) continue;
-                var index = y * stride + x * 4;
-                for (var channel = 0; channel < 4; channel++)
-                {
-                    now[index + channel] = (byte)Math.Clamp(
-                        Math.Round(was[index + channel] + (now[index + channel] - was[index + channel]) * amount), 0, 255);
-                }
-            }
-        }
     }
 }

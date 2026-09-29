@@ -254,6 +254,10 @@ public sealed class MainWindow : Window
                     Items =
                     {
                         Command("_Camera Raw Filter…", () => _ = CameraRawFilter()),
+                        new Separator(),
+                        Command("_Vignette…", () => _ = ApplyFilter(FilterKind.Vignette)),
+                        Command("_Tonal Contrast…", () => _ = ApplyFilter(FilterKind.TonalContrast)),
+                        Command("Lens _Correction…", () => _ = ApplyFilter(FilterKind.LensCorrection)),
                     },
                 },
                 new MenuItem
@@ -980,6 +984,25 @@ public sealed class MainWindow : Window
         Reselect(id);
         Say($"Camera Raw: exposure {settings.Exposure:0.##}, contrast {settings.Contrast:0}, " +
             $"saturation {settings.Saturation:0}");
+    }
+
+    /// <summary>
+    /// One of the filters that are not Camera Raw. Its amounts are asked for, then it runs over the selected
+    /// layer's own pixels, held to the selection, as one undo step.
+    /// </summary>
+    private async Task ApplyFilter(FilterKind kind)
+    {
+        if (_document is not { } document || Selected is not { } id) return;
+        if (document.Layers.FirstOrDefault(layer => layer.ID == id) is not { Asset: not null, IsGroup: false })
+        {
+            Say($"{kind} needs a layer with pixels of its own");
+            return;
+        }
+        if (await FilterDialog.Ask(this, kind, new FilterSettings()) is not { } settings) return;
+        if (_document is not { } current) return;
+        Edit($"{kind} Filter", () => FilterEdits.Apply(current, id, kind, settings));
+        Reselect(id);
+        Say($"{kind} applied");
     }
 
     /// <summary>The ratios the Crop tool offers, as the Mac build's ratio menu does.</summary>
