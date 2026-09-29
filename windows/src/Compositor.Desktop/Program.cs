@@ -54,7 +54,45 @@ internal static class Program
         // `--tabs` drives the tab strip without a pointer: two projects into tabs, one brought back in front,
         // one closed, and the last closed as well. It draws the window afterwards so the strip can be looked at.
         if (args is ["--tabs", var tabsOutput]) return Tabs(tabsOutput);
+        // `--updates` reads the app's real update feed and says what it makes of it, which is the whole check
+        // short of the dialog: off the network it prints that the feed could not be reached instead.
+        if (args is ["--updates"]) return Updates();
         Build().StartWithClassicDesktopLifetime(args);
+        return 0;
+    }
+
+    /// <summary>
+    /// Help ▸ Check for Updates without the dialog: the feed is read from where the Mac build reads it, parsed,
+    /// and compared with this build's version.
+    /// </summary>
+    private static int Updates()
+    {
+        Build().SetupWithoutStarting();
+        var running = UpdateDialog.Running;
+        string? feed;
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+            feed = http.GetStringAsync(UpdateFeed.Address).GetAwaiter().GetResult();
+        }
+        catch (Exception error) when (error is HttpRequestException or TaskCanceledException or UriFormatException)
+        {
+            feed = null;
+        }
+        if (feed is null)
+        {
+            Console.WriteLine($"the update feed could not be reached; this build is {running}");
+            return 0;
+        }
+        if (UpdateFeed.Newest(feed) is not { } release)
+        {
+            Console.WriteLine($"the update feed held no release; this build is {running}");
+            return 0;
+        }
+        Console.WriteLine($"this build is {running}; the feed lists {release.Version} ({release.Title})" +
+            (UpdateFeed.IsNewer(release, running) ? " — newer" : " — nothing to do") +
+            $", {(release.Download is null ? "no download" : $"{release.Bytes} bytes")}" +
+            (release.Page is { } page ? $", {page}" : ""));
         return 0;
     }
 

@@ -560,6 +560,14 @@ public sealed class MainWindow : Window
                         Command("_Clear Guides", ClearGuides),
                     },
                 },
+                new MenuItem
+                {
+                    Header = "_Help",
+                    Items =
+                    {
+                        Command("_Check for Updates…", () => _ = CheckForUpdates()),
+                    },
+                },
             },
         };
 
@@ -2859,6 +2867,47 @@ public sealed class MainWindow : Window
         {
             Say("That layer has no mask, or none of it is hidden");
         }
+    }
+
+    /// <summary>
+    /// Help ▸ Check for Updates: the app's feed is read and what it lists is compared with this build. The feed
+    /// is the one the Mac build publishes, so what can honestly be offered is the news — a newer version
+    /// exists, and where to read what changed — rather than an installer for this machine.
+    /// </summary>
+    private async Task CheckForUpdates()
+    {
+        var running = UpdateDialog.Running;
+        string? feed = null;
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+            feed = await http.GetStringAsync(UpdateFeed.Address);
+        }
+        catch (Exception error) when (error is HttpRequestException or TaskCanceledException or UriFormatException)
+        {
+            // Offline, or the feed is not where it was: said plainly rather than leaving the row doing nothing.
+        }
+        if (feed is null)
+        {
+            await UpdateDialog.Ask(this, "Check for Updates",
+                $"The update feed could not be reached, so whether {running} is the latest is not known.");
+            return;
+        }
+        if (UpdateFeed.Newest(feed) is not { } release)
+        {
+            await UpdateDialog.Ask(this, "Check for Updates", "The update feed had no release to read.");
+            return;
+        }
+        if (!UpdateFeed.IsNewer(release, running))
+        {
+            await UpdateDialog.Ask(this, "Check for Updates", $"Compositor {running} is the latest.");
+            return;
+        }
+        Say($"Compositor {release.Version} is out; this build is {running}");
+        await UpdateDialog.Ask(this, "Check for Updates",
+            $"Compositor {release.Version} is out{(release.Published is { } when ? $", published {when}" : "")} — " +
+            $"this build is {running}. The Windows build is made from this repository.",
+            release.Page);
     }
 
     /// <summary>The background colour, which the gradient tool draws towards and a fill can use.</summary>
