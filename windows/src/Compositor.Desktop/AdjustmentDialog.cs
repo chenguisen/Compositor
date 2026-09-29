@@ -74,6 +74,15 @@ internal sealed class AdjustmentDialog : Window
                 Add(group, "Size", 0.5, 20, start.Grain.Size, 1.5, (s, v) => s.GrainSettings = Grain(s, size: v), "0.0");
                 Add(group, "Roughness", 0, 100, start.Grain.Roughness, 50, (s, v) => s.GrainSettings = Grain(s, roughness: v));
                 break;
+            case AdjustmentKind.GradientMap:
+                Add(group, "Darkest: red", 0, 1, start.GradientMap.Shadows.Red, 0, (s, v) => s.GradientMapSettings = Map(s, shadowRed: v), "0.00");
+                Add(group, "Darkest: green", 0, 1, start.GradientMap.Shadows.Green, 0, (s, v) => s.GradientMapSettings = Map(s, shadowGreen: v), "0.00");
+                Add(group, "Darkest: blue", 0, 1, start.GradientMap.Shadows.Blue, 0, (s, v) => s.GradientMapSettings = Map(s, shadowBlue: v), "0.00");
+                Add(group, "Lightest: red", 0, 1, start.GradientMap.Highlights.Red, 1, (s, v) => s.GradientMapSettings = Map(s, highlightRed: v), "0.00");
+                Add(group, "Lightest: green", 0, 1, start.GradientMap.Highlights.Green, 1, (s, v) => s.GradientMapSettings = Map(s, highlightGreen: v), "0.00");
+                Add(group, "Lightest: blue", 0, 1, start.GradientMap.Highlights.Blue, 1, (s, v) => s.GradientMapSettings = Map(s, highlightBlue: v), "0.00");
+                Check(group, "Reversed", start.GradientMap.Reversed, (s, v) => s.GradientMapSettings = Map(s, reversed: v));
+                break;
             case AdjustmentKind.AddNoise:
                 Add(group, "Amount, %", 0.1, 400, start.ResolvedNoiseAmount, 10, (s, v) => s.NoiseAmount = v);
                 Check(group, "Gaussian", start.ResolvedNoiseGaussian, (s, v) => s.NoiseGaussian = v);
@@ -175,6 +184,22 @@ internal sealed class AdjustmentDialog : Window
         Offset = offset ?? settings.Exposure.Offset,
         Gamma = gamma ?? settings.Exposure.Gamma,
     };
+
+    private static GradientMapSettings Map(LayerAdjustment settings,
+        double? shadowRed = null, double? shadowGreen = null, double? shadowBlue = null,
+        double? highlightRed = null, double? highlightGreen = null, double? highlightBlue = null,
+        bool? reversed = null)
+    {
+        var map = settings.GradientMap;
+        return new GradientMapSettings
+        {
+            Shadows = AdjustmentColor.From(
+                shadowRed ?? map.Shadows.Red, shadowGreen ?? map.Shadows.Green, shadowBlue ?? map.Shadows.Blue),
+            Highlights = AdjustmentColor.From(
+                highlightRed ?? map.Highlights.Red, highlightGreen ?? map.Highlights.Green, highlightBlue ?? map.Highlights.Blue),
+            Reversed = reversed ?? map.Reversed,
+        };
+    }
 
     private static GrainSettings Grain(LayerAdjustment settings, double? amount = null, double? size = null, double? roughness = null)
     {

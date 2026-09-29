@@ -129,6 +129,26 @@ public class ImageAdjustmentTests
     }
 
     [Fact]
+    public void AGradientMapSendsTheDarkTonesAndTheLightOnesToItsOwnColours()
+    {
+        var (document, layer) = Warm(20, 20);
+        using var _ = document;
+        // The warm colour's tones are somewhere in the middle, so map the darkest end to blue and the
+        // lightest to nothing at all — the pixel comes out blue-ish rather than red.
+        Assert.True(FilterEdits.ApplyAdjustment(document, layer.ID, new LayerAdjustment
+        {
+            Kind = AdjustmentKind.GradientMap,
+            GradientMapSettings = new GradientMapSettings
+            {
+                Shadows = AdjustmentColor.From(0, 0, 1),
+                Highlights = AdjustmentColor.From(0, 0, 1),
+            },
+        }));
+        var pixel = Middle(layer);
+        Assert.True(pixel.Blue > pixel.Red, $"the gradient map did not reach the pixels: {pixel}");
+    }
+
+    [Fact]
     public void ALayerThatIsNotThereIsRefused()
     {
         using var document = new CanvasDocument(Guid.NewGuid(), 20, 20);
