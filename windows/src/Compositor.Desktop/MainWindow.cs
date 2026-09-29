@@ -149,6 +149,10 @@ public sealed class MainWindow : Window
     /// <summary>The crop frame while the Crop tool is in hand; null is the whole canvas.</summary>
     private SKRectI? _cropFrame;
 
+    /// <summary>The guide being pulled off a ruler, so the drag that follows moves that one rather than making a
+    /// new one for every step of it.</summary>
+    private Guid? _pulledGuide;
+
     /// <summary>Whether a brush stroke goes on the active layer's mask instead of its pixels.</summary>
     private readonly MenuItem _paintOnMask = new()
     {
@@ -281,6 +285,13 @@ public sealed class MainWindow : Window
         _canvas.GuideDragStarted = GuideDragStarted;
         _canvas.GuideMoved = GuideMoved;
         _canvas.GuideDragFinished = GuideDragFinished;
+        // A press on a ruler pulls a new guide onto the canvas, as Photoshop's rulers do.
+        _rulerAcross.Grabbed = (axis, at) => GuideGrabbed(_rulerAcross, axis, at);
+        _rulerAcross.Dragged = at => GuidePulled(_rulerAcross, at);
+        _rulerAcross.LetGo = GuidePulledOff;
+        _rulerDown.Grabbed = (axis, at) => GuideGrabbed(_rulerDown, axis, at);
+        _rulerDown.Dragged = at => GuidePulled(_rulerDown, at);
+        _rulerDown.LetGo = GuidePulledOff;
         _canvas.CropChanged = CropChanged;
         _canvas.CropCommitted = ApplyCrop;
         BuildCropRatios();
@@ -1609,16 +1620,40 @@ public sealed class MainWindow : Window
         if (document.Selection.Path is not { } wand) throw new InvalidOperationException("the wand selected nothing");
         report.Add($"a wand click: {wand.Bounds.Width:0} x {wand.Bounds.Height:0} of the picture taken");
 
-        // A guide dragged with the Move tool, which is how the port moves one today. Pulling a *new* guide off a
-        // ruler is not in the port at all — the ruler strips take no pointer — and that gap is said out loud
-        // here rather than left for the next reader to discover from a Mac screenshot.
-        GuideEdits.Add(document, GuideAxis.Horizontal, 100);
+        // A guide pulled off a ruler: a press on the strip, dragged onto the canvas. The ruler across the top
+        // makes a horizontal guide, positioned by the Y it is let go at.
+        SetTool(Tool.Pan);
+        if (!_rulersVisible)
+        {
+            // Turned on directly rather than through the View menu, so that a check does not write the view's
+            // switches into the person's own settings.
+            _rulersVisible = true;
+            _showRulers.IsChecked = true;
+            _rulerAcross.IsVisible = true;
+            _rulerDown.IsVisible = true;
+            _rulerCorner.IsVisible = true;
+            UpdateRulers();
+            UpdateLayout();
+        }
+        if (_rulerAcross.TranslatePoint(new Point(0, 0), this) is { } strip)
+        {
+            var grab = new Point(strip.X + _canvas.InView(new SKPoint(60, 0)).X, strip.Y + RulerThickness / 2);
+            Drag(grab, Aim(new SKPoint(60, 110)));
+            var pulled = document.Guides.LastOrDefault();
+            report.Add("a guide pulled off the top ruler and dropped at y 110: "
+                + (pulled is null ? "nothing" : $"a {pulled.Axis} guide at {pulled.Position:0.#}"));
+            if (pulled is not { Axis: GuideAxis.Horizontal } || Math.Abs(pulled.Position - 110) > 3)
+            {
+                throw new InvalidOperationException("the top ruler did not make a horizontal guide at 110");
+            }
+            if (document.Guides.Count != 1) throw new InvalidOperationException($"{document.Guides.Count} guides, not one");
+        }
+
+        // The same guide dragged along the canvas with the Move tool, which is how an existing one is moved.
         SetTool(Tool.Move);
-        if (document.Guides.Count != 1) throw new InvalidOperationException("the guide was not added");
-        Drag(Aim(new SKPoint(120, 100)), Aim(new SKPoint(120, 40)));
+        Drag(Aim(new SKPoint(60, 110)), Aim(new SKPoint(60, 40)));
         var moved = document.Guides[0].Position;
-        report.Add($"a guide dragged with the Move tool: 100 → {moved:0.#}, and the rulers take no pointer, so a "
-            + "guide cannot yet be pulled off one");
+        report.Add($"the guide dragged along the canvas: 110 → {moved:0.#}");
         if (Math.Abs(moved - 40) > 3) throw new InvalidOperationException($"the guide ended at {moved:0.#}, not 40");
         }
         catch (Exception failure)
@@ -3216,6 +3251,57 @@ public sealed class MainWindow : Window
         }
         _history.End(document, Selected);
         Refresh();
+    }
+
+    /// <summary>
+    /// A press on a ruler makes a guide there and the drag carries it, as the Mac build and Photoshop do: the
+    /// ruler across the top makes a horizontal guide and the one down the side a vertical one, so the ruler's
+    /// own axis is the guide's. The point arrives in the strip's coordinates and is read on the canvas, because
+    /// here the rulers sit beside the canvas rather than over it.
+    /// </summary>
+    private void GuideGrabbed(RulerStrip ruler, GuideAxis axis, Point onRuler)
+    {
+        if (_document is not { } document) return;
+        if (_guidesLocked)
+        {
+            Say("The guides are locked, so none can be pulled off the ruler");
+            return;
+        }
+        var at = Where(axis, ruler, onRuler);
+        _history.Begin("New Guide", document, Selected);
+        _pulledGuide = GuideEdits.Add(document, axis, at);
+        _canvas.InvalidateVisual();
+        Say($"Guide at {at:0.#}");
+    }
+
+    /// <summary>The guide being pulled off a ruler follows the pointer; the history step began when it was made.</summary>
+    private void GuidePulled(RulerStrip ruler, Point onRuler)
+    {
+        if (_document is not { } document || _pulledGuide is not { } id) return;
+        var at = Where(ruler.Axis, ruler, onRuler);
+        if (!GuideEdits.Move(document, id, at)) return;
+        _canvas.InvalidateVisual();
+        Say($"Guide at {at:0.#}");
+    }
+
+    /// <summary>
+    /// The pull has ended, and it ends the way a guide dragged on the canvas ends — so a guide let go off the
+    /// canvas, or back onto the ruler it came from, is taken away however it was made.
+    /// </summary>
+    private void GuidePulledOff()
+    {
+        if (_pulledGuide is null) return;
+        _pulledGuide = null;
+        GuideDragFinished();
+    }
+
+    /// <summary>Where a point on a ruler is in document pixels. Which of the two it reads is the ruler's own axis,
+    /// as the canvas reads one for a guide drag; the canvas's mapping does the rest.</summary>
+    private double Where(GuideAxis axis, RulerStrip ruler, Point onRuler)
+    {
+        if (ruler.TranslatePoint(onRuler, _canvas) is not { } onCanvas) return 0;
+        var document = _canvas.InDocument(onCanvas);
+        return axis == GuideAxis.Vertical ? document.X : document.Y;
     }
 
     /// <summary>The three things a drag can line up with, as the View menu lists them.</summary>

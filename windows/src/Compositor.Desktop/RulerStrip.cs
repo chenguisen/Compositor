@@ -1,6 +1,7 @@
 using System.Globalization;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Media;
 using Compositor.Core.Document;
 using Compositor.Core.Format;
@@ -9,8 +10,9 @@ namespace Compositor.Desktop;
 
 /// <summary>
 /// A ruler along one edge of the canvas: ticks every round step of document pixels, numbered about every 70
-/// points whatever the zoom. It only draws — the guides themselves are dragged on the canvas — so the strip
-/// sits outside the canvas and leaves every pointer position the canvas works out alone.
+/// points whatever the zoom. The guides themselves are dragged on the canvas, so the strip sits outside it and
+/// leaves every pointer position the canvas works out alone — except for the one thing a ruler is for in
+/// Photoshop: a press on the strip makes a guide there and the drag carries it onto the canvas.
 /// </summary>
 internal sealed class RulerStrip : Control
 {
@@ -35,6 +37,41 @@ internal sealed class RulerStrip : Control
 
     /// <summary>The document place at the strip's left end or top, which is the canvas's own origin.</summary>
     public double Origin { get; set; }
+
+    /// <summary>A press on the strip, with the point it landed on: where a new guide goes.</summary>
+    public Action<GuideAxis, Point>? Grabbed { get; set; }
+
+    /// <summary>Where the pointer is while the guide is being pulled, in the strip's own coordinates.</summary>
+    public Action<Point>? Dragged { get; set; }
+
+    /// <summary>The pull has ended, wherever it ended.</summary>
+    public Action? LetGo { get; set; }
+
+    protected override void OnPointerPressed(PointerPressedEventArgs e)
+    {
+        base.OnPointerPressed(e);
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+        e.Pointer.Capture(this);
+        Grabbed?.Invoke(Axis, e.GetPosition(this));
+        e.Handled = true;
+    }
+
+    protected override void OnPointerMoved(PointerEventArgs e)
+    {
+        base.OnPointerMoved(e);
+        if (!ReferenceEquals(e.Pointer.Captured, this)) return;
+        Dragged?.Invoke(e.GetPosition(this));
+        e.Handled = true;
+    }
+
+    protected override void OnPointerReleased(PointerReleasedEventArgs e)
+    {
+        base.OnPointerReleased(e);
+        if (!ReferenceEquals(e.Pointer.Captured, this)) return;
+        e.Pointer.Capture(null);
+        LetGo?.Invoke();
+        e.Handled = true;
+    }
 
     public override void Render(DrawingContext context)
     {

@@ -1087,6 +1087,10 @@ public sealed class CanvasView : Control
     /// </summary>
     internal Point InView(SKPoint document) => ToScreen(document);
 
+    /// <summary>The document point under a point of this control — the same mapping a pointer goes through, which
+    /// is what the ruler strips use to turn a point on themselves into a guide's position.</summary>
+    internal SKPoint InDocument(Point inView) => ToDocument(inView);
+
     private SKPoint ToDocument(Point screen) =>
         new((float)(_origin.X + screen.X / _zoom), (float)(_origin.Y + screen.Y / _zoom));
 
