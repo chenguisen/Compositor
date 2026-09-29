@@ -116,6 +116,21 @@ internal sealed class CameraRawDialog : Window
         groups.Children.Add(_curve);
         Add(groups, "Refine saturation", -100, 100, start.RefineSaturation, (s, v) => s.RefineSaturation = v);
 
+        groups.Children.Add(Heading("Colour mixer"));
+        // The hues come first in the mixer's own places and then the saturations, which is the order the
+        // kernel reads them in rather than the order a panel would list them.
+        var mixer = start.Mixer;
+        for (var family = 0; family < CameraRawSettings.MixerFamilies.Length; family++)
+        {
+            var hue = family;
+            var saturation = CameraRawSettings.MixerFamilies.Length + family;
+            var luminance = CameraRawSettings.MixerFamilies.Length * 2 + family;
+            var name = CameraRawSettings.MixerFamilies[family];
+            Add(groups, $"{name}: hue", -100, 100, At(mixer, hue), (s, v) => s.Mixer[hue] = v);
+            Add(groups, $"{name}: saturation", -100, 100, At(mixer, saturation), (s, v) => s.Mixer[saturation] = v);
+            Add(groups, $"{name}: luminance", -100, 100, At(mixer, luminance), (s, v) => s.Mixer[luminance] = v);
+        }
+
         groups.Children.Add(Heading("Colour grading"));
         Add(groups, "Shadows: hue", 0, 360, start.ShadowHue, (s, v) => s.ShadowHue = v, "0");
         Add(groups, "Shadows: amount", 0, 100, start.ShadowSaturation, (s, v) => s.ShadowSaturation = v, "0");
@@ -156,6 +171,9 @@ internal sealed class CameraRawDialog : Window
 
         Content = new ScrollViewer { Content = groups };
     }
+
+    /// <summary>One of the mixer's numbers, or nothing when the settings came without their twenty-four.</summary>
+    private static double At(double[] mixer, int index) => index < mixer.Length ? mixer[index] : 0;
 
     private static Control Heading(string text) => new TextBlock
     {
@@ -215,6 +233,9 @@ internal sealed class CameraRawDialog : Window
             GlowStyle = Math.Max(0, _glowStyle.SelectedIndex),
             VignetteStyle = Math.Max(0, _vignetteStyle.SelectedIndex),
             Curve = _curve is { } curve ? curve.Curves : new Compositor.Core.Format.CurvesSettings(),
+            // The mixer's places are written into by the rows, so the settings the rows are handed have all
+            // twenty-four of them whatever the layer's panel started from.
+            Mixer = new double[24],
         };
         foreach (var (slider, set, _, _) in _rows) set(settings, slider.Value);
         return settings;

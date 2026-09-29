@@ -334,6 +334,35 @@ public class CameraRawEditsTests
     }
 
     [Fact]
+    public void TheColourMixerMovesOneFamilyAndLeavesTheOthers()
+    {
+        static SKColor Mix(byte red, byte green, byte blue, int index, double amount)
+        {
+            using var document = new CanvasDocument(Guid.NewGuid(), 20, 20);
+            var bitmap = new SKBitmap(Bitmaps.ColorInfo(20, 20));
+            bitmap.Erase(new SKColor(red, green, blue));
+            var layer = new ImageLayer(Guid.NewGuid(), ImportedImage.Create(bitmap, "Flat"),
+                new LayerTransform(0, 0, 20, 20), "Flat");
+            document.Layers.Add(layer);
+            var mixer = new double[24];
+            mixer[index] = amount;
+            Assert.True(CameraRawEdits.Apply(document, layer.ID, new CameraRawSettings { Mixer = mixer }));
+            return layer.Asset!.Image.GetPixel(10, 10);
+        }
+        // Reds are the first family: pushing their saturation leaves a red stronger and a blue alone.
+        var red = new SKColor(200, 60, 60);
+        var stronger = Mix(red.Red, red.Green, red.Blue, 8, 100);
+        Assert.True(stronger.Green < red.Green, $"the reds were not pushed: {stronger}");
+        var blue = new SKColor(60, 60, 200);
+        var untouched = Mix(blue.Red, blue.Green, blue.Blue, 8, 100);
+        Assert.Equal(blue, untouched);
+        // The hues come first and then the saturations, so the blues' hue is the sixth of them, and turning
+        // it moves the blue and leaves the red alone.
+        Assert.NotEqual(blue, Mix(blue.Red, blue.Green, blue.Blue, 5, 100));
+        Assert.Equal(red, Mix(red.Red, red.Green, red.Blue, 5, 100));
+    }
+
+    [Fact]
     public void TheCurveAndGradingAmountsAreCheckedLikeTheOthers()
     {
         var (document, layer) = Flat(20, 20, SKColors.Gray);

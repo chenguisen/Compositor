@@ -134,6 +134,30 @@ public sealed class CameraRawSettings
     /// <summary>−100 to 100: where the crossover between the shadow and highlight ranges sits.</summary>
     public double GradeBalance { get; set; }
 
+    /// <summary>
+    /// The colour mixer: for each of the eight colour families, how far its hue is turned, how much its
+    /// saturation is raised and how much its luminance is moved, each −100 to 100.
+    /// </summary>
+    public double[] Mixer { get; set; } = new double[24];
+
+    /// <summary>The eight families the mixer's numbers are for, in the order they are held in.</summary>
+    public static string[] MixerFamilies { get; } =
+        ["Reds", "Oranges", "Yellows", "Greens", "Aquas", "Blues", "Purples", "Magentas"];
+
+    /// <summary>Whether the colour mixer asks for anything.</summary>
+    public bool AdjustsMixer => Mixer.Any(value => value != 0);
+
+    /// <summary>The mixer as the kernel reads it: twenty-four numbers, −1 to 1, hue first for each family.</summary>
+    internal float[] MixerFloats()
+    {
+        var values = new float[24];
+        for (var index = 0; index < values.Length && index < Mixer.Length; index++)
+        {
+            values[index] = (float)(Mixer[index] / 100);
+        }
+        return values;
+    }
+
     /// <summary>The twelve numbers the grading kernel reads: four wheels of hue, amount and lightness.</summary>
     internal float[] Grade =>
     [
@@ -145,7 +169,7 @@ public sealed class CameraRawSettings
 
     /// <summary>Whether the curve or what is held off it asks for anything.</summary>
     public bool AdjustsCurve =>
-        RefineSaturation != 0 || CurveMoves;
+        RefineSaturation != 0 || CurveMoves || AdjustsMixer;
 
     /// <summary>Whether the grading asks for anything.</summary>
     public bool AdjustsGrading =>
@@ -233,7 +257,7 @@ public sealed class CameraRawSettings
     /// <summary>Nothing asked for, so there is nothing to do.</summary>
     public bool IsIdentity =>
         !AdjustsLight && !AdjustsColor && !AdjustsEffects && !AdjustsDetail && !AdjustsOptics && !AdjustsCalibration
-        && !AdjustsCurve && !AdjustsGrading;
+        && !AdjustsCurve && !AdjustsGrading && !AdjustsMixer;
 
     /// <summary>Every slider within the range its group allows.</summary>
     public bool IsValid =>
@@ -268,7 +292,8 @@ public sealed class CameraRawSettings
         && Within(MidtoneHue, 0, 360) && Within(MidtoneSaturation, 0, 100) && Within(MidtoneLuminance, -100, 100)
         && Within(HighlightHue, 0, 360) && Within(HighlightSaturation, 0, 100) && Within(HighlightLuminance, -100, 100)
         && Within(GlobalHue, 0, 360) && Within(GlobalSaturation, 0, 100) && Within(GlobalLuminance, -100, 100)
-        && Within(GradeBlending, 0, 100) && Within(GradeBalance, -100, 100);
+        && Within(GradeBlending, 0, 100) && Within(GradeBalance, -100, 100)
+        && Mixer.Length == 24 && Mixer.All(value => Within(value, -100, 100));
 
     /// <summary>The corner's distance a distortion of ±100 moves, as the Mac build's lens strength is.</summary>
     public const double LensStrength = 0.35;
@@ -316,10 +341,10 @@ public static class CameraRawEdits
         if (settings.AdjustsCurve || settings.AdjustsGrading)
         {
             var (luma, red, green, blue) = settings.Curves();
-            // The mixer is indexed whatever the point count is, so it is given its twenty-four places with
-            // nothing asked for in any of them. Colour mixing is a panel this filter does not offer yet.
+            // The kernel indexes the mixer and the grade whether or not anything is asked for, which is why
+            // both are always given in full. Point colour is the one part of the stage still unwired.
             AdjustPixels.CameraRawCurveColor(pixels, width, height, stride, luma, red, green, blue,
-                settings.RefineSaturation / 100, new float[24], 0, [], settings.Grade,
+                settings.RefineSaturation / 100, settings.MixerFloats(), 0, [], settings.Grade,
                 settings.GradeBlending / 100, settings.GradeBalance / 100, -1);
         }
         if (settings.AdjustsEffects)
