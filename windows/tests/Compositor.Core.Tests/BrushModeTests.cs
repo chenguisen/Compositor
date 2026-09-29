@@ -95,11 +95,36 @@ public class BrushModeTests
     }
 
     [Fact]
+    public void TheBlurBrushSoftensByTheRadiusTheBarSets()
+    {
+        // The Radius is the brush's own setting, as the Mac build's options bar has it, so the same stroke with
+        // the same brush softens by as much or as little as it says rather than by how wide the brush is.
+        var (sharp, sharpLayer) = Halves();
+        using var _sharp = sharp;
+        var (soft, softLayer) = Halves();
+        using var _soft = soft;
+        var stroke = new[] { new SKPoint(20.5f, 10.5f) };
+
+        Assert.True(BrushEdits.Paint(sharp, sharpLayer.ID, stroke,
+            new BrushSettings(Diameter: 30, Mode: BrushMode.Blur, BlurRadius: 1)));
+        Assert.True(BrushEdits.Paint(soft, softLayer.ID, stroke,
+            new BrushSettings(Diameter: 30, Mode: BrushMode.Blur, BlurRadius: 12)));
+
+        // Four pixels in from the boundary: a radius of 1 barely reaches it, a radius of 12 mixes it well.
+        var near = sharpLayer.Asset!.Image.GetPixel(16, 10).Red;
+        var mixed = softLayer.Asset!.Image.GetPixel(16, 10).Red;
+        Assert.True(near > 200, $"a radius of 1 left {near}");
+        Assert.True(mixed < 200, $"a radius of 12 left {mixed}");
+    }
+
+    [Fact]
     public void TheBlurBrushSoftensFurtherOnASecondStroke()
     {
         var (document, layer) = Halves();
         using var _ = document;
-        var settings = new BrushSettings(Diameter: 12, Mode: BrushMode.Blur);
+        // A radius small enough that one stroke leaves the boundary short of the middle: with the bar's own
+        // default of 5 a 12-pixel brush mixes it fully the first time and there is nothing left to soften.
+        var settings = new BrushSettings(Diameter: 12, Mode: BrushMode.Blur, BlurRadius: 1.5);
         var stroke = new[] { new SKPoint(20.5f, 10.5f) };
 
         Assert.True(BrushEdits.Paint(document, layer.ID, stroke, settings));

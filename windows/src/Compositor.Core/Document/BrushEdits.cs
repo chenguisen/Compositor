@@ -60,7 +60,13 @@ public sealed record BrushSettings(
     double Smoothing = 0,
     /// <summary>Whether a Clone Stamp stroke keeps copying from where the last one did, or takes the place it
     /// starts from as the new source each time.</summary>
-    bool CloneAligned = true);
+    bool CloneAligned = true,
+    /// <summary>
+    /// How far a Blur stroke softens, in document pixels — the Radius the Mac build's options bar has beside the
+    /// brush's own size, and its own default of 5. It is a setting of its own rather than something worked out
+    /// from the diameter, so a wide brush can still be a gentle one.
+    /// </summary>
+    double BlurRadius = 5);
 
 /// <summary>
 /// Painting a stroke into a layer's own pixels. Mouse samples arrive in document coordinates, so they are
@@ -368,8 +374,8 @@ public static class BrushEdits
 
     /// <summary>
     /// What a Clone Stamp or Blur stroke paints from, at document size: the layer's own pixels, or every
-    /// visible layer as the canvas shows them, softened by an amount that follows the brush size when the
-    /// brush is the Blur tool. Null when the layer holds nothing to copy.
+    /// visible layer as the canvas shows them, softened by the Blur Radius when the brush is the Blur tool.
+    /// Null when the layer holds nothing to copy.
     /// </summary>
     private static SKBitmap? Sampled(CanvasDocument document, ImageLayer layer, BrushSettings settings)
     {
@@ -384,8 +390,10 @@ public static class BrushEdits
             }
             if (settings.Mode == BrushMode.Blur)
             {
-                // A blur softens by an amount that follows the brush, as Photoshop's does.
-                var sigma = Math.Clamp(settings.Diameter / 10, 1.5, 30);
+                // The Radius the options bar sets, measured on the canvas — which is what the Mac build's blur
+                // tool blurs by (`min(max(radius, 0.5), 50)` of it, divided there by the layer's own scale). The
+                // sample this softens is already at document size, so there is no scale to divide out here.
+                var sigma = Math.Clamp(settings.BlurRadius, 0.5, 50);
                 GaussianBlur.Clamped(sample.GetPixelSpan(), sample.Width, sample.Height, 4, sample.RowBytes, sigma);
             }
             return sample;

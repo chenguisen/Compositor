@@ -99,6 +99,7 @@ internal sealed class ToolOptionsBar : Border
             On("heal", tool == Tool.Heal);
             On("clone", tool == Tool.Clone);
             On("mask", tool == Tool.Brush && maskSelected);
+            On("blur", tool == Tool.Blur);
             On("marqueeShape", tool is Tool.Marquee or Tool.Ellipse);
             On("lasso", tool is Tool.Lasso or Tool.Polygon);
             On("wand", tool == Tool.Wand);
@@ -144,6 +145,7 @@ internal sealed class ToolOptionsBar : Border
         _size.Content = $"Size {_options.Brush.Diameter:0}";
         _hardness.Content = $"Hardness {_options.Brush.Hardness * 100:0}%";
         _opacity.Content = $"Opacity {_options.Brush.Opacity * 100:0}%";
+        _blurRadius.Content = $"Radius {_options.Brush.BlurRadius:0.#}";
         _tolerance.Content = $"Tolerance {_options.Wand.Tolerance}";
         _sampleSize.Content = $"Sample {_options.Wand.Radius}";
         _corner.Content = $"Radius {_options.ShapeCornerRadius:0}";
@@ -193,6 +195,7 @@ internal sealed class ToolOptionsBar : Border
     private readonly Button _size = new();
     private readonly Button _hardness = new();
     private readonly Button _opacity = new();
+    private readonly Button _blurRadius = new();
     private readonly Button _tolerance = new();
     private readonly Button _sampleSize = new();
     private readonly Button _corner = new();
@@ -249,6 +252,7 @@ internal sealed class ToolOptionsBar : Border
         foreach (var (setting, button) in new (BrushSetting, Button)[]
                  {
                      (BrushSetting.Size, _size), (BrushSetting.Hardness, _hardness), (BrushSetting.Opacity, _opacity),
+                     (BrushSetting.Radius, _blurRadius),
                  })
         {
             var which = setting;
@@ -353,6 +357,8 @@ internal sealed class ToolOptionsBar : Border
         Cell("mode", _brushMode);
         Cell("mask", _maskPaint);
         Cell("heal", _healMode);
+        // The Blur brush's own Radius, which the Mac's brush controls show for that tool alone.
+        Cell("blur", _blurRadius);
         Cell("clone", _aligned);
         Cell("clone", _cloneAll);
         Cell("marqueeShape", _marqueeShape);

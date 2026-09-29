@@ -33,4 +33,6 @@ internal enum BrushSetting
     Hardness,
     Opacity,
     Colour,
+    /// <summary>How far the Blur brush softens, which is its own setting rather than the brush's size.</summary>
+    Radius,
 }

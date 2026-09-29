@@ -4183,6 +4183,13 @@ public sealed class MainWindow : Window
                     _options.Brush = _options.Brush with { Opacity = opacity / 100.0 };
                 }
                 break;
+            case BrushSetting.Radius:
+                if (await Ask("Blur radius", "How far the blur reaches, in pixels, 0.5 to 50",
+                        $"{_options.Brush.BlurRadius:0.#}", 0.5, 50) is { } radius)
+                {
+                    _options.Brush = _options.Brush with { BlurRadius = radius };
+                }
+                break;
             default:
                 if (await TextPrompt.Ask(this, "Brush color", "Red, green and blue, 0 to 255",
                         $"{_options.Brush.Red * 255:0},{_options.Brush.Green * 255:0},{_options.Brush.Blue * 255:0}") is not { } typed)
