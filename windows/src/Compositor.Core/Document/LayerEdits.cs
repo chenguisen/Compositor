@@ -87,6 +87,24 @@ public static class LayerEdits
         return true;
     }
 
+    /// <summary>How much of the layer shows through: 0 is nothing of it, 1 is all of it.</summary>
+    public static bool SetOpacity(CanvasDocument document, Guid layerID, double opacity)
+    {
+        if (Find(document, layerID) is not { } layer) return false;
+        if (!double.IsFinite(opacity) || opacity is < 0 or > 1 || layer.Opacity == opacity) return false;
+        layer.Opacity = opacity;
+        return true;
+    }
+
+    /// <summary>How the layer is combined with what is under it, one of the modes the compositor knows.</summary>
+    public static bool SetBlendMode(CanvasDocument document, Guid layerID, Format.LayerBlendMode mode)
+    {
+        if (Find(document, layerID) is not { } layer) return false;
+        if (!Enum.IsDefined(mode) || layer.BlendMode == mode) return false;
+        layer.BlendMode = mode;
+        return true;
+    }
+
     /// <summary>
     /// Moves a layer one place through the layers it shares a folder with: up is towards the top of the
     /// stack, which is the end of the array. Only the two records swap, so a folder still holds what is

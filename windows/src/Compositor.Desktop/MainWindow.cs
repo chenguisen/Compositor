@@ -35,7 +35,15 @@ public sealed class MainWindow : Window
 
     /// <summary>The clipping, mask and visibility rows, whose names and availability follow the selection.</summary>
     private readonly MenuItem _visibility = new();
+    private readonly ComboBox _blend = new();
+    private readonly Slider _opacity = new() { Minimum = 0, Maximum = 100, Width = 130 };
+    private readonly TextBlock _opacityReadout = new() { Width = 40, VerticalAlignment = VerticalAlignment.Center };
+    private bool _showingAppearance;
+    private bool _opacityDragging;
     private ClipboardImage? _clipboard;
+
+    /// <summary>The blend modes in the order the menu lists them, which is the order the enum declares.</summary>
+    private static readonly LayerBlendMode[] BlendModes = Enum.GetValues<LayerBlendMode>();
     private readonly MenuItem _adjustmentMenu = new() { Header = "New _Adjustment Layer" };
     private MenuItem _adjustmentSettings = new();
     private readonly MenuItem _clipping = new() { HotKey = new KeyGesture(Key.G, KeyModifiers.Control | KeyModifiers.Alt) };
@@ -387,6 +395,8 @@ public sealed class MainWindow : Window
             FontWeight = FontWeight.SemiBold,
         });
         DockPanel.SetDock(layers.Children[0], Dock.Top);
+        layers.Children.Add(Appearance());
+        DockPanel.SetDock(layers.Children[1], Dock.Top);
         layers.Children.Add(new ScrollViewer { Content = _layers });
         var side = new Border
         {
@@ -523,6 +533,99 @@ public sealed class MainWindow : Window
     /// The Layer menu follows the panel: the merge row is named for what ⌘E would do, the clipping and mask
     /// rows for what they would change, and a row is off when it would do nothing.
     /// </summary>
+    /// <summary>
+    /// The two things a layer is combined with: how it blends and how much of it shows. Both act on the
+    /// selected layer, and the slider takes effect when it is let go, so a drag is one undo step rather than
+    /// one for every pixel of the drag.
+    /// </summary>
+    private Control Appearance()
+    {
+        _blend.ItemsSource = BlendModes.Select(mode => Spell(mode)).ToList();
+        _blend.Width = 150;
+        _blend.SelectionChanged += (_, _) =>
+        {
+            if (_showingAppearance) return;
+            var index = _blend.SelectedIndex;
+            if (index < 0 || index >= BlendModes.Length) return;
+            if (_document is not { } document || Selected is not { } id) return;
+            Edit("Blend Mode", () => LayerEdits.SetBlendMode(document, id, BlendModes[index]));
+        };
+
+        _opacity.PropertyChanged += (_, change) =>
+        {
+            if (change.Property != Slider.ValueProperty) return;
+            _opacityReadout.Text = $"{_opacity.Value:0}%";
+            if (_showingAppearance) return;
+            if (_opacityDragging)
+            {
+                // The history was begun when the drag started: this only moves the layer under it.
+                ApplyOpacity();
+                return;
+            }
+            Edit("Opacity", ApplyOpacity);
+        };
+        _opacity.PointerPressed += (_, _) =>
+        {
+            if (_document is not { } document || Selected is not { } id) return;
+            _opacityDragging = true;
+            _history.Begin("Opacity", document, Selected);
+        };
+        _opacity.PointerReleased += (_, _) =>
+        {
+            if (!_opacityDragging) return;
+            _opacityDragging = false;
+            if (_document is not { } document) return;
+            ApplyOpacity();
+            _history.End(document, Selected);
+            Refresh();
+        };
+
+        return new StackPanel
+        {
+            Margin = new Thickness(10, 0, 10, 8),
+            Spacing = 4,
+            Children =
+            {
+                _blend,
+                new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 6,
+                    Children =
+                    {
+                        new TextBlock { Text = "Opacity", Width = 52, VerticalAlignment = VerticalAlignment.Center },
+                        _opacity,
+                        _opacityReadout,
+                    },
+                },
+            },
+        };
+    }
+
+    /// <summary>Puts the slider's value on the selected layer, as one edit's worth of change.</summary>
+    private bool ApplyOpacity()
+    {
+        if (_document is not { } document || Selected is not { } id) return false;
+        return LayerEdits.SetOpacity(document, id, Math.Clamp(_opacity.Value / 100.0, 0, 1));
+    }
+
+    /// <summary>Shows what the selected layer is set to, without that being taken for a change of its own.</summary>
+    private void ShowAppearance(ImageLayer? layer)
+    {
+        _showingAppearance = true;
+        try
+        {
+            _blend.SelectedIndex = layer is null ? -1 : Array.IndexOf(BlendModes, layer.BlendMode);
+            _opacity.Value = (layer?.Opacity ?? 1) * 100;
+            _opacityReadout.Text = $"{_opacity.Value:0}%";
+            _blend.IsEnabled = _opacity.IsEnabled = layer is not null;
+        }
+        finally
+        {
+            _showingAppearance = false;
+        }
+    }
+
     private void UpdateLayerMenu()
     {
         var document = _document;
@@ -540,6 +643,7 @@ public sealed class MainWindow : Window
         _merge.IsEnabled = plan is not null;
         _visibility.Header = layer?.IsVisible == false ? "_Show Layer" : "_Hide Layer";
         _visibility.IsEnabled = layer is not null;
+        ShowAppearance(layer);
         _clipping.Header = layer?.MaskSourceID is not null ? "Release _Clipping Mask" : "Create _Clipping Mask";
         _clipping.IsEnabled = document is not null && layer is not null && LayerMaskEdits.CanToggle(document, layer.ID);
         _addMask.IsEnabled = layer is { Mask: null };
