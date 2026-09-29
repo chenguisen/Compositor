@@ -73,10 +73,41 @@ public class ImageImportTests : IDisposable
     [Fact]
     public void AFormatThatIsNotReadYetSaysSo()
     {
-        var path = Write("Photo.heic", "not really heic"u8.ToArray());
+        var path = Write("Drawing.xyz", "not an image at all"u8.ToArray());
         var error = Assert.Throws<ImportException>(() => ImageImporter.Decode(path));
         Assert.Equal(ImportError.Unsupported, error.Error);
         Assert.Contains("not read yet", error.Message, StringComparison.Ordinal);
+        // The message names what is read, HEIC and camera RAW included.
+        Assert.Contains("HEIC", error.Message, StringComparison.Ordinal);
+        Assert.Contains("camera RAW", error.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("Photo.heic")]
+    [InlineData("Photo.heif")]
+    [InlineData("Photo.dng")]
+    [InlineData("Photo.CR2")]
+    [InlineData("Photo.NEF")]
+    [InlineData("Photo.arw")]
+    public void AHeicOrRawThatCannotBeReadIsUnreadable(string fileName)
+    {
+        // A file named as one of the formats the importer claims, holding nonsense: the decoder refuses it,
+        // and that is a different answer from "this format is not read at all".
+        var path = Write(fileName, "not really a photograph"u8.ToArray());
+        var error = Assert.Throws<ImportException>(() => ImageImporter.Decode(path));
+        Assert.Equal(ImportError.Unreadable, error.Error);
+    }
+
+    [Theory]
+    [InlineData(".heic", true)]
+    [InlineData(".HEIF", true)]
+    [InlineData(".dng", true)]
+    [InlineData(".rw2", true)]
+    [InlineData(".xyz", false)]
+    public void WhatTheImporterClaimsToReadIsWhatItSays(string extension, bool importable)
+    {
+        Assert.Equal(importable, ImageImporter.LooksImportable("Photo" + extension));
+        Assert.Equal(importable, ImageImporter.Extensions.Contains(extension.ToLowerInvariant()));
     }
 
     [Fact]

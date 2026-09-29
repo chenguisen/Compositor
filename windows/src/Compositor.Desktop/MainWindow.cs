@@ -191,6 +191,7 @@ public sealed class MainWindow : Window
                     Items =
                     {
                         Command("_Open project folder…", OpenProject),
+                        Command("_Import image…", () => _ = ImportImage()),
                         Command("_Save", Save, "Ctrl+S"),
                         Command("Save _As…", SaveAs),
                         new Separator(),
@@ -1532,6 +1533,62 @@ public sealed class MainWindow : Window
         // A row is the layer an edit acts on, so the top of the stack starts selected.
         _layers.SelectedIndex = selected >= 0 && selected < rows.Count ? selected : rows.Count > 0 ? 0 : -1;
     }
+
+    /// <summary>
+    /// Imports an image as a layer, or as the whole project when none is open. Everything the importer reads
+    /// is offered, HEIC and camera RAW included: the file picker lists exactly what it can read.
+    /// </summary>
+    private async Task ImportImage()
+    {
+        try
+        {
+            var picked = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                Title = "Import an image",
+                AllowMultiple = false,
+                FileTypeFilter =
+                [
+                    new FilePickerFileType("Images") { Patterns = [.. ImageImporter.Extensions.Select(e => "*" + e)] },
+                    FilePickerFileTypes.All,
+                ],
+            });
+            if (picked.Count == 0 || picked[0].TryGetLocalPath() is not { } path) return;
+            if (!ImageImporter.LooksImportable(path))
+            {
+                Say($"{Path.GetExtension(path)} files are not read; {string.Join(", ", ImageImporter.Extensions)} are");
+                return;
+            }
+            // Decoded once: a camera RAW is minutes of work, so the picture the document gets is this one.
+            var image = ImageImporter.Decode(path, Fitting());
+            if (_document is not { } document)
+            {
+                _document = ImageImporter.NewDocument(image);
+                _canvas.Document = _document;
+                _projectPath = null;
+                _history.Reset();
+                ShowLayers(_document);
+                Say($"{Path.GetFileName(path)} — {_document.Width} by {_document.Height}, " +
+                    $"{_document.Layers.Count} layer, not saved yet");
+                Refresh();
+                return;
+            }
+            var origin = new SKPoint(
+                (float)((document.Width - image.Width) / 2.0), (float)((document.Height - image.Height) / 2.0));
+            _history.Begin("Import image", document, Selected);
+            document.Layers.Add(new ImageLayer(Guid.NewGuid(), image,
+                new LayerTransform(origin.X, origin.Y, image.Width, image.Height), image.Name));
+            _history.End(document, Selected);
+            Reselect(document.Layers[^1].ID);
+            Say($"Imported {Path.GetFileName(path)} at {image.Width} by {image.Height}");
+        }
+        catch (Exception error)
+        {
+            Say($"Could not import that image: {error.Message}");
+        }
+    }
+
+    /// <summary>The canvas an SVG should be drawn to fit, if one is open.</summary>
+    private SKSizeI? Fitting() => _document is { } document ? new SKSizeI(document.Width, document.Height) : null;
 
     private void Save()
     {

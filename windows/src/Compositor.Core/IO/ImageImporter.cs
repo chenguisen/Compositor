@@ -1,4 +1,6 @@
 using BitMiracle.LibTiff.Classic;
+using ImageMagick;
+using Sdcb.LibRaw;
 using Compositor.Core.Model;
 using SkiaSharp;
 
@@ -42,7 +44,9 @@ public static class ImageImporter
 {
     /// <summary>What the importer will attempt, by extension.</summary>
     public static readonly string[] Extensions =
-        [".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".svg", ".tif", ".tiff", ".psd", ".psb", ".heic", ".dng", ".cr2", ".cr3", ".nef", ".arw", ".raf", ".orf", ".rw2"];
+        [".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".svg", ".tif", ".tiff", ".psd", ".psb",
+         ".heic", ".heif", ".avif", ".dng", ".cr2", ".cr3", ".crw", ".nef", ".nrw", ".arw", ".srf", ".sr2",
+         ".raf", ".orf", ".rw2", ".raw", ".rwl", ".pef", ".3fr", ".erf", ".mrw", ".kdc", ".dcr", ".x3f", ".iiq"];
 
     /// <summary>The longest side of the small copy the layers panel draws, as the Mac build uses.</summary>
     public const int ThumbnailSide = 96;
@@ -76,15 +80,157 @@ public static class ImageImporter
             throw new ImportException(ImportError.Unsupported,
                 "Photoshop files are imported as a document, through PsdImporter, not as one image.");
         }
+        if (HeicReads.Contains(extension, StringComparer.OrdinalIgnoreCase))
+        {
+            return DecodeHeic(path, name, remainingPixels);
+        }
+        if (RawReads.Contains(extension, StringComparer.OrdinalIgnoreCase))
+        {
+            return DecodeRaw(path, name, remainingPixels);
+        }
         var bytes = Read(path);
         if (!TrySkia(bytes, name, remainingPixels, out var image))
         {
             throw SkiaReads.Contains(extension, StringComparer.OrdinalIgnoreCase)
                 ? new ImportException(ImportError.Unreadable)
                 : new ImportException(ImportError.Unsupported,
-                    $"{extension} files are not read yet. PNG, JPEG, WebP, GIF, BMP, TIFF and SVG are.");
+                    $"{extension} files are not read yet. PNG, JPEG, WebP, GIF, BMP, TIFF, SVG, HEIC and camera RAW are.");
         }
         return image;
+    }
+
+    /// <summary>HEIC and HEIF, which no Skia build for Windows reads: ImageMagick has the decoder.</summary>
+    private static readonly string[] HeicReads = [".heic", ".heif", ".avif"];
+
+    /// <summary>
+    /// The camera RAW files, which only LibRaw reads. The list is the Mac build's `UTType.rawImage` — as many
+    /// of the house formats as a camera is likely to write, since LibRaw is the decoder either way.
+    /// </summary>
+    private static readonly string[] RawReads =
+    [
+        ".dng", ".cr2", ".cr3", ".crw", ".nef", ".nrw", ".arw", ".srf", ".sr2", ".raf", ".orf", ".rw2",
+        ".raw", ".rwl", ".pef", ".3fr", ".erf", ".mrw", ".kdc", ".dcr", ".x3f", ".iiq", ".mos", ".mef",
+    ];
+
+    /// <summary>
+    /// A HEIC through ImageMagick, which is the decoder this build of Skia does not carry. The camera's own
+    /// orientation is applied, and the pixels come back straight-alpha sRGB, which is what a layer holds.
+    /// </summary>
+    private static ImportedImage DecodeHeic(string path, string name, int remainingPixels)
+    {
+        var (width, height) = HeicSize(path);
+        Check(width, height, remainingPixels);
+        try
+        {
+            using var image = new MagickImage(path);
+            // Turn the picture the way the camera said it goes, as the Mac build's ImageIO import does.
+            image.AutoOrient();
+            using var pixels = image.GetPixels();
+            var bytes = pixels.ToByteArray(PixelMapping.RGBA)
+                        ?? throw new ImportException(ImportError.Unreadable);
+            return FromRgba(bytes, (int)image.Width, (int)image.Height, name, remainingPixels);
+        }
+        catch (MagickException error)
+        {
+            throw new ImportException(ImportError.Unreadable, error.Message);
+        }
+    }
+
+    /// <summary>The size a HEIC says it is, read from its header alone so a refused one is never decoded.</summary>
+    private static (int Width, int Height) HeicSize(string path)
+    {
+        try
+        {
+            var info = new MagickImageInfo(path);
+            // ImageMagick counts pixels as unsigned; anything past the longest side is refused anyway.
+            return (info.Width > int.MaxValue ? 0 : (int)info.Width, info.Height > int.MaxValue ? 0 : (int)info.Height);
+        }
+        catch (MagickException error)
+        {
+            throw new ImportException(ImportError.Unreadable, error.Message);
+        }
+    }
+
+    /// <summary>
+    /// A camera RAW through LibRaw: the camera's own white balance, demosaiced, in sRGB and 8 bits, which is
+    /// what an import gives a layer. The size is known before the heavy work, so a picture that would not fit
+    /// is refused without unpacking it.
+    /// </summary>
+    private static ImportedImage DecodeRaw(string path, string name, int remainingPixels)
+    {
+        try
+        {
+            return ReadRaw(path, name, remainingPixels);
+        }
+        catch (ImportException)
+        {
+            throw;
+        }
+        catch (Exception error)
+        {
+            // LibRaw speaks for itself; a project asks for a project's own error.
+            throw new ImportException(ImportError.Unreadable, error.Message);
+        }
+    }
+
+    private static ImportedImage ReadRaw(string path, string name, int remainingPixels)
+    {
+        using var context = RawContext.OpenFile(path, LibRawInitFlags.None);
+        Check(context.Width, context.Height, remainingPixels);
+        context.Unpack();
+        context.DcrawProcess(settings =>
+        {
+            // The white balance the camera chose, as the Mac build's RAW import shows it. The output colour
+            // space is left at LibRaw's own default, which is sRGB, and the depth at 8 bits.
+            settings.UseCameraWb = true;
+            settings.OutputBps = 8;
+        });
+        using var image = context.MakeDcrawMemoryImage();
+        if (image.Width <= 0 || image.Height <= 0 || image.Channels < 3 || image.Bits != 8)
+        {
+            throw new ImportException(ImportError.Unreadable, "That RAW did not come back as 8-bit colour.");
+        }
+        var length = image.DataSize;
+        if (length <= 0) throw new ImportException(ImportError.Unreadable);
+        var rgb = new byte[length];
+        System.Runtime.InteropServices.Marshal.Copy(image.DataPointer, rgb, 0, length);
+        var pixels = image.Width * image.Height;
+        var rgba = new byte[(long)pixels * 4];
+        for (var index = 0; index < pixels; index++)
+        {
+            var from = index * image.Channels;
+            var to = index * 4;
+            rgba[to] = rgb[from];
+            rgba[to + 1] = rgb[from + 1];
+            rgba[to + 2] = rgb[from + 2];
+            rgba[to + 3] = 255;
+        }
+        return FromRgba(rgba, image.Width, image.Height, name, remainingPixels);
+    }
+
+    /// <summary>Refuses a picture that is too long a side, or too many pixels, to hold.</summary>
+    private static void Check(int width, int height, int remainingPixels)
+    {
+        if (width <= 0 || height <= 0) throw new ImportException(ImportError.Unreadable);
+        if (width > DocumentLimits.MaxSide || height > DocumentLimits.MaxSide
+            || (long)width * height > remainingPixels)
+        {
+            throw new ImportException(ImportError.TooLarge);
+        }
+    }
+
+    /// <summary>Straight-alpha RGBA into the bitmap a layer's pixels are held in.</summary>
+    private static ImportedImage FromRgba(byte[] rgba, int width, int height, string name, int remainingPixels)
+    {
+        Check(width, height, remainingPixels);
+        var bitmap = new SKBitmap(new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Unpremul,
+            SKColorSpace.CreateSrgb()));
+        if (!bitmap.ReadyToDraw) throw new ImportException(ImportError.TooLarge);
+        var target = bitmap.GetPixelSpan();
+        var needed = width * height * 4;
+        if (rgba.Length < needed) { bitmap.Dispose(); throw new ImportException(ImportError.Unreadable); }
+        rgba.AsSpan(0, needed).CopyTo(target);
+        return ImportedImage.Create(bitmap, name);
     }
 
     /// <summary>
