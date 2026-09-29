@@ -255,6 +255,9 @@ public sealed class MainWindow : Window
                     {
                         Command("_Camera Raw Filter…", () => _ = CameraRawFilter()),
                         new Separator(),
+                        Command("_Gaussian Blur…", () => _ = ApplyFilter(FilterKind.GaussianBlur)),
+                        Command("Add _Noise…", () => _ = ApplyFilter(FilterKind.AddNoise)),
+                        new Separator(),
                         Command("_Vignette…", () => _ = ApplyFilter(FilterKind.Vignette)),
                         Command("_Tonal Contrast…", () => _ = ApplyFilter(FilterKind.TonalContrast)),
                         Command("Lens _Correction…", () => _ = ApplyFilter(FilterKind.LensCorrection)),

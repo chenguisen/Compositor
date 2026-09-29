@@ -1,5 +1,6 @@
 using Compositor.Core.Document;
 using Compositor.Core.Model;
+using Compositor.Core.Rendering;
 using SkiaSharp;
 using LayerTransform = Compositor.Core.Model.LayerTransform;
 
@@ -212,5 +213,193 @@ public class FilterEditsTests
         Assert.Equal(16, layer.Asset!.Width);
         Assert.Equal(16, layer.Asset.Height);
         Assert.True(layer.Asset.Image.GetPixel(0, 0).Red < 180);
+    }
+
+    /// <summary>Half a layer opaque down its full height, the other half empty.</summary>
+    private static (CanvasDocument Document, ImageLayer Layer) HalfBlock(int width, int height)
+    {
+        var bitmap = new SKBitmap(Bitmaps.ColorInfo(width, height));
+        bitmap.Erase(SKColors.Transparent);
+        for (var y = 0; y < height; y++)
+            for (var x = 0; x < width / 2; x++)
+                bitmap.SetPixel(x, y, SKColors.White);
+        var document = new CanvasDocument(Guid.NewGuid(), width, height);
+        var layer = new ImageLayer(Guid.NewGuid(), ImportedImage.Create(bitmap, "Half"),
+            new LayerTransform(0, 0, width, height), "Half");
+        document.Layers.Add(layer);
+        return (document, layer);
+    }
+
+    /// <summary>The colour under a document point, through the layer's placement as it stands now. A point
+    /// the layer's pixels do not reach is nothing at all, as it would be on the canvas.</summary>
+    private static SKColor AtDocument(ImageLayer layer, double x, double y)
+    {
+        var toDocument = BrushEdits.PixelToDocument(layer.Transform, layer.Asset!.Width, layer.Asset.Height);
+        Assert.True(toDocument.TryInvert(out var toPixel));
+        var at = toPixel.MapPoint((float)x, (float)y);
+        var px = (int)Math.Floor(at.X);
+        var py = (int)Math.Floor(at.Y);
+        if (px < 0 || py < 0 || px >= layer.Asset.Width || py >= layer.Asset.Height) return SKColors.Transparent;
+        return layer.Asset.Image.GetPixel(px, py);
+    }
+
+    [Fact]
+    public void GaussianBlurIsGivenRoomPastTheEdgeAndTrimmedBackAgain()
+    {
+        var (document, layer) = HalfBlock(40, 20);
+        using var _ = document;
+        Assert.True(FilterEdits.Apply(document, layer.ID, FilterKind.GaussianBlur, new FilterSettings { BlurRadius = 3 }));
+
+        // The layer was opaque top to bottom, so it could only have grown vertically if the blur went past
+        // its edge — and the half that stayed empty was cut away again.
+        Assert.True(layer.Asset!.Height > 20, $"the blur did not spread past the edge: {layer.Asset.Height}");
+        Assert.True(layer.Asset.Width < 40, $"the empty half was not trimmed: {layer.Asset.Width}");
+        // The pixels it kept are still where they were, and still white in the middle of the block.
+        Assert.True(AtDocument(layer, 10, 10).Red >= 248, $"the block's middle became {AtDocument(layer, 10, 10)}");
+        Assert.True(AtDocument(layer, 32, 10).Alpha < 20, "the empty side was not left empty");
+    }
+
+    [Fact]
+    public void GaussianBlurSoftensTheEdgeRatherThanStoppingAtIt()
+    {
+        var (document, layer) = HalfBlock(40, 20);
+        using var _ = document;
+        Assert.True(FilterEdits.Apply(document, layer.ID, FilterKind.GaussianBlur, new FilterSettings { BlurRadius = 3 }));
+        var middle = layer.Asset!.Height / 2;
+        var across = Enumerable.Range(0, layer.Asset.Width).Select(x => (int)layer.Asset.Image.GetPixel(x, middle).Alpha).ToList();
+        Assert.True(across.Max() >= 248, $"the block's inside is not solid: {across.Max()}");
+        // A hard edge would jump from nothing to everything between two pixels; a soft one spends levels on it.
+        Assert.True(across.Any(a => a > 20 && a < 235), "the hard edge is still hard");
+        Assert.True(across[^1] < 20, "it does not fade out on the far side");
+    }
+
+    [Fact]
+    public void GaussianBlurLeavesTheLayerWhereItWasOnTheDocument()
+    {
+        var (document, layer) = HalfBlock(40, 20);
+        using var _ = document;
+        layer.Transform = new LayerTransform(100, 50, 80, 40);
+        Assert.True(FilterEdits.Apply(document, layer.ID, FilterKind.GaussianBlur, new FilterSettings { BlurRadius = 4 }));
+        // The block covers document x 100 to 140: its middle is still white, and well past either end there
+        // is still nothing — the block softened outwards, but its middle did not move.
+        Assert.True(AtDocument(layer, 120, 70).Red >= 248, $"the block moved: {AtDocument(layer, 120, 70)}");
+        Assert.True(AtDocument(layer, 110, 60).Red >= 248, "the block moved");
+        Assert.True(AtDocument(layer, 175, 70).Alpha < 20, "the block stretched");
+        Assert.True(AtDocument(layer, 70, 70).Alpha < 20, "the block stretched the other way");
+    }
+
+    [Fact]
+    public void GaussianBlurOfARadiusOutOfRangeIsRefused()
+    {
+        var (document, layer) = Flat(20, 20, SKColors.Gray);
+        using var _ = document;
+        Assert.False(FilterEdits.Apply(document, layer.ID, FilterKind.GaussianBlur, new FilterSettings { BlurRadius = 0 }));
+        Assert.False(FilterEdits.Apply(document, layer.ID, FilterKind.GaussianBlur, new FilterSettings { BlurRadius = 900 }));
+        Assert.Equal(128, Middle(layer).Red);
+    }
+
+    [Fact]
+    public void AddNoiseSpecklesThePixelsAndTheSameSeedIsTheSamePicture()
+    {
+        var settings = new FilterSettings { NoiseAmount = 60 };
+        var (first, firstLayer) = Flat(40, 40, new SKColor(128, 128, 128));
+        using var _first = first;
+        Assert.True(FilterEdits.Apply(first, firstLayer.ID, FilterKind.AddNoise, settings, seed: 4242));
+
+        var (second, secondLayer) = Flat(40, 40, new SKColor(128, 128, 128));
+        using var _second = second;
+        Assert.True(FilterEdits.Apply(second, secondLayer.ID, FilterKind.AddNoise, settings, seed: 4242));
+
+        for (var y = 0; y < 40; y += 7)
+            for (var x = 0; x < 40; x += 7)
+                Assert.Equal(firstLayer.Asset!.Image.GetPixel(x, y), secondLayer.Asset!.Image.GetPixel(x, y));
+        // And it is noise, not a flat field.
+        var values = Enumerable.Range(0, 40).Select(x => firstLayer.Asset!.Image.GetPixel(x, 20).Red).Distinct().Count();
+        Assert.True(values > 3, $"only {values} different values along a row");
+    }
+
+    [Fact]
+    public void MonochromaticNoiseChangesTheBrightnessAndNotTheColour()
+    {
+        var (document, layer) = Flat(40, 40, new SKColor(128, 128, 128));
+        using var _ = document;
+        Assert.True(FilterEdits.Apply(document, layer.ID, FilterKind.AddNoise,
+            new FilterSettings { NoiseAmount = 60, NoiseMonochromatic = true }, seed: 7));
+        for (var x = 0; x < 40; x++)
+        {
+            var colour = layer.Asset!.Image.GetPixel(x, 20);
+            Assert.Equal(colour.Red, colour.Green);
+            Assert.Equal(colour.Green, colour.Blue);
+        }
+        // Colour noise, by contrast, does not keep the channels together.
+        var (again, other) = Flat(40, 40, new SKColor(128, 128, 128));
+        using var _2 = again;
+        Assert.True(FilterEdits.Apply(again, other.ID, FilterKind.AddNoise, new FilterSettings { NoiseAmount = 60 }, seed: 7));
+        Assert.True(Enumerable.Range(0, 40).Any(x =>
+        {
+            var colour = other.Asset!.Image.GetPixel(x, 20);
+            return colour.Red != colour.Green;
+        }), "colour noise left the channels together");
+    }
+
+    [Fact]
+    public void AddNoiseLeavesTheSelectionAloneAndTheAlphaStanding()
+    {
+        var (document, layer) = Flat(40, 20, new SKColor(128, 128, 128, 200));
+        using var _ = document;
+        SelectionEdits.Select(document, SKRectI.Create(0, 0, 20, 20));
+        Assert.True(FilterEdits.Apply(document, layer.ID, FilterKind.AddNoise, new FilterSettings { NoiseAmount = 80 }, seed: 11));
+        Assert.Equal(200, Middle(layer).Alpha);
+        Assert.Equal(128, layer.Asset!.Image.GetPixel(30, 10).Red);
+        Assert.True(layer.Asset.Image.GetPixel(10, 10).Red != 128, "the selected half was not noised");
+    }
+
+    [Fact]
+    public void AddNoiseWithNothingToAddIsRefused()
+    {
+        var (document, layer) = Flat(20, 20, SKColors.Gray);
+        using var _ = document;
+        Assert.False(FilterEdits.Apply(document, layer.ID, FilterKind.AddNoise, new FilterSettings { NoiseAmount = 0 }));
+        Assert.False(FilterEdits.Apply(document, layer.ID, FilterKind.AddNoise, new FilterSettings { NoiseAmount = 500 }));
+        Assert.Equal(128, Middle(layer).Red);
+    }
+
+    [Fact]
+    public void AMaskIsCarriedOntoTheGridABlurGrowsTheLayerTo()
+    {
+        var (document, layer) = HalfBlock(40, 20);
+        using var _ = document;
+        // A mask painting the right half of the layer's own grid black: half the block is hidden.
+        var mask = new SKBitmap(Bitmaps.MaskInfo(40, 20));
+        mask.Erase(SKColors.White);
+        for (var y = 0; y < 20; y++)
+            for (var x = 20; x < 40; x++)
+                mask.SetPixel(x, y, SKColors.Black);
+        layer.Mask = LayerMask.AssetFrom(mask);
+
+        Assert.True(FilterEdits.Apply(document, layer.ID, FilterKind.GaussianBlur, new FilterSettings { BlurRadius = 3 }));
+
+        // The mask still hides the same document area, and it is now the layer's own grid again, so nothing
+        // has been stretched to follow the layer outwards.
+        Assert.NotNull(layer.Mask);
+        Assert.Null(layer.Mask.Placement);
+        Assert.Equal(layer.Asset!.Width, layer.Mask.Asset.Width);
+        Assert.Equal(layer.Asset.Height, layer.Mask.Asset.Height);
+        // The layer's own grid grew, so an untouched mask would have had to be 40 x 20 still.
+        Assert.True(layer.Asset.Width != 40 || layer.Asset.Height != 20, "the layer did not change grid");
+        // Read through the mask: the visible half is white in it, the hidden half is not.
+        var toDocument = BrushEdits.PixelToDocument(layer.MaskTransform, layer.Mask.Asset.Width, layer.Mask.Asset.Height);
+        Assert.True(toDocument.TryInvert(out var toPixel));
+        var shown = toPixel.MapPoint(10, 10);
+        var hidden = toPixel.MapPoint(30, 10);
+        Assert.True(layer.Mask.Asset.Image.GetPixel((int)Math.Floor(shown.X), (int)Math.Floor(shown.Y)).Red > 235,
+            "the mask's light half did not come across");
+        Assert.True(layer.Mask.Asset.Image.GetPixel((int)Math.Floor(hidden.X), (int)Math.Floor(hidden.Y)).Red < 20,
+            "the mask's dark half did not come across");
+        // And the document it draws: white where the block is shown, nothing where the mask hides it.
+        using var rendered = DocumentRenderer.Render(document);
+        Assert.True(rendered.GetPixel(10, 10).Red >= 248 && rendered.GetPixel(10, 10).Alpha >= 248,
+            $"the visible half was hidden: {rendered.GetPixel(10, 10)}");
+        Assert.True(rendered.GetPixel(30, 10).Alpha < 20, $"the hidden half showed: {rendered.GetPixel(30, 10)}");
     }
 }

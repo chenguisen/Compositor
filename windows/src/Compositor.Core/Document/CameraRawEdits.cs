@@ -132,8 +132,9 @@ public static class CameraRawEdits
     {
         if (settings.IsIdentity || !settings.IsValid) return false;
         if (document.Layers.FirstOrDefault(layer => layer.ID == layerID) is not { } layer) return false;
-        if (!FilterSurface.Begin(layer, out var work)) return false;
+        if (!FilterSurface.Begin(layer, 0, out var work, out var placement)) return false;
         using var _ = work;
+        using var was = document.Selection.Path is null ? null : FilterSurface.Copy(work);
         var pixels = work.GetPixelSpan();
         var width = work.Width;
         var height = work.Height;
@@ -160,7 +161,8 @@ public static class CameraRawEdits
                     settings.GrainRoughness, seed != 0 ? seed : (uint)Random.Shared.Next(1, int.MaxValue), 0, 0, 1);
             }
         }
-        FilterSurface.Finish(document, layer, work);
+        if (was is not null) FilterSurface.Keep(document, was, work, placement);
+        FilterSurface.Finish(layer, work, placement);
         return true;
     }
 }

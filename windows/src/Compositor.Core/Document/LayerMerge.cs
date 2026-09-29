@@ -164,8 +164,12 @@ public static class LayerMerge
     /// A rendered image cut back to the pixels that are actually there, with the transform that keeps them
     /// in place — a whole-canvas render cropped, so its transform is the crop itself. A crop with nothing in
     /// it, or one that would take nothing away, is left alone, as the Mac build leaves it.
+    /// <para>
+    /// Shared with the filters that spread: a blur is given room past the layer's edge and whatever stays
+    /// empty once it has run is cut away again.
+    /// </para>
     /// </summary>
-    private static (SKBitmap Image, Model.LayerTransform Transform) Trimmed(SKBitmap image,
+    internal static (SKBitmap Image, Model.LayerTransform Transform) Trimmed(SKBitmap image,
         Model.LayerTransform placed)
     {
         Span<int> bounds = stackalloc int[4];

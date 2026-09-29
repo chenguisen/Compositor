@@ -15,12 +15,15 @@ internal sealed class FilterDialog : Window
 {
     private readonly List<(Slider Slider, Action<FilterSettings, double> Set)> _rows = [];
     private readonly List<double> _fallbacks = [];
+    private readonly List<(CheckBox Box, Action<FilterSettings, bool> Set, bool Fallback)> _checks = [];
     private FilterSettings? _result;
 
     private FilterDialog(FilterKind kind, FilterSettings start)
     {
         Title = kind switch
         {
+            FilterKind.GaussianBlur => "Gaussian Blur",
+            FilterKind.AddNoise => "Add Noise",
             FilterKind.Vignette => "Vignette",
             FilterKind.TonalContrast => "Tonal Contrast",
             _ => "Lens Correction",
@@ -34,6 +37,14 @@ internal sealed class FilterDialog : Window
         var group = new StackPanel { Margin = new Thickness(16), Spacing = 4 };
         switch (kind)
         {
+            case FilterKind.GaussianBlur:
+                Add(group, "Radius, pixels", 0.1, 250, start.BlurRadius, defaults.BlurRadius, (s, v) => s.BlurRadius = v);
+                break;
+            case FilterKind.AddNoise:
+                Add(group, "Amount, %", 0.1, 400, start.NoiseAmount, defaults.NoiseAmount, (s, v) => s.NoiseAmount = v);
+                Check(group, "Gaussian", start.NoiseGaussian, (s, v) => s.NoiseGaussian = v);
+                Check(group, "Monochromatic", start.NoiseMonochromatic, (s, v) => s.NoiseMonochromatic = v);
+                break;
             case FilterKind.Vignette:
                 Add(group, "Amount", 0, 100, start.VignetteAmount, defaults.VignetteAmount, (s, v) => s.VignetteAmount = v);
                 Add(group, "Red", 0, 1, start.VignetteRed, defaults.VignetteRed, (s, v) => s.VignetteRed = v, "0.00");
@@ -74,6 +85,14 @@ internal sealed class FilterDialog : Window
         Content = new ScrollViewer { Content = group };
     }
 
+    /// <summary>A box that follows the setting it belongs to, and what it started as for Reset.</summary>
+    private void Check(StackPanel parent, string label, bool value, Action<FilterSettings, bool> set)
+    {
+        var box = new CheckBox { Content = label, IsChecked = value };
+        parent.Children.Add(box);
+        _checks.Add((box, set, value));
+    }
+
     private void Add(StackPanel parent, string label, double least, double most, double value, double fallback,
         Action<FilterSettings, double> set, string format = "0.#")
     {
@@ -105,12 +124,14 @@ internal sealed class FilterDialog : Window
     private void Restore()
     {
         for (var i = 0; i < _rows.Count; i++) _rows[i].Slider.Value = _fallbacks[i];
+        foreach (var (box, _, fallback) in _checks) box.IsChecked = fallback;
     }
 
     private void Accept()
     {
         var settings = new FilterSettings();
         foreach (var (slider, set) in _rows) set(settings, slider.Value);
+        foreach (var (box, set, _) in _checks) set(settings, box.IsChecked == true);
         _result = settings;
         Close();
     }
