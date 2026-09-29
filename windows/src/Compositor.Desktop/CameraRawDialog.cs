@@ -21,7 +21,7 @@ internal sealed class CameraRawDialog : Window
     {
         Title = "Camera Raw Filter";
         Width = 460;
-        Height = 620;
+        Height = 700;
         CanResize = true;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         var groups = new StackPanel { Margin = new Thickness(16), Spacing = 4 };
@@ -59,6 +59,43 @@ internal sealed class CameraRawDialog : Window
         Add(groups, "Grain amount", 0, 100, start.GrainAmount, (s, v) => s.GrainAmount = v);
         Add(groups, "Grain size", 0, 100, start.GrainSize, (s, v) => s.GrainSize = v);
         Add(groups, "Grain roughness", 0, 100, start.GrainRoughness, (s, v) => s.GrainRoughness = v);
+
+        groups.Children.Add(Heading("Detail"));
+        Add(groups, "Sharpen amount", 0, 150, start.SharpenAmount, (s, v) => s.SharpenAmount = v);
+        Add(groups, "Sharpen radius", 0.5, 100, start.SharpenRadius, (s, v) => s.SharpenRadius = v, "0.0");
+        Add(groups, "Sharpen detail", 0, 100, start.SharpenDetail, (s, v) => s.SharpenDetail = v);
+        Add(groups, "Sharpen masking", 0, 100, start.SharpenMasking, (s, v) => s.SharpenMasking = v);
+        Add(groups, "Noise luminance", 0, 100, start.NoiseLuminance, (s, v) => s.NoiseLuminance = v);
+        Add(groups, "Noise luminance detail", 0, 100, start.NoiseLuminanceDetail, (s, v) => s.NoiseLuminanceDetail = v);
+        Add(groups, "Noise luminance contrast", 0, 100, start.NoiseLuminanceContrast, (s, v) => s.NoiseLuminanceContrast = v);
+        Add(groups, "Noise colour", 0, 100, start.NoiseColor, (s, v) => s.NoiseColor = v);
+        Add(groups, "Noise colour detail", 0, 100, start.NoiseColorDetail, (s, v) => s.NoiseColorDetail = v);
+        Add(groups, "Noise colour smoothness", 0, 100, start.NoiseColorSmoothness, (s, v) => s.NoiseColorSmoothness = v);
+
+        groups.Children.Add(Heading("Optics"));
+        Add(groups, "Remove chromatic aberration", 0, 1, start.RemoveChromaticAberration ? 1 : 0, (s, v) => s.RemoveChromaticAberration = v > 0.5, "0");
+        Add(groups, "Lens profile", 0, 1, start.EnableLensProfile ? 1 : 0, (s, v) => s.EnableLensProfile = v > 0.5, "0");
+        Add(groups, "Profile distortion", 0, 100, start.ProfileDistortion, (s, v) => s.ProfileDistortion = v);
+        Add(groups, "Profile vignetting", 0, 100, start.ProfileVignetting, (s, v) => s.ProfileVignetting = v);
+        Add(groups, "Distortion", -100, 100, start.Distortion, (s, v) => s.Distortion = v);
+        Add(groups, "Purple amount", 0, 100, start.PurpleAmount, (s, v) => s.PurpleAmount = v);
+        Add(groups, "Purple hue low", 0, 360, start.PurpleHueLow, (s, v) => s.PurpleHueLow = v);
+        Add(groups, "Purple hue high", 0, 360, start.PurpleHueHigh, (s, v) => s.PurpleHueHigh = v);
+        Add(groups, "Green amount", 0, 100, start.GreenAmount, (s, v) => s.GreenAmount = v);
+        Add(groups, "Green hue low", 0, 360, start.GreenHueLow, (s, v) => s.GreenHueLow = v);
+        Add(groups, "Green hue high", 0, 360, start.GreenHueHigh, (s, v) => s.GreenHueHigh = v);
+        Add(groups, "Lens vignette", -100, 100, start.OpticsVignetteAmount, (s, v) => s.OpticsVignetteAmount = v);
+        Add(groups, "Lens vignette midpoint", 0, 100, start.OpticsVignetteMidpoint, (s, v) => s.OpticsVignetteMidpoint = v);
+
+        groups.Children.Add(Heading("Calibration"));
+        Add(groups, "Process version", 1, 6, start.ProcessVersion, (s, v) => s.ProcessVersion = (int)Math.Round(v), "0");
+        Add(groups, "Shadow tint", -100, 100, start.ShadowTint, (s, v) => s.ShadowTint = v);
+        Add(groups, "Red hue", -100, 100, start.RedHue, (s, v) => s.RedHue = v);
+        Add(groups, "Red saturation", -100, 100, start.RedSaturation, (s, v) => s.RedSaturation = v);
+        Add(groups, "Green hue", -100, 100, start.GreenHue, (s, v) => s.GreenHue = v);
+        Add(groups, "Green saturation", -100, 100, start.GreenSaturation, (s, v) => s.GreenSaturation = v);
+        Add(groups, "Blue hue", -100, 100, start.BlueHue, (s, v) => s.BlueHue = v);
+        Add(groups, "Blue saturation", -100, 100, start.BlueSaturation, (s, v) => s.BlueSaturation = v);
 
         _glowStyle.SelectedIndex = start.GlowStyle;
         _vignetteStyle.SelectedIndex = start.VignetteStyle;

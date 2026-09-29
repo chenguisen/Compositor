@@ -70,6 +70,59 @@ public sealed class CameraRawSettings
     /// <summary>Camera Raw's 0…100 size, in the pixel scale the grain kernel already uses.</summary>
     public double GrainKernelSize => 0.5 + GrainSize / 100 * 19.5;
 
+    // Detail: sharpening, and the noise the picture came with
+    /// <summary>0 to 150: how much the edges are sharpened.</summary>
+    public double SharpenAmount { get; set; }
+    public double SharpenRadius { get; set; } = 10;
+    public double SharpenDetail { get; set; } = 25;
+    /// <summary>0 to 100: how little of the flat parts is sharpened, so noise is not sharpened too.</summary>
+    public double SharpenMasking { get; set; }
+    /// <summary>0 to 100: how much luminance noise is taken out.</summary>
+    public double NoiseLuminance { get; set; }
+    public double NoiseLuminanceDetail { get; set; } = 50;
+    public double NoiseLuminanceContrast { get; set; }
+    /// <summary>0 to 100: how much colour noise is taken out.</summary>
+    public double NoiseColor { get; set; }
+    public double NoiseColorDetail { get; set; } = 50;
+    public double NoiseColorSmoothness { get; set; } = 50;
+
+    // Optics: the lens's own faults
+    /// <summary>Whether the fringes along high-contrast edges are taken out.</summary>
+    public bool RemoveChromaticAberration { get; set; }
+    /// <summary>Whether a lens profile is being applied.</summary>
+    public bool EnableLensProfile { get; set; }
+    /// <summary>The profile's distortion at full strength, 0 to 100.</summary>
+    public double ProfileDistortion { get; set; } = 100;
+    public double ProfileVignetting { get; set; } = 100;
+    /// <summary>Manual distortion, −100 to 100: either direction straightens a lens.</summary>
+    public double Distortion { get; set; }
+    /// <summary>The purple and green fringes, how much to take out and the hues they sit between.</summary>
+    public double PurpleAmount { get; set; }
+    public double PurpleHueLow { get; set; } = 270;
+    public double PurpleHueHigh { get; set; } = 310;
+    public double GreenAmount { get; set; }
+    public double GreenHueLow { get; set; } = 60;
+    public double GreenHueHigh { get; set; } = 120;
+    /// <summary>The l<ens's vignette, which is added to the effects group's own.</summary>
+    public double OpticsVignetteAmount { get; set; }
+    public double OpticsVignetteMidpoint { get; set; } = 50;
+
+    // Calibration: the process version the sliders are read against
+    /// <summary>1 to 6, as Photoshop numbers its process versions; six is the current one.</summary>
+    public int ProcessVersion { get; set; } = 6;
+    public double ShadowTint { get; set; }
+    public double RedHue { get; set; }
+    public double RedSaturation { get; set; }
+    public double GreenHue { get; set; }
+    public double GreenSaturation { get; set; }
+    public double BlueHue { get; set; }
+    public double BlueSaturation { get; set; }
+
+    /// <summary>The distortion the optics group asks for, as the kernel wants it: a share of the corner's
+    /// distance, the profile's own added when a profile is being applied.</summary>
+    public double DistortionK =>
+        (Distortion / 100 + (EnableLensProfile ? ProfileDistortion / 100 : 0)) * LensStrength;
+
     /// <summary>The channel multipliers temperature and tint ask for; neutral is 1, 1, 1.</summary>
     public (double Red, double Green, double Blue) Gains
     {
@@ -95,8 +148,22 @@ public sealed class CameraRawSettings
     public bool AdjustsEffects =>
         Texture != 0 || Clarity != 0 || Dehaze != 0 || Glow > 0 || VignetteAmount != 0 || GrainAmount > 0;
 
+    /// <summary>Whether the detail group asks for anything.</summary>
+    public bool AdjustsDetail => SharpenAmount != 0 || NoiseLuminance != 0 || NoiseColor != 0;
+
+    /// <summary>Whether the optics group asks for anything.</summary>
+    public bool AdjustsOptics =>
+        RemoveChromaticAberration || EnableLensProfile || Distortion != 0 || PurpleAmount != 0
+        || GreenAmount != 0 || OpticsVignetteAmount != 0;
+
+    /// <summary>Whether the calibration group asks for anything.</summary>
+    public bool AdjustsCalibration =>
+        ShadowTint != 0 || RedHue != 0 || RedSaturation != 0 || GreenHue != 0 || GreenSaturation != 0
+        || BlueHue != 0 || BlueSaturation != 0;
+
     /// <summary>Nothing asked for, so there is nothing to do.</summary>
-    public bool IsIdentity => !AdjustsLight && !AdjustsColor && !AdjustsEffects;
+    public bool IsIdentity =>
+        !AdjustsLight && !AdjustsColor && !AdjustsEffects && !AdjustsDetail && !AdjustsOptics && !AdjustsCalibration;
 
     /// <summary>Every slider within the range its group allows.</summary>
     public bool IsValid =>
@@ -111,7 +178,24 @@ public sealed class CameraRawSettings
         && Within(VignetteRoundness, -100, 100) && Within(VignetteFeather, 0, 100)
         && Within(VignetteHighlights, -100, 100)
         && Within(GrainAmount, 0, 100) && Within(GrainSize, 0, 100) && Within(GrainRoughness, 0, 100)
-        && GlowStyle is >= 0 and <= 2 && VignetteStyle is >= 0 and <= 2;
+        && GlowStyle is >= 0 and <= 2 && VignetteStyle is >= 0 and <= 2
+        && Within(SharpenAmount, 0, 150) && Within(SharpenRadius, 0.5, 100)
+        && Within(SharpenDetail, 0, 100) && Within(SharpenMasking, 0, 100)
+        && Within(NoiseLuminance, 0, 100) && Within(NoiseLuminanceDetail, 0, 100)
+        && Within(NoiseLuminanceContrast, 0, 100) && Within(NoiseColor, 0, 100)
+        && Within(NoiseColorDetail, 0, 100) && Within(NoiseColorSmoothness, 0, 100)
+        && Within(ProfileDistortion, 0, 100) && Within(ProfileVignetting, 0, 100)
+        && Within(Distortion, -100, 100) && Within(PurpleAmount, 0, 100)
+        && Within(PurpleHueLow, 0, 360) && Within(PurpleHueHigh, 0, 360)
+        && Within(GreenAmount, 0, 100) && Within(GreenHueLow, 0, 360) && Within(GreenHueHigh, 0, 360)
+        && Within(OpticsVignetteAmount, -100, 100) && Within(OpticsVignetteMidpoint, 0, 100)
+        && ProcessVersion is >= 1 and <= 6
+        && Within(ShadowTint, -100, 100) && Within(RedHue, -100, 100) && Within(RedSaturation, -100, 100)
+        && Within(GreenHue, -100, 100) && Within(GreenSaturation, -100, 100)
+        && Within(BlueHue, -100, 100) && Within(BlueSaturation, -100, 100);
+
+    /// <summary>The corner's distance a distortion of ±100 moves, as the Mac build's lens strength is.</summary>
+    public const double LensStrength = 0.35;
 
     private static bool Within(double value, double least, double most) =>
         double.IsFinite(value) && value >= least && value <= most;
@@ -139,6 +223,13 @@ public static class CameraRawEdits
         var width = work.Width;
         var height = work.Height;
         var stride = work.RowBytes;
+        if (settings.AdjustsCalibration)
+        {
+            AdjustPixels.CameraRawCalibration(pixels, width, height, stride,
+                settings.ShadowTint, settings.RedHue, settings.RedSaturation,
+                settings.GreenHue, settings.GreenSaturation, settings.BlueHue, settings.BlueSaturation,
+                settings.ProcessVersion);
+        }
         if (settings.AdjustsLight || settings.AdjustsColor)
         {
             var (red, green, blue) = settings.Gains;
@@ -160,6 +251,22 @@ public static class CameraRawEdits
                 AdjustPixels.Grain(pixels, width, height, stride, settings.GrainAmount, settings.GrainKernelSize,
                     settings.GrainRoughness, seed != 0 ? seed : (uint)Random.Shared.Next(1, int.MaxValue), 0, 0, 1);
             }
+        }
+        if (settings.AdjustsOptics)
+        {
+            AdjustPixels.CameraRawOptics(pixels, width, height, stride,
+                settings.RemoveChromaticAberration, settings.EnableLensProfile ? 1 : 0,
+                settings.ProfileDistortion, settings.ProfileVignetting, settings.DistortionK,
+                settings.PurpleAmount, settings.PurpleHueLow, settings.PurpleHueHigh,
+                settings.GreenAmount, settings.GreenHueLow, settings.GreenHueHigh,
+                settings.OpticsVignetteAmount, settings.OpticsVignetteMidpoint, 1);
+        }
+        if (settings.AdjustsDetail)
+        {
+            AdjustPixels.CameraRawDetail(pixels, width, height, stride,
+                settings.SharpenAmount, settings.SharpenRadius, settings.SharpenDetail, settings.SharpenMasking,
+                settings.NoiseLuminance, settings.NoiseLuminanceDetail, settings.NoiseLuminanceContrast,
+                settings.NoiseColor, settings.NoiseColorDetail, settings.NoiseColorSmoothness, 1);
         }
         if (was is not null) FilterSurface.Keep(document, was, work, placement);
         FilterSurface.Finish(layer, work, placement);

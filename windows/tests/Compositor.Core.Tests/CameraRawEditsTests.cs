@@ -192,6 +192,80 @@ public class CameraRawEditsTests
     }
 
     [Fact]
+    public void TheDetailGroupSharpensAndTakesNoiseOut()
+    {
+        // A hard edge: the left half dark, the right half bright. Sharpening is gentle by design — its mask
+        // holds it back where there is no detail to bring out — so the edge it is given has to be a real one.
+        var bitmap = new SKBitmap(Bitmaps.ColorInfo(32, 32));
+        bitmap.Erase(new SKColor(60, 60, 60));
+        for (var y = 0; y < 32; y++)
+            for (var x = 16; x < 32; x++)
+                bitmap.SetPixel(x, y, new SKColor(200, 200, 200));
+        using var document = new CanvasDocument(Guid.NewGuid(), 32, 32);
+        var layer = new ImageLayer(Guid.NewGuid(), ImportedImage.Create(bitmap, "Edge"),
+            new LayerTransform(0, 0, 32, 32), "Edge");
+        document.Layers.Add(layer);
+
+        Assert.True(CameraRawEdits.Apply(document, layer.ID, new CameraRawSettings
+        {
+            SharpenAmount = 150, SharpenRadius = 1, SharpenDetail = 100,
+        }));
+        // Sharpening pushes the two sides further apart where they meet.
+        Assert.True(layer.Asset!.Image.GetPixel(15, 16).Red < 55,
+            $"the dark side of the edge was not sharpened: {layer.Asset.Image.GetPixel(15, 16).Red}");
+        Assert.True(layer.Asset.Image.GetPixel(16, 16).Red > 205,
+            $"the light side of the edge was not sharpened: {layer.Asset.Image.GetPixel(16, 16).Red}");
+
+        // The noise group leaves a flat field flat rather than doing nothing at all: it is asked for and runs.
+        var (flat, flatLayer) = Flat(20, 20, new SKColor(128, 128, 128));
+        using var _flat = flat;
+        Assert.True(CameraRawEdits.Apply(flat, flatLayer.ID, new CameraRawSettings { NoiseLuminance = 60 }));
+        Assert.InRange(Middle(flatLayer).Red, 120, 136);
+    }
+
+    [Fact]
+    public void TheOpticsGroupStretchesAndLightensTheCorners()
+    {
+        var (document, layer) = Flat(60, 60, new SKColor(180, 180, 180));
+        using var _ = document;
+        Assert.True(CameraRawEdits.Apply(document, layer.ID, new CameraRawSettings { OpticsVignetteAmount = -80 }));
+        // A negative lens vignette darkens the corners and leaves the middle where it was.
+        Assert.True(Corner(layer).Red < Middle(layer).Red, $"the corner {Corner(layer).Red} is not darker than {Middle(layer).Red}");
+        Assert.True(Math.Abs(Middle(layer).Red - 180) <= 4, $"the middle became {Middle(layer).Red}");
+    }
+
+    [Fact]
+    public void TheCalibrationGroupShiftsTheChannels()
+    {
+        // A colour with some saturation to work with: a neutral grey has none, so nothing could be shifted.
+        var (document, layer) = Flat(20, 20, new SKColor(80, 120, 180));
+        using var _ = document;
+        Assert.True(CameraRawEdits.Apply(document, layer.ID, new CameraRawSettings { BlueSaturation = 100 }));
+        // Turning the blue channel's saturation up pushes it further from the others.
+        var pixel = Middle(layer);
+        Assert.True(pixel.Blue - pixel.Red > 100, $"the blue channel was not pushed: {pixel}");
+
+        var (hue, hueLayer) = Flat(20, 20, new SKColor(80, 120, 180));
+        using var _hue = hue;
+        Assert.True(CameraRawEdits.Apply(hue, hueLayer.ID, new CameraRawSettings { BlueHue = 100 }));
+        Assert.NotEqual(Middle(hueLayer), Middle(layer));
+    }
+
+    [Fact]
+    public void TheNewAmountsAreCheckedLikeTheOthers()
+    {
+        var (document, layer) = Flat(20, 20, SKColors.Gray);
+        using var _ = document;
+        // Out of range is refused, and the layer is left as it was.
+        Assert.False(CameraRawEdits.Apply(document, layer.ID, new CameraRawSettings { SharpenAmount = 200 }));
+        Assert.False(CameraRawEdits.Apply(document, layer.ID, new CameraRawSettings { ProcessVersion = 9 }));
+        Assert.False(CameraRawEdits.Apply(document, layer.ID, new CameraRawSettings { PurpleHueHigh = 400 }));
+        Assert.Equal(128, Middle(layer).Red);
+        // And a settings bag that asks for nothing in any group is still the identity.
+        Assert.True(new CameraRawSettings().IsIdentity);
+    }
+
+    [Fact]
     public void AFilterWorksOnTheLayersOwnGridWhateverItsTransform()
     {
         var (document, layer) = Flat(8, 8, SKColors.Gray);
