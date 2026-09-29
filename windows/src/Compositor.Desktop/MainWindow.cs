@@ -265,6 +265,10 @@ public sealed class MainWindow : Window
         Title = "Compositor";
         Width = 1280;
         Height = 820;
+        WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        // The two calls a screen has to be asked for are made once the window is open, which is when there is a
+        // screen to ask.
+        Opened += (_, _) => FitToScreen();
         Background = Skin.ChromeBrush;
         // The window's plain labels (a heading, a readout) take their colour from here, as the Mac's do from
         // the appearance; controls that name their own text keep it.
@@ -379,6 +383,10 @@ public sealed class MainWindow : Window
         Content = Layout();
         RefreshTabs();
         UpdateLayerMenu();
+        // The tool in hand at the start is the Pan, which the rail marks on its own — but the options bar is
+        // only ever told what to show when a tool is picked, so without this it opens with every tool's rows at
+        // once. Found by opening the real window and looking at it.
+        RefreshOptionsBar();
         BuildVerbs();
         RegisterKeys();
         ShowKeys();
@@ -792,6 +800,27 @@ public sealed class MainWindow : Window
         else _layerRows.Add((item, ready));
         return item;
     }
+
+    /// <summary>
+    /// Opens no larger than the screen allows. The Mac build's own 1280 x 820 is a sensible window on a 1x
+    /// display and taller than a 1080 one at 150%, where the bottom of this window — the status line — ends up
+    /// under the taskbar and out of reach. Found by opening the real window on this machine.
+    /// </summary>
+    private void FitToScreen()
+    {
+        if (Screens.Primary is not { } screen || screen.Scaling <= 0) return;
+        var room = screen.WorkingArea;
+        Width = Math.Min(Width, room.Width / screen.Scaling - Room);
+        Height = Math.Min(Height, room.Height / screen.Scaling - Room);
+        // The window was placed from the size it was made with, so it is put back by hand: at 150% the shrinking
+        // above is what would otherwise leave its title bar above the top of the screen.
+        Position = new PixelPoint(
+            room.X + (int)Math.Max(0, (room.Width - Width * screen.Scaling) / 2),
+            room.Y + (int)Math.Max(0, (room.Height - Height * screen.Scaling) / 2));
+    }
+
+    /// <summary>How much of the screen a window leaves for the desktop around it.</summary>
+    private const double Room = 40;
 
     /// <summary>How a shortcut row of the menus' group is named.</summary>
     private static string MenuKey(string title) => $"{Shortcuts.Menus}:{title}";
