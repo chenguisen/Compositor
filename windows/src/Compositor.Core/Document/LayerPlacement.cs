@@ -1,6 +1,7 @@
 using Compositor.Core.Format;
 using Compositor.Core.IO;
 using Compositor.Core.Model;
+using SkiaSharp;
 
 namespace Compositor.Core.Document;
 
@@ -42,6 +43,25 @@ public static class LayerPlacement
         };
         document.Layers.Insert(Above(document, active), folder);
         return folder.ID;
+    }
+
+    /// <summary>
+    /// A new layer holding pixels taken off the canvas — a paste, or a layer made from a selection — above the
+    /// selected one and in the folder that one is in. Its transform is the document rectangle the pixels came
+    /// from, so the picture does not move. The bitmap is handed to the layer, which owns it from here.
+    /// </summary>
+    public static Guid? AddImage(CanvasDocument document, SKBitmap image, SKRectI region, string name, Guid? activeID)
+    {
+        if (document.Layers.Count >= MaxLayers) return null;
+        var active = Active(document, activeID);
+        var title = FreeName(document, name);
+        var layer = new ImageLayer(Guid.NewGuid(), ImportedImage.Create(image, title),
+            new Model.LayerTransform(region.Left, region.Top, region.Width, region.Height), title)
+        {
+            ParentID = active is { IsGroup: true } ? active.ID : active?.ParentID,
+        };
+        document.Layers.Insert(Above(document, active), layer);
+        return layer.ID;
     }
 
     /// <summary>

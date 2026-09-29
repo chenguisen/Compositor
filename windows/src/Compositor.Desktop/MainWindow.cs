@@ -35,6 +35,7 @@ public sealed class MainWindow : Window
 
     /// <summary>The clipping, mask and visibility rows, whose names and availability follow the selection.</summary>
     private readonly MenuItem _visibility = new();
+    private ClipboardImage? _clipboard;
     private readonly MenuItem _adjustmentMenu = new() { Header = "New _Adjustment Layer" };
     private MenuItem _adjustmentSettings = new();
     private readonly MenuItem _clipping = new() { HotKey = new KeyGesture(Key.G, KeyModifiers.Control | KeyModifiers.Alt) };
@@ -210,6 +211,12 @@ public sealed class MainWindow : Window
                     {
                         Command("_Undo", Undo, "Ctrl+Z"),
                         Command("_Redo", Redo, "Ctrl+Shift+Z"),
+                        new Separator(),
+                        Command("Cu_t", Cut, "Ctrl+X"),
+                        Command("_Copy", Copy, "Ctrl+C"),
+                        Command("Copy _Merged", CopyMerged, "Ctrl+Shift+C"),
+                        Command("_Paste", Paste, "Ctrl+V"),
+                        Command("Layer via Cop_y", LayerViaCopy, "Ctrl+J"),
                         new Separator(),
                         Command("Flip Layer _Horizontal", () => Flip(horizontal: true, canvas: false)),
                         Command("Flip Layer _Vertical", () => Flip(horizontal: false, canvas: false)),
@@ -1154,6 +1161,115 @@ public sealed class MainWindow : Window
         Edit(LayerPlacement.Name(kind), () => FilterEdits.ApplyAdjustment(current, id, settings));
         Reselect(id);
         Say($"{LayerPlacement.Name(kind)} applied");
+    }
+
+    /// <summary>Edit ▸ Copy: the selected pixels of the active layer, held for a paste.</summary>
+    private void Copy()
+    {
+        if (_document is not { } document || Selected is not { } id) return;
+        var copied = SelectionClipboard.Copy(document, id);
+        if (copied is null)
+        {
+            Say("Select something on a layer with pixels of its own first");
+            return;
+        }
+        Adopt(copied);
+        Say($"Copied {copied.Region.Width} x {copied.Region.Height}");
+    }
+
+    /// <summary>Edit ▸ Copy Merged: the selected pixels of everything that is drawn.</summary>
+    private void CopyMerged()
+    {
+        if (_document is not { } document) return;
+        var copied = SelectionClipboard.CopyMerged(document);
+        if (copied is null)
+        {
+            Say("Select something to copy first");
+            return;
+        }
+        Adopt(copied);
+        Say($"Copied {copied.Region.Width} x {copied.Region.Height} from the flattened picture");
+    }
+
+    /// <summary>Edit ▸ Cut: the selected pixels taken off, and held for a paste.</summary>
+    private void Cut()
+    {
+        if (_document is not { } document || Selected is not { } id) return;
+        ClipboardImage? copied;
+        _history.Begin("Cut", document, Selected);
+        try
+        {
+            if (!SelectionClipboard.Cut(document, id, out copied) || copied is null)
+            {
+                Say("Select something on a layer with pixels of its own first");
+                return;
+            }
+        }
+        finally
+        {
+            _history.End(document, Selected);
+        }
+        Adopt(copied);
+        Reselect(id);
+        Say($"Cut {copied.Region.Width} x {copied.Region.Height}");
+    }
+
+    /// <summary>Edit ▸ Paste: the clipboard as a layer, where on the document it came from.</summary>
+    private void Paste()
+    {
+        if (_document is not { } document) return;
+        if (_clipboard is not { } clipboard)
+        {
+            Say("There is nothing to paste");
+            return;
+        }
+        Guid? made = null;
+        _history.Begin("Paste", document, Selected);
+        try
+        {
+            made = SelectionClipboard.Paste(document, clipboard, Selected);
+        }
+        finally
+        {
+            _history.End(document, Selected);
+        }
+        if (made is null)
+        {
+            Say("This document already holds as many layers as it may.");
+            return;
+        }
+        Reselect(made);
+        Say($"Pasted {clipboard.Region.Width} x {clipboard.Region.Height}");
+    }
+
+    /// <summary>Edit ▸ Layer via Copy: the selected pixels of the active layer as a layer of their own.</summary>
+    private void LayerViaCopy()
+    {
+        if (_document is not { } document || Selected is not { } id) return;
+        Guid? made = null;
+        _history.Begin("Layer via Copy", document, Selected);
+        try
+        {
+            made = SelectionClipboard.LayerViaCopy(document, id, Selected);
+        }
+        finally
+        {
+            _history.End(document, Selected);
+        }
+        if (made is null)
+        {
+            Say("Select something on a layer with pixels of its own first");
+            return;
+        }
+        Reselect(made);
+        Say("Layer made from the selection");
+    }
+
+    /// <summary>The clipboard the window holds: one piece of the canvas at a time, as the Mac build keeps it.</summary>
+    private void Adopt(ClipboardImage copied)
+    {
+        _clipboard?.Dispose();
+        _clipboard = copied;
     }
 
     /// <summary>Image ▸ Canvas Size: the canvas in pixels, with the picture kept at one of nine anchors.</summary>
