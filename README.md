@@ -6,6 +6,13 @@ The goal was to create a full-featured image editor that is completely free and 
 
 Because it’s open source, you can download the Xcode project and add, remove, or modify any feature to fit your workflow.
 
+> **This is the `compositor_win` branch: a Windows build beside the macOS app, not a replacement for it.**
+> Everything below describes the macOS original, which this branch follows feature by feature. The Windows
+> build is in [`windows/`](windows/README.md) — .NET 10 and Avalonia, reading and writing the same `.comp`
+> projects, with its own build, its own tests and its own headless self-checks. **`main` is read there, never
+> merged:** every feature is ported by hand, so the Windows build can never be broken by Swift code it does not
+> compile. See that README for what the two builds still differ on.
+
 ## Installation
 
 ### Download
