@@ -34,6 +34,7 @@ internal static class Program
                 "trim" => Trim(args),
                 "merge" => Merge(args),
                 "type" => Type(args),
+                "shape" => Shape(args),
                 _ => Fail($"'{args[0]}' is not a command. Try --help."),
             };
         }
@@ -57,6 +58,7 @@ internal static class Program
           trim   <in> <out> [tolerance]       crop the canvas to what is drawn on it
           merge  <in> <out> <layer>           merge a layer into what lies beneath it
           type   <in> <out> <text> [size]     add a text layer
+          shape  <in> <out> rectangle|ellipse|line [size]   add a shape layer
         """);
 
     private static int Info(string[] args)
@@ -268,6 +270,41 @@ internal static class Program
         var layer = document.Layers.First(candidate => candidate.ID == id);
         Console.WriteLine($"wrote {args[2]} (text '{layer.Name}' {layer.Asset!.Width}x{layer.Asset.Height} " +
             $"at {origin.X:0},{origin.Y:0}, {document.Layers.Count} layers)");
+        return 0;
+    }
+
+    /// <summary>Adds a shape layer, drawn the way the Shape tool draws one.</summary>
+    private static int Shape(string[] args)
+    {
+        if (args.Length is not (4 or 5)) return Fail("shape needs a project, an output, a shape name, and a size if you want one.");
+        var kind = args[3].ToLowerInvariant() switch
+        {
+            "rectangle" => ShapeKind.Rectangle,
+            "ellipse" => ShapeKind.Ellipse,
+            "line" => ShapeKind.Line,
+            _ => (ShapeKind?)null,
+        };
+        if (kind is not { } shape) return Fail($"'{args[3]}' is not a shape; try rectangle, ellipse or line.");
+        using var snapshot = ProjectStore.Load(args[1]);
+        using var document = snapshot.ToDocument();
+        var style = new LayerShapeStyle { Kind = shape, Red = 0.9, Green = 0.2, Blue = 0.1, CornerRadius = 8 };
+        var side = 160;
+        if (args.Length == 5 && !int.TryParse(args[4], out side)) return Fail("shape's size must be a whole number.");
+        var box = SKRectI.Create(document.Width / 4, document.Height / 4, side, (int)(side * 0.6));
+        if (shape == ShapeKind.Line)
+        {
+            style.LineWidth = 6;
+            style.Start = new JsonPoint(0, 0);
+            style.End = new JsonPoint(1, 1);
+        }
+        if (ShapeEdits.Add(document, style, box, null) is not { } id)
+        {
+            return Fail("That shape could not be drawn: its box is too big for one surface, or the project holds too many layers.");
+        }
+        ProjectStore.Save(ProjectSnapshot.FromDocument(document), args[2]);
+        var layer = document.Layers.First(candidate => candidate.ID == id);
+        Console.WriteLine($"wrote {args[2]} ({shape} '{layer.Name}' {layer.Asset!.Width}x{layer.Asset.Height} " +
+            $"at {box.Left},{box.Top}, {document.Layers.Count} layers)");
         return 0;
     }
 

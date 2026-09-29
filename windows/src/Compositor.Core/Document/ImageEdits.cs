@@ -30,7 +30,7 @@ public static class ImageEdits
         var sy = height / (double)document.Height;
         // Every new picture is made before anything is replaced, so a refusal leaves the document as it was.
         var made = new List<(ImageLayer Layer, ImportedImage? Asset, Model.LayerMask? Mask, Model.LayerTransform Transform,
-            Model.LayerTransform? Placement)>();
+            Model.LayerTransform? Placement, Model.LayerShape? Shape)>();
         long used = 0;
         foreach (var layer in document.Layers)
         {
@@ -43,9 +43,12 @@ public static class ImageEdits
                 used += (long)box.Width * box.Height;
             }
             var transform = new Model.LayerTransform(box.Left, box.Top, box.Width, box.Height, 0, false, false, sampling);
-            var replacement = layer.Asset is { } pixels
+            // A shape layer is drawn again at the new size rather than resampled, so a rounded corner keeps
+            // its radius and a line keeps its ends — as the Mac build redraws it.
+            var drawn = ShapeEdits.Scaled(layer, box.Width, box.Height);
+            var replacement = drawn?.Asset ?? (layer.Asset is { } pixels
                 ? ImportedImage.Create(Resample(pixels.Image, layer.Transform, sx, sy, box, sampling, gray: false)!, pixels.Name)
-                : null;
+                : null);
             var mask = layer.Mask;
             Model.LayerMask? maskResult = null;
             if (mask is { } carried)
@@ -68,16 +71,17 @@ public static class ImageEdits
             Model.LayerTransform? placement = layer.Mask?.Placement is { } placed
                 ? placed with { X = placed.X * sx, Y = placed.Y * sy, Width = placed.Width * sx, Height = placed.Height * sy }
                 : null;
-            made.Add((layer, replacement, maskResult, transform, placement));
+            made.Add((layer, replacement, maskResult, transform, placement, drawn?.Shape));
         }
 
         foreach (var guide in document.Guides)
         {
             guide.Position *= guide.Axis == GuideAxis.Vertical ? sx : sy;
         }
-        foreach (var (layer, asset, mask, transform, placement) in made)
+        foreach (var (layer, asset, mask, transform, placement, shape) in made)
         {
             if (asset is not null) layer.Asset = asset;
+            if (shape is not null) layer.Shape = shape;
             if (mask is not null)
             {
                 layer.Mask = mask;

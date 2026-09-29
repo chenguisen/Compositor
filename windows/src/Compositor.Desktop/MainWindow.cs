@@ -42,6 +42,15 @@ public sealed class MainWindow : Window
     /// <summary>The rest of the Layer menu, so all of it can go dead together when nothing is selected.</summary>
     private readonly List<MenuItem> _layerItems = [];
 
+    /// <summary>Which shape the Shape tool draws.</summary>
+    private readonly MenuItem _shapeKinds = new() { Header = "Shape _kind" };
+
+    private ShapeKind _shapeKind = ShapeKind.Rectangle;
+
+    /// <summary>A rectangle's corner radius, and a line's thickness, in document pixels.</summary>
+    private double _shapeCornerRadius;
+    private double _shapeLineWidth = 4;
+
     /// <summary>The crop frame's shape: the canvas's own, or one of the fixed ratios.</summary>
     private readonly MenuItem _cropRatios = new() { Header = "Crop _ratio" };
 
@@ -93,6 +102,7 @@ public sealed class MainWindow : Window
         Eyedropper,
         Type,
         Crop,
+        Shape,
     }
 
     private readonly Dictionary<Tool, MenuItem> _toolItems = [];
@@ -118,9 +128,11 @@ public sealed class MainWindow : Window
         _canvas.WandClicked = WandClicked;
         _canvas.CloneSourceClicked = CloneSourceChosen;
         _canvas.EyedropperClicked = Picked;
+        _canvas.ShapeFinished = ShapeFinished;
         _canvas.CropChanged = CropChanged;
         _canvas.CropCommitted = ApplyCrop;
         BuildCropRatios();
+        BuildShapeKinds();
         _canvas.TextClicked = TypeHere;
         _canvas.TransformStarted = TransformStarted;
         _canvas.TransformChanged = TransformChanged;
@@ -227,6 +239,9 @@ public sealed class MainWindow : Window
                         ToolItem("_Eyedropper (click the canvas)", Tool.Eyedropper),
                         ToolItem("_Type (click where the text goes)", Tool.Type),
                         ToolItem("_Crop (drag a frame, then apply it)", Tool.Crop),
+                        ToolItem("_Shape (drag out a rectangle, ellipse or line)", Tool.Shape),
+                        new Separator(),
+                        _shapeKinds,
                         new Separator(),
                         _cropRatios,
                         new Separator(),
@@ -647,6 +662,7 @@ public sealed class MainWindow : Window
         _canvas.EyedropperOnClick = tool == Tool.Eyedropper;
         _canvas.TypeOnClick = tool == Tool.Type;
         _canvas.CropEnabled = tool == Tool.Crop;
+        _canvas.ShapeEnabled = tool == Tool.Shape;
         // A crop frame belongs to the tool: leaving the tool lets go of it.
         if (tool != Tool.Crop) _cropFrame = null;
         ShowCropBox();
@@ -677,6 +693,7 @@ public sealed class MainWindow : Window
             Tool.Eyedropper => "Eyedropper — click the canvas to take its colour",
             Tool.Type => "Type — click where the text goes, then type it",
             Tool.Crop => "Crop — drag a frame, Alt to grow it from the middle, then Crop ▸ Apply",
+            Tool.Shape => $"Shape ({_shapeKind}) — drag it out; Shift squares it, Alt grows it from the middle",
             Tool.Move => "Move — drag the layer, or a handle to scale and turn it",
             Tool.Marquee => "Marquee — drag a rectangle; Shift adds, Alt subtracts",
             Tool.Ellipse => "Elliptical marquee — drag an oval; Shift adds, Alt subtracts",
@@ -706,6 +723,98 @@ public sealed class MainWindow : Window
                 _ => BrushMode.Paint,
             },
         };
+
+    /// <summary>The shapes the Shape tool draws, and the two numbers that shape them.</summary>
+    private void BuildShapeKinds()
+    {
+        foreach (var kind in Enum.GetValues<ShapeKind>())
+        {
+            var item = Command($"_{kind}", () => SetShapeKind(kind));
+            _shapeKinds.Items.Add(item);
+            _shapeKindItems[kind] = item;
+        }
+        _shapeKinds.Items.Add(new Separator());
+        _shapeKinds.Items.Add(Command("Corner _radius…", () => _ = SetShapeNumber(ShapeNumber.CornerRadius)));
+        _shapeKinds.Items.Add(Command("_Line width…", () => _ = SetShapeNumber(ShapeNumber.LineWidth)));
+        SetShapeKind(ShapeKind.Rectangle);
+    }
+
+    private readonly Dictionary<ShapeKind, MenuItem> _shapeKindItems = [];
+
+    private void SetShapeKind(ShapeKind kind)
+    {
+        _shapeKind = kind;
+        foreach (var (which, item) in _shapeKindItems) item.IsChecked = which == kind;
+    }
+
+    /// <summary>Asks for one of the two numbers that shape a shape.</summary>
+    private async Task SetShapeNumber(ShapeNumber which)
+    {
+        var corner = which == ShapeNumber.CornerRadius;
+        var current = corner ? _shapeCornerRadius : _shapeLineWidth;
+        if (await Ask(corner ? "Corner radius" : "Line width", "Document pixels, 0 to 1000",
+                $"{current:0.##}", 0, 1000) is not { } value)
+        {
+            return;
+        }
+        if (corner) _shapeCornerRadius = value;
+        else _shapeLineWidth = Math.Max(1, value);
+        Say($"Shape: {_shapeKind}, {(corner ? "corner radius" : "line width")} {value:0.##} pixels");
+    }
+
+    private enum ShapeNumber
+    {
+        CornerRadius,
+        LineWidth,
+    }
+
+    /// <summary>
+    /// A finished shape drag: the box it made becomes a new layer of its own pixels, still knowing the shape
+    /// it is, so a later size change draws it again rather than stretching it.
+    /// </summary>
+    private void ShapeFinished(SKPoint anchor, SKRectI box, SKPoint lineEnd)
+    {
+        if (_document is not { } document) return;
+        var style = new LayerShapeStyle
+        {
+            Kind = _shapeKind,
+            Red = _brush.Red,
+            Green = _brush.Green,
+            Blue = _brush.Blue,
+            CornerRadius = _shapeCornerRadius,
+        };
+        var target = box;
+        if (_shapeKind == ShapeKind.Line)
+        {
+            // The layer is the box around the line with room for the stroke's own thickness and its round ends.
+            var half = (float)(_shapeLineWidth / 2);
+            target = CropEdits.Snapped(SKRect.Create(box.Left - half, box.Top - half,
+                box.Width + half * 2, box.Height + half * 2));
+            style.LineWidth = _shapeLineWidth;
+            style.Start = Unit(target, anchor);
+            style.End = Unit(target, lineEnd);
+        }
+        if (ShapeEdits.TooLarge(target.Width, target.Height))
+        {
+            Say("That shape is too large to draw as one layer");
+            return;
+        }
+        _history.Begin(_shapeKind.ToString(), document, Selected);
+        var made = ShapeEdits.Add(document, style, target, Selected);
+        _history.End(document, Selected);
+        if (made is null)
+        {
+            Say("That shape could not be drawn");
+            return;
+        }
+        Reselect(made);
+        Say($"{_shapeKind}: {target.Width}x{target.Height} at {target.Left},{target.Top}");
+    }
+
+    /// <summary>Where a document point sits in a box, as a fraction of its sides.</summary>
+    private static JsonPoint Unit(SKRectI box, SKPoint point) => new(
+        box.Width > 0 ? (point.X - box.Left) / box.Width : 0.5,
+        box.Height > 0 ? (point.Y - box.Top) / box.Height : 0.5);
 
     /// <summary>The ratios the Crop tool offers, as the Mac build's ratio menu does.</summary>
     private void BuildCropRatios()

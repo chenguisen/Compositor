@@ -6,6 +6,7 @@ using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Compositor.Core.Document;
 using Compositor.Core.Model;
+using Format = Compositor.Core.Format;
 using Compositor.Core.Rendering;
 using SkiaSharp;
 using LayerTransform = Compositor.Core.Model.LayerTransform;
@@ -109,6 +110,20 @@ public sealed class CanvasView : Control
     private TransformHandle? _cropHandle;
     private SKRectI _cropOriginal;
     private SKPoint _cropStart;
+
+    /// <summary>When set, dragging draws a shape out and reports the box it made.</summary>
+    public bool ShapeEnabled { get; set; }
+
+    /// <summary>Which shape the drag draws, for the outline the canvas shows while it is drawn.</summary>
+    public Format.ShapeKind ShapeKind { get; set; }
+
+    /// <summary>Handed the drag's start, the box it made and where a line ended, in document pixels.</summary>
+    public Action<SKPoint, SKRectI, SKPoint>? ShapeFinished { get; set; }
+
+    private bool _shaping;
+    private SKPoint _shapeAnchor;
+    private SKRectI _shapeBox;
+    private SKPoint _shapeEnd;
 
     /// <summary>When set, clicking reports where a new text layer should go.</summary>
     public bool TypeOnClick { get; set; }
@@ -252,6 +267,22 @@ public sealed class CanvasView : Control
         DrawStroke(context);
     }
 
+    /// <summary>The shape being dragged right now, drawn as an outline until the drag ends.</summary>
+    private void DrawShape(DrawingContext context)
+    {
+        if (!_shaping) return;
+        var pen = new Pen { Brush = Brushes.White, Thickness = 1, DashStyle = new DashStyle([4.0, 4.0], 0) };
+        if (ShapeKind == Format.ShapeKind.Line)
+        {
+            context.DrawLine(pen, ToScreen(_shapeAnchor), ToScreen(_shapeEnd));
+            return;
+        }
+        var corner = ToScreen(new SKPoint(_shapeBox.Left, _shapeBox.Top));
+        var box = new Rect(corner.X, corner.Y, _shapeBox.Width * _zoom, _shapeBox.Height * _zoom);
+        if (ShapeKind == Format.ShapeKind.Ellipse) context.DrawEllipse(null, pen, box.Center, box.Width / 2, box.Height / 2);
+        else context.DrawRectangle(null, pen, box);
+    }
+
     /// <summary>Whether a crop drag is under way, so the tool is not reset under it.</summary>
     public bool CropDragging => _cropDragging is not CropDrag.None;
 
@@ -340,6 +371,7 @@ public sealed class CanvasView : Control
             Thickness = 1,
             DashStyle = new DashStyle([4.0, 4.0], 0),
         };
+        DrawShape(context);
         DrawDraft(context, pen);
         DrawCrop(context);
         DrawTransform(context);
@@ -577,6 +609,18 @@ public sealed class CanvasView : Control
             e.Handled = true;
             return;
         }
+        if (ShapeEnabled && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+        {
+            var point = ToDocument(e.GetPosition(this));
+            _shaping = true;
+            // The drag starts on a whole pixel, as the Mac build's does.
+            _shapeAnchor = new SKPoint(MathF.Round(point.X), MathF.Round(point.Y));
+            _shapeBox = SKRectI.Create((int)_shapeAnchor.X, (int)_shapeAnchor.Y, 1, 1);
+            _shapeEnd = _shapeAnchor;
+            e.Pointer.Capture(this);
+            e.Handled = true;
+            return;
+        }
         if (TypeOnClick && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
         {
             e.Handled = true;
@@ -659,6 +703,20 @@ public sealed class CanvasView : Control
             base.OnPointerMoved(e);
             return;
         }
+        if (_shaping)
+        {
+            var point = ToDocument(now);
+            var shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+            var option = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
+            _shapeEnd = ShapeKind == Format.ShapeKind.Line && shift
+                ? ShapeEdits.LineEnd(_shapeAnchor, point)
+                : point;
+            _shapeBox = ShapeEdits.Box(_shapeAnchor, _shapeEnd,
+                square: shift && ShapeKind != Format.ShapeKind.Line, fromCentre: option);
+            InvalidateVisual();
+            base.OnPointerMoved(e);
+            return;
+        }
         if (_cropDragging is not CropDrag.None)
         {
             var point = ToDocument(now);
@@ -733,6 +791,14 @@ public sealed class CanvasView : Control
             InvalidateVisual();
             if (stroke.Count > 0) StrokeFinished?.Invoke(stroke);
             e.Pointer.Capture(null);
+            return;
+        }
+        if (_shaping)
+        {
+            _shaping = false;
+            e.Pointer.Capture(null);
+            InvalidateVisual();
+            ShapeFinished?.Invoke(_shapeAnchor, _shapeBox, _shapeEnd);
             return;
         }
         if (_cropDragging is not CropDrag.None)
