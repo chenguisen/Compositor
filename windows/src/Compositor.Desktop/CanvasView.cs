@@ -348,6 +348,13 @@ public sealed class CanvasView : Control
         }
     }
 
+    /// <summary>
+    /// A document to draw instead of the one being edited, while a filter panel is open. It is the same size
+    /// and shares everything but the layer being filtered, so the canvas shows the filter without the document
+    /// being touched. The owner must clear this before disposing it.
+    /// </summary>
+    public CanvasDocument? PreviewDocument { get; set; }
+
     public double Zoom => _zoom;
 
     /// <summary>The layout grid drawn under the guides and everything else, or null when it is off.</summary>
@@ -408,7 +415,8 @@ public sealed class CanvasView : Control
     {
         var size = Bounds.Size;
         context.DrawRectangle(Backdrop, null, new Rect(0, 0, size.Width, size.Height));
-        if (_document is not { } document) return;
+        // What is drawn is the preview while a panel is showing one, and the document itself otherwise.
+        if ((PreviewDocument ?? _document) is not { } document) return;
 
         var left = (int)Math.Floor(_origin.X);
         var top = (int)Math.Floor(_origin.Y);

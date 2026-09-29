@@ -4,6 +4,7 @@ using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
+using Avalonia.Threading;
 using Compositor.Core.Document;
 using Compositor.Core.Format;
 using Compositor.Core.IO;
@@ -51,6 +52,9 @@ public sealed class MainWindow : Window
     private bool _showingAppearance;
     private bool _opacityDragging;
     private ClipboardImage? _clipboard;
+    private FilterPreview? _preview;
+    private DispatcherTimer? _previewTimer;
+    private CameraRawSettings? _previewSettings;
 
     /// <summary>The blend modes in the order the menu lists them, which is the order the enum declares.</summary>
     private static readonly LayerBlendMode[] BlendModes = Enum.GetValues<LayerBlendMode>();
@@ -1180,7 +1184,16 @@ public sealed class MainWindow : Window
             Say("Camera Raw needs a layer with pixels of its own");
             return;
         }
-        if (await CameraRawDialog.Ask(this, new CameraRawSettings()) is not { } settings) return;
+        // The panel shows what it is doing: as its sliders move the layer is filtered into a copy of the
+        // document and the canvas draws that, while the document itself is not touched until Apply.
+        if (FilterPreview.Begin(document, id) is { } preview)
+        {
+            _preview = preview;
+            _canvas.PreviewDocument = preview.Document;
+        }
+        var asked = await CameraRawDialog.Ask(this, new CameraRawSettings(), RequestPreview);
+        StopPreview();
+        if (asked is not { } settings) return;
         if (_document is not { } current) return;
         Edit("Camera Raw Filter", () => CameraRawEdits.Apply(current, id, settings));
         Reselect(id);
@@ -1639,6 +1652,43 @@ public sealed class MainWindow : Window
         if (!Edit("Auto Levels", () => LevelsEdits.Auto(document, id, mode))) Say("There is nothing in that layer to stretch");
         else Say($"Auto Levels: {mode}");
         Reselect(id);
+    }
+
+    /// <summary>
+    /// The panel's sliders have moved: the amounts are remembered and the filter runs once they have been
+    /// still for a moment, rather than on every tick of a drag.
+    /// </summary>
+    private void RequestPreview(CameraRawSettings settings)
+    {
+        if (_preview is null) return;
+        _previewSettings = settings;
+        _previewTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(140) };
+        _previewTimer.Stop();
+        _previewTimer.Tick -= ShowPreviewOnce;
+        _previewTimer.Tick += ShowPreviewOnce;
+        _previewTimer.Start();
+    }
+
+    /// <summary>Filters the preview once the amounts have settled, and draws it.</summary>
+    private void ShowPreviewOnce(object? sender, EventArgs e)
+    {
+        _previewTimer?.Stop();
+        if (_preview is not { } preview || _previewSettings is not { } settings) return;
+        if (preview.Show((target, id) => CameraRawEdits.Apply(target, id, settings))) _canvas.InvalidateVisual();
+    }
+
+    /// <summary>
+    /// Puts the preview away. The canvas is told to stop drawing it before it is disposed, or a redraw could
+    /// reach pixels that have just been freed.
+    /// </summary>
+    private void StopPreview()
+    {
+        _previewTimer?.Stop();
+        _previewSettings = null;
+        _canvas.PreviewDocument = null;
+        _preview?.Dispose();
+        _preview = null;
+        _canvas.InvalidateVisual();
     }
 
     /// <summary>

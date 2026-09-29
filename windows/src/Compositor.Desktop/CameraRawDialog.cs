@@ -17,6 +17,12 @@ internal sealed class CameraRawDialog : Window
     private readonly ComboBox _vignetteStyle = new();
     private CameraRawSettings? _result;
 
+    /// <summary>
+    /// Asks for the picture to be shown with the amounts as they stand, which is called on every change. The
+    /// panel does not wait for it: a slider being dragged should not stop moving while a filter runs.
+    /// </summary>
+    public Action<CameraRawSettings>? Preview { get; set; }
+
     private CameraRawDialog(CameraRawSettings start)
     {
         Title = "Camera Raw Filter";
@@ -138,6 +144,7 @@ internal sealed class CameraRawDialog : Window
         {
             if (change.Property != Slider.ValueProperty) return;
             Show();
+            Preview?.Invoke(Current());
         };
         Show();
         parent.Children.Add(new StackPanel
@@ -170,6 +177,18 @@ internal sealed class CameraRawDialog : Window
         };
     }
 
+    /// <summary>The amounts as the panel has them, for a preview of what they would do.</summary>
+    private CameraRawSettings Current()
+    {
+        var settings = new CameraRawSettings
+        {
+            GlowStyle = Math.Max(0, _glowStyle.SelectedIndex),
+            VignetteStyle = Math.Max(0, _vignetteStyle.SelectedIndex),
+        };
+        foreach (var (slider, set, _, _) in _rows) set(settings, slider.Value);
+        return settings;
+    }
+
     private void Accept(CameraRawSettings start)
     {
         var settings = new CameraRawSettings
@@ -183,9 +202,10 @@ internal sealed class CameraRawDialog : Window
     }
 
     /// <summary>The settings to apply, or null when the panel was dismissed or asks for nothing.</summary>
-    public static async Task<CameraRawSettings?> Ask(Window owner, CameraRawSettings start)
+    public static async Task<CameraRawSettings?> Ask(Window owner, CameraRawSettings start,
+        Action<CameraRawSettings>? preview = null)
     {
-        var dialog = new CameraRawDialog(start);
+        var dialog = new CameraRawDialog(start) { Preview = preview };
         await dialog.ShowDialog(owner);
         return dialog._result is { } settings && !settings.IsIdentity ? settings : null;
     }

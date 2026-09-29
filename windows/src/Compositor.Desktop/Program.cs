@@ -17,6 +17,11 @@ internal static class Program
         // `--grid` turns the layout grid on for the render, which is how that drawing is checked.
         if (args is ["--render", var project, var output]) return Render(project, output, showGrid: false);
         if (args is ["--render", var gridProject, var gridOutput, "--grid"]) return Render(gridProject, gridOutput, showGrid: true);
+        // `--preview` opens a preview of the top layer inverted, so the canvas drawing one can be checked.
+        if (args is ["--render", var previewProject, var previewOutput, "--preview"])
+        {
+            return Render(previewProject, previewOutput, showGrid: false, preview: true);
+        }
         Build().StartWithClassicDesktopLifetime(args);
         return 0;
     }
@@ -24,7 +29,7 @@ internal static class Program
     public static AppBuilder Build() =>
         AppBuilder.Configure<DesktopApp>().UsePlatformDetect().WithInterFont().LogToTrace();
 
-    private static int Render(string project, string output, bool showGrid)
+    private static int Render(string project, string output, bool showGrid, bool preview = false)
     {
         Build().SetupWithoutStarting();
         using var document = project == "--demo" ? Demo() : ProjectStore.Load(project).ToDocument();
@@ -60,10 +65,28 @@ internal static class Program
         view.Arrange(new Rect(0, 0, 640, 480));
         view.Document = document;
         if (showGrid) view.Grid = new LayoutGrid();
+        // A preview of the top layer, as a filter panel would show one: the canvas draws it in the document's
+        // place while the document is left as it was.
+        FilterPreview? shown = null;
+        if (preview && document.Layers.Count > 0)
+        {
+            var id = document.Layers[^1].ID;
+            shown = FilterPreview.Begin(document, id);
+            if (shown is not null)
+            {
+                shown.Show((target, layer) => FilterEdits.ApplyAdjustment(target, layer,
+                    new LayerAdjustment { Kind = AdjustmentKind.Invert }));
+                view.PreviewDocument = shown.Document;
+            }
+        }
         using var target = new RenderTargetBitmap(new PixelSize(640, 480));
         target.Render(view);
         target.Save(output, new PngBitmapEncoderOptions());
-        Console.WriteLine($"wrote {output} for {document.Width}x{document.Height} document at {view.Zoom * 100:0}%");
+        Console.WriteLine($"wrote {output} for {document.Width}x{document.Height} document at {view.Zoom * 100:0}%" +
+            (shown is null ? "" : ", showing a preview"));
+        // Stop drawing the preview before it is put away, as the window does.
+        view.PreviewDocument = null;
+        shown?.Dispose();
         return 0;
     }
 
