@@ -266,6 +266,9 @@ public sealed class MainWindow : Window
                         new Separator(),
                         Command("_Grain…", () => _ = ImageAdjustment(AdjustmentKind.Grain)),
                         Command("_Invert", () => _ = ImageAdjustment(AdjustmentKind.Invert)),
+                        new Separator(),
+                        Command("_Canvas Size…", () => _ = CanvasSize()),
+                        Command("_Trim…", () => _ = Trim()),
                     },
                 },
                 new MenuItem
@@ -1151,6 +1154,26 @@ public sealed class MainWindow : Window
         Edit(LayerPlacement.Name(kind), () => FilterEdits.ApplyAdjustment(current, id, settings));
         Reselect(id);
         Say($"{LayerPlacement.Name(kind)} applied");
+    }
+
+    /// <summary>Image ▸ Canvas Size: the canvas in pixels, with the picture kept at one of nine anchors.</summary>
+    private async Task CanvasSize()
+    {
+        if (_document is not { } document) return;
+        if (await CanvasSizeDialog.Ask(this, document.Width, document.Height, CanvasEdits.CentreAnchor) is not { } asked) return;
+        if (_document is not { } current) return;
+        Edit("Canvas Size", () => CanvasEdits.Resize(current, asked.Width, asked.Height, asked.Anchor));
+        Say($"Canvas is now {asked.Width} x {asked.Height}");
+    }
+
+    /// <summary>Image ▸ Trim: the canvas cut back to what is actually drawn on it.</summary>
+    private async Task Trim()
+    {
+        if (_document is not { } document) return;
+        if (await TrimDialog.Ask(this, new TrimOptions()) is not { } options) return;
+        if (_document is not { } current) return;
+        if (!Edit("Trim", () => TrimEdits.Trim(current, options))) Say("There was nothing to trim");
+        else Say($"Trimmed to {current.Width} x {current.Height}");
     }
 
     /// <summary>The ratios the Crop tool offers, as the Mac build's ratio menu does.</summary>
