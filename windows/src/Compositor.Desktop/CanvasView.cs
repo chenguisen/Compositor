@@ -82,6 +82,12 @@ public sealed class CanvasView : Control
     /// <summary>Handed the point the eyedropper was clicked at, in document pixels.</summary>
     public Action<SKPoint>? EyedropperClicked { get; set; }
 
+    /// <summary>When set, clicking reports where a new text layer should go.</summary>
+    public bool TypeOnClick { get; set; }
+
+    /// <summary>Handed the point the Type tool was clicked at, in document pixels.</summary>
+    public Action<SKPoint>? TextClicked { get; set; }
+
     /// <summary>When set, the box below is drawn with its handles and can be dragged about.</summary>
     public bool TransformEnabled { get; set; }
 
@@ -457,6 +463,12 @@ public sealed class CanvasView : Control
         {
             e.Pointer.Capture(this);
             e.Handled = true;
+            return;
+        }
+        if (TypeOnClick && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+        {
+            e.Handled = true;
+            TextClicked?.Invoke(ToDocument(e.GetPosition(this)));
             return;
         }
         if (EyedropperOnClick && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)

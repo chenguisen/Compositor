@@ -85,6 +85,7 @@ public sealed class MainWindow : Window
         Blur,
         Heal,
         Eyedropper,
+        Type,
     }
 
     private readonly Dictionary<Tool, MenuItem> _toolItems = [];
@@ -110,6 +111,7 @@ public sealed class MainWindow : Window
         _canvas.WandClicked = WandClicked;
         _canvas.CloneSourceClicked = CloneSourceChosen;
         _canvas.EyedropperClicked = Picked;
+        _canvas.TextClicked = TypeHere;
         _canvas.TransformStarted = TransformStarted;
         _canvas.TransformChanged = TransformChanged;
         _canvas.TransformFinished = TransformFinished;
@@ -185,6 +187,7 @@ public sealed class MainWindow : Window
                         _addMask,
                         _maskToggle,
                         LayerCommand("_Delete Mask", DeleteMask, null, (_, layer) => layer.Mask is not null),
+                        LayerCommand("Edit _Text…", () => _ = EditText(), null, (_, layer) => layer.Text is not null),
                         _maskLink,
                         new Separator(),
                         LayerCommand("New Blank Layer", NewBlankLayer,
@@ -212,6 +215,7 @@ public sealed class MainWindow : Window
                         ToolItem("Blur brush", Tool.Blur),
                         ToolItem("Spot _healing", Tool.Heal),
                         ToolItem("_Eyedropper (click the canvas)", Tool.Eyedropper),
+                        ToolItem("_Type (click where the text goes)", Tool.Type),
                         new Separator(),
                         _paintOnMask,
                         _eraseToggle,
@@ -628,6 +632,7 @@ public sealed class MainWindow : Window
         _tool = tool;
         _canvas.SampleSourceOnClick = tool == Tool.Clone;
         _canvas.EyedropperOnClick = tool == Tool.Eyedropper;
+        _canvas.TypeOnClick = tool == Tool.Type;
         _canvas.TransformEnabled = tool == Tool.Move;
         ShowTransformBox();
         _canvas.PaintEnabled = tool is Tool.Brush or Tool.Clone or Tool.Blur or Tool.Heal;
@@ -653,6 +658,7 @@ public sealed class MainWindow : Window
             Tool.Blur => $"Blur brush: {_brush.Diameter:0} pixels — drag over what should soften",
             Tool.Heal => $"Spot healing ({_brush.Healing}): {_brush.Diameter:0} pixels — drag over what should go",
             Tool.Eyedropper => "Eyedropper — click the canvas to take its colour",
+            Tool.Type => "Type — click where the text goes, then type it",
             Tool.Move => "Move — drag the layer, or a handle to scale and turn it",
             Tool.Marquee => "Marquee — drag a rectangle; Shift adds, Alt subtracts",
             Tool.Ellipse => "Elliptical marquee — drag an oval; Shift adds, Alt subtracts",
@@ -682,6 +688,68 @@ public sealed class MainWindow : Window
                 _ => BrushMode.Paint,
             },
         };
+
+    /// <summary>
+    /// The Type tool: a click says where the text goes, and the dialog says what it says. A text layer is
+    /// pixels and the style that drew them, so choosing Edit Text on one draws it again rather than painting
+    /// over it.
+    /// </summary>
+    private void TypeHere(SKPoint origin)
+    {
+        if (_document is not { } document) return;
+        _ = TypeText(origin);
+    }
+
+    private async Task TypeText(SKPoint origin)
+    {
+        if (_document is not { } document) return;
+        await PlaceText(document, origin);
+    }
+
+    private async Task PlaceText(CanvasDocument document, SKPoint origin)
+    {
+        var style = new LayerTextStyle
+        {
+            Content = "Text",
+            FontName = "Arial",
+            FontSize = 72,
+            Red = _brush.Red,
+            Green = _brush.Green,
+            Blue = _brush.Blue,
+        };
+        if (await TextDialog.Ask(this, "Type", style) is not { } wanted) return;
+        if (_document is not { } current) return;
+        _history.Begin("Type", current, Selected);
+        var made = TextEdits.Add(current, wanted, origin);
+        _history.End(current, Selected);
+        if (made is null)
+        {
+            Say("That text could not be drawn: the box it makes is too big, or there are too many layers");
+            return;
+        }
+        Reselect(made);
+        Say($"Type: {wanted.Content.Length} characters, {wanted.FontName} {wanted.FontSize:0} pixels");
+    }
+
+    /// <summary>Changes the selected text layer's words or settings and draws it again.</summary>
+    private async Task EditText()
+    {
+        if (_document is not { } document || Selected is not { } id) return;
+        if (document.Layers.FirstOrDefault(layer => layer.ID == id) is not { Text: { } text } layer)
+        {
+            Say("That layer is not text");
+            return;
+        }
+        var origin = new SKPoint((float)layer.Transform.X, (float)layer.Transform.Y);
+        if (await TextDialog.Ask(this, "Edit text", text.Style) is not { } wanted) return;
+        if (_document is not { } current) return;
+        _history.Begin("Edit Text", current, id);
+        var changed = TextEdits.SetStyle(current, id, wanted);
+        _history.End(current, id);
+        if (!changed) { Say("That text could not be drawn"); return; }
+        Reselect(id);
+        Say($"Text: {wanted.Content.Length} characters at {origin.X:0},{origin.Y:0}");
+    }
 
     /// <summary>Where a brush stroke goes: the layer's pixels, or its mask.</summary>
     private void SetPaintingMask(bool mask)

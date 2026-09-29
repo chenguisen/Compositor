@@ -33,6 +33,7 @@ internal static class Program
                 "resize" => Resize(args),
                 "trim" => Trim(args),
                 "merge" => Merge(args),
+                "type" => Type(args),
                 _ => Fail($"'{args[0]}' is not a command. Try --help."),
             };
         }
@@ -55,6 +56,7 @@ internal static class Program
           resize <in> <out> w h [dpi]         resample the image and every layer
           trim   <in> <out> [tolerance]       crop the canvas to what is drawn on it
           merge  <in> <out> <layer>           merge a layer into what lies beneath it
+          type   <in> <out> <text> [size]     add a text layer
         """);
 
     private static int Info(string[] args)
@@ -233,6 +235,39 @@ internal static class Program
         Console.WriteLine($"wrote {args[2]} ({plan.Action}: '{merged.Name}' is now " +
             $"{merged.Asset!.Width}x{merged.Asset.Height} at {merged.Transform.X:0.##},{merged.Transform.Y:0.##}, " +
             $"{document.Layers.Count} layers left)");
+        return 0;
+    }
+
+    /// <summary>Sets a string of text as a new layer, drawn from the style the way the Type tool does.</summary>
+    private static int Type(string[] args)
+    {
+        if (args.Length is not (4 or 5)) return Fail("type needs a project, an output, the text, and a size if you want one.");
+        using var snapshot = ProjectStore.Load(args[1]);
+        using var document = snapshot.ToDocument();
+        var style = new LayerTextStyle
+        {
+            Content = args[3],
+            FontName = "Arial",
+            FontSize = 72,
+            Red = 0,
+            Green = 0,
+            Blue = 0,
+        };
+        if (args.Length == 5)
+        {
+            if (!double.TryParse(args[4], out var size)) return Fail("type's size must be a number.");
+            style.FontSize = size;
+        }
+        if (!style.IsValid) return Fail("That text or size is not one a text layer may hold.");
+        var origin = new SKPoint((float)(document.Width / 4.0), (float)(document.Height / 4.0));
+        if (TextEdits.Add(document, style, origin) is not { } id)
+        {
+            return Fail("That text could not be drawn: its box is too big for one surface, or the project holds too many layers.");
+        }
+        ProjectStore.Save(ProjectSnapshot.FromDocument(document), args[2]);
+        var layer = document.Layers.First(candidate => candidate.ID == id);
+        Console.WriteLine($"wrote {args[2]} (text '{layer.Name}' {layer.Asset!.Width}x{layer.Asset.Height} " +
+            $"at {origin.X:0},{origin.Y:0}, {document.Layers.Count} layers)");
         return 0;
     }
 
