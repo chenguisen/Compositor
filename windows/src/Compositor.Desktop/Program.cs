@@ -72,6 +72,10 @@ internal static class Program
         // turn, the colours are swapped and reset, and the zoom is stepped. The window is drawn at the end, so
         // what the rail looks like is in the PNG beside the report.
         if (args is ["--tools", var toolsOutput]) return Tools(toolsOutput);
+        // `--shortcuts` drives the key table without a keyboard: every row's key and the menu row that shows
+        // it, a few keys pressed through the window's own routed event, a rebind, and the sheet refusing a
+        // clash. It draws the window and the sheet's own list of rows beside the report.
+        if (args is ["--shortcuts", var keysOutput]) return Shortcuts(keysOutput);
         // `--updates` reads the app's real update feed and says what it makes of it, which is the whole check
         // short of the dialog: off the network it prints that the feed could not be reached instead.
         if (args is ["--updates"]) return Updates();
@@ -377,6 +381,49 @@ internal static class Program
             Draw("the tool rail", rail, 56, new ToolRail().TakeTools());
             Console.WriteLine("the rail's column scrolls, and a bitmap does not lay a scroll view out, so the "
                 + "window's own drawing leaves it blank: the marks are in tools-rail.png");
+            return 0;
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+        }
+    }
+
+    /// <summary>
+    /// The key table driven without a keyboard, then drawn: the window, whose menu rows carry their gestures,
+    /// and the sheet's own list of rows — which is drawn by itself, because a bitmap does not lay out the content
+    /// of a scroll view and the sheet is one.
+    /// </summary>
+    private static int Shortcuts(string output)
+    {
+        Build().SetupWithoutStarting();
+        var folder = Path.Combine(Path.GetTempPath(), "compositor-keys-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            var project = Path.Combine(folder, "keys.comp");
+            using (var document = Demo()) ProjectStore.Save(ProjectSnapshot.FromDocument(document), project);
+            var window = new MainWindow();
+            Console.WriteLine(window.ShortcutsSelfCheck(project));
+            var content = (Control)window.Content!;
+            content.Measure(new Size(1280, 820));
+            content.Arrange(new Rect(0, 0, 1280, 820));
+            content.UpdateLayout();
+            using var target = new RenderTargetBitmap(new PixelSize(1280, 820));
+            target.Render(content);
+            target.Save(output, new PngBitmapEncoderOptions());
+            Console.WriteLine($"wrote {output}: the window, whose menu rows carry their keys");
+            var sheet = new ShortcutDialog(new Dictionary<string, ShortcutChord>());
+            var rows = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(output))!, "shortcuts-sheet.png");
+            Draw("the shortcut sheet's rows", rows, 640, sheet.TakeRows());
+            Console.WriteLine("the sheet itself is a window whose list is inside a scroll view, which a bitmap "
+                + "does not lay out, so its rows are drawn by themselves above");
             return 0;
         }
         finally

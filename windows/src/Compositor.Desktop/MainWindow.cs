@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
@@ -65,7 +66,7 @@ public sealed class MainWindow : Window
     private CameraRawScope? _cameraRawScope;
 
     /// <summary>One row, because what ⌘E does depends on the panel selection: it is named for it here.</summary>
-    private readonly MenuItem _merge = new() { HotKey = new KeyGesture(Key.E, KeyModifiers.Control) };
+    private readonly MenuItem _merge = new();
 
     /// <summary>The clipping, mask and visibility rows, whose names and availability follow the selection.</summary>
     private readonly MenuItem _visibility = new();
@@ -121,7 +122,7 @@ public sealed class MainWindow : Window
     private readonly MenuItem _effectsMenu = new() { Header = "Layer _Effects" };
     private MenuItem _adjustmentSettings = new();
     private MenuItem _clearEffects = new();
-    private readonly MenuItem _clipping = new() { HotKey = new KeyGesture(Key.G, KeyModifiers.Control | KeyModifiers.Alt) };
+    private readonly MenuItem _clipping = new();
     private readonly MenuItem _addMask = new() { Header = "Add _Mask" };
     private readonly MenuItem _maskToggle = new();
     private readonly MenuItem _maskLink = new();
@@ -238,6 +239,22 @@ public sealed class MainWindow : Window
     private SKPoint? _cloneSource;
     private SKPointI? _cloneOffset;
 
+    /// <summary>The shortcut keys as they were left last time, which the table in force is built from.</summary>
+    private readonly ShortcutDefaults _shortcutSettings = ShortcutDefaults.Load(ShortcutDefaults.DefaultPath);
+    /// <summary>Every row's key as it stands, the rows on their original key included.</summary>
+    private Dictionary<string, ShortcutChord> _keys = [];
+    /// <summary>The same table the other way about, so a key pressed finds the row it belongs to.</summary>
+    private Dictionary<ShortcutChord, string> _byKey = [];
+    /// <summary>What each row does. A verb answers false for a key that does not apply, which leaves it alone.</summary>
+    private readonly Dictionary<string, Func<ShortcutChord, bool>> _verbs = [];
+    /// <summary>The menu rows that show a key, and the shortcut row each of them is the face of.</summary>
+    private readonly List<(MenuItem Item, string ID)> _keyRows = [];
+    /// <summary>The rows that are a digit of the brush's opacity, so two typed together make one exact amount.</summary>
+    private readonly HashSet<string> _opacityRows = [];
+    /// <summary>The opacity digits typed so far, and the tool the held Hand is standing in for.</summary>
+    private string _opacityTyped = "";
+    private Tool? _toolBeforeHand;
+
     public MainWindow()
     {
         Title = "Compositor";
@@ -350,6 +367,14 @@ public sealed class MainWindow : Window
         Content = Layout();
         RefreshTabs();
         UpdateLayerMenu();
+        BuildVerbs();
+        RegisterKeys();
+        ShowKeys();
+        // The shortcuts are delivered from here and nowhere else: no menu row carries a HotKey, because a
+        // HotKey works through the window's own key bindings, which a routed handler cannot get in front of —
+        // it would either fire twice or fire on a key the table no longer holds. One handler, one table.
+        AddHandler(KeyDownEvent, KeyPressed, RoutingStrategies.Tunnel);
+        AddHandler(KeyUpEvent, KeyLetGo, RoutingStrategies.Tunnel);
         Say("File ▸ New Project… for a blank canvas, or File ▸ Open project folder… to load a .comp");
     }
 
@@ -364,17 +389,17 @@ public sealed class MainWindow : Window
                     Header = "_File",
                     Items =
                     {
-                        Command("_New Project…", () => _ = NewProject(), "Ctrl+N"),
-                        Command("_Open project folder…", OpenProject),
+                        Command("_New Project…", () => _ = NewProject(), "New Project"),
+                        Command("_Open project folder…", OpenProject, "Open Project"),
                         _recentMenu,
                         Command("_Import image…", () => _ = ImportImage()),
-                        Command("_Save", Save, "Ctrl+S"),
-                        Command("Save _As…", SaveAs),
+                        Command("_Save", Save, "Save"),
+                        Command("Save _As…", SaveAs, "Save As"),
                         new Separator(),
-                        Command("_Export PNG…", ExportPng),
-                        Command("Export _JPEG…", () => _ = ExportJpeg()),
+                        Command("_Export PNG…", ExportPng, "Export PNG"),
+                        Command("Export _JPEG…", () => _ = ExportJpeg(), "Export JPEG"),
                         new Separator(),
-                        Command("_Close Tab", () => _ = CloseTab(_open), "Ctrl+W"),
+                        Command("_Close Tab", () => _ = CloseTab(_open), "Close Tab"),
                         Command("E_xit", Close),
                     },
                 },
@@ -383,23 +408,27 @@ public sealed class MainWindow : Window
                     Header = "_Edit",
                     Items =
                     {
-                        Command("_Undo", Undo, "Ctrl+Z"),
-                        Command("_Redo", Redo, "Ctrl+Shift+Z"),
+                        Command("_Undo", Undo, "Undo"),
+                        Command("_Redo", Redo, "Redo"),
                         new Separator(),
-                        Command("Cu_t", Cut, "Ctrl+X"),
-                        Command("_Copy", Copy, "Ctrl+C"),
-                        Command("Copy _Merged", CopyMerged, "Ctrl+Shift+C"),
-                        Command("_Paste", Paste, "Ctrl+V"),
-                        Command("Layer via Cop_y", LayerViaCopy, "Ctrl+J"),
+                        Command("Cu_t", Cut, "Cut"),
+                        Command("_Copy", Copy, "Copy"),
+                        Command("Copy _Merged", CopyMerged, "Copy Merged"),
+                        Command("_Paste", Paste, "Paste"),
+                        Command("Layer via Cop_y", LayerViaCopy, "Layer via Copy"),
                         new Separator(),
-                        Command("Fill with _Foreground Colour", () => FillPixels(BrushColour(), "Fill"), "Alt+Delete"),
-                        Command("Fill with _Background Colour", () => FillPixels(BackgroundColour(), "Fill"), "Ctrl+Delete"),
+                        Command("Fill with _Foreground Colour", () => FillPixels(BrushColour(), "Fill"),
+                            "Fill with Foreground Colour"),
+                        Command("Fill with _Background Colour", () => FillPixels(BackgroundColour(), "Fill"),
+                            "Fill with Background Colour"),
                         Command("_Clear Selection Pixels", ClearPixels),
                         new Separator(),
                         Command("Flip Layer _Horizontal", () => Flip(horizontal: true, canvas: false)),
                         Command("Flip Layer _Vertical", () => Flip(horizontal: false, canvas: false)),
                         Command("Flip _Canvas Horizontal", () => Flip(horizontal: true, canvas: true)),
                         Command("Flip Canvas _Vertical", () => Flip(horizontal: false, canvas: true)),
+                        new Separator(),
+                        Command("_Keyboard Shortcuts…", () => _ = KeyboardShortcuts()),
                     },
                 },
                 new MenuItem
@@ -407,16 +436,15 @@ public sealed class MainWindow : Window
                     Header = "_Layer",
                     Items =
                     {
-                        LayerCommand("_Duplicate Layer", DuplicateLayer, new KeyGesture(Key.J, KeyModifiers.Control)),
-                        LayerCommand("_Rename Layer…", () => _ = RenameLayer(), new KeyGesture(Key.F2)),
-                        LayerCommand("_Delete Layer", DeleteLayer, new KeyGesture(Key.Delete)),
+                        LayerCommand("_Duplicate Layer", DuplicateLayer, "Duplicate Layer"),
+                        LayerCommand("_Rename Layer…", () => _ = RenameLayer(), "Rename Layer"),
+                        LayerCommand("_Delete Layer", DeleteLayer, "Delete Layer"),
                         new Separator(),
-                        LayerCommand("Move Layer _Up", () => MoveLayer(1), new KeyGesture(Key.OemCloseBrackets, KeyModifiers.Control)),
-                        LayerCommand("Move Layer _Down", () => MoveLayer(-1), new KeyGesture(Key.OemOpenBrackets, KeyModifiers.Control)),
+                        LayerCommand("Move Layer _Up", () => MoveLayer(1), "Move Layer Up"),
+                        LayerCommand("Move Layer _Down", () => MoveLayer(-1), "Move Layer Down"),
                         new Separator(),
                         _clipping,
-                        LayerCommand("_Group Selected Layers", GroupSelected,
-                            new KeyGesture(Key.G, KeyModifiers.Control),
+                        LayerCommand("_Group Selected Layers", GroupSelected, "Group Layers",
                             (document, layer) => document.Layers.Count < LayerPlacement.MaxLayers),
                         LayerCommand("Move _Out of Folder", MoveOutOfFolder, null,
                             (_, layer) => layer.ParentID is not null),
@@ -428,8 +456,7 @@ public sealed class MainWindow : Window
                         LayerCommand("Edit _Text…", () => _ = EditText(), null, (_, layer) => layer.Text is not null),
                         _maskLink,
                         new Separator(),
-                        LayerCommand("New Blank Layer", NewBlankLayer,
-                            new KeyGesture(Key.N, KeyModifiers.Control | KeyModifiers.Shift)),
+                        LayerCommand("New Blank Layer", NewBlankLayer, "New Blank Layer"),
                         LayerCommand("New F_older", NewFolder, null,
                             (document, _) => document.Layers.Count < LayerPlacement.MaxLayers),
                         _adjustmentMenu,
@@ -444,8 +471,9 @@ public sealed class MainWindow : Window
                     Header = "_Image",
                     Items =
                     {
-                        Command("_Hue/Saturation…", () => _ = ImageAdjustment(AdjustmentKind.HueSaturation)),
-                        Command("_Levels…", () => _ = ImageAdjustment(AdjustmentKind.Levels)),
+                        Command("_Hue/Saturation…", () => _ = ImageAdjustment(AdjustmentKind.HueSaturation),
+                            "Hue/Saturation"),
+                        Command("_Levels…", () => _ = ImageAdjustment(AdjustmentKind.Levels), "Levels"),
                         new MenuItem
                         {
                             Header = "_Auto Levels",
@@ -456,17 +484,17 @@ public sealed class MainWindow : Window
                                 Command("Auto Colour + Neutral _Midtones", () => AutoLevels(LevelsAuto.Neutral)),
                             },
                         },
-                        Command("C_urves…", () => _ = ImageAdjustment(AdjustmentKind.Curves)),
+                        Command("C_urves…", () => _ = ImageAdjustment(AdjustmentKind.Curves), "Curves"),
                         Command("_Exposure…", () => _ = ImageAdjustment(AdjustmentKind.Exposure)),
                         Command("Black & _White…", () => _ = ImageAdjustment(AdjustmentKind.BlackWhite)),
                         Command("_Gradient Map…", () => _ = ImageAdjustment(AdjustmentKind.GradientMap)),
                         Command("C_olor Balance…", () => _ = ImageAdjustment(AdjustmentKind.ColorBalance)),
                         new Separator(),
                         Command("_Grain…", () => _ = ImageAdjustment(AdjustmentKind.Grain)),
-                        Command("_Invert", () => _ = ImageAdjustment(AdjustmentKind.Invert)),
+                        Command("_Invert", () => _ = ImageAdjustment(AdjustmentKind.Invert), "Invert"),
                         new Separator(),
-                        Command("_Canvas Size…", () => _ = CanvasSize()),
-                        Command("_Image Size…", () => _ = ImageSize()),
+                        Command("_Canvas Size…", () => _ = CanvasSize(), "Canvas Size"),
+                        Command("_Image Size…", () => _ = ImageSize(), "Image Size"),
                         Command("_Trim…", () => _ = Trim()),
                     },
                 },
@@ -483,7 +511,7 @@ public sealed class MainWindow : Window
                         Command("_Bloom / Glow…", () => _ = ApplyFilter(FilterKind.BloomGlow)),
                         Command("_Dither…", () => _ = DitherFilter()),
                         new Separator(),
-                        Command("_Content-Aware Fill", ContentAwareFill),
+                        Command("_Content-Aware Fill", ContentAwareFill, "Content-Aware Fill"),
                         new Separator(),
                         Command("_Vignette…", () => _ = ApplyFilter(FilterKind.Vignette)),
                         Command("_Tonal Contrast…", () => _ = ApplyFilter(FilterKind.TonalContrast)),
@@ -495,24 +523,25 @@ public sealed class MainWindow : Window
                     Header = "_Tools",
                     Items =
                     {
-                        ToolItem("_Pan (drag to scroll)", Tool.Pan),
-                        ToolItem("_Move (drag the layer; Ctrl-drag a corner to distort it)", Tool.Move),
-                        ToolItem("Marquee (_rectangular selection)", Tool.Marquee),
+                        ToolItem("_Pan (drag to scroll)", Tool.Pan, "Hand tool"),
+                        ToolItem("_Move (drag the layer; Ctrl-drag a corner to distort it)", Tool.Move,
+                            "Move / Transform tool"),
+                        ToolItem("Marquee (_rectangular selection)", Tool.Marquee, "Marquee tool"),
                         ToolItem("_Elliptical marquee", Tool.Ellipse),
-                        ToolItem("_Lasso (freehand)", Tool.Lasso),
+                        ToolItem("_Lasso (freehand)", Tool.Lasso, "Lasso tool"),
                         ToolItem("_Polygonal lasso (click each corner)", Tool.Polygon),
-                        ToolItem("Magic _wand (click a colour)", Tool.Wand),
-                        ToolItem("_Brush", Tool.Brush),
-                        ToolItem("_Clone stamp (Alt-click a source first)", Tool.Clone),
-                        ToolItem("Blur brush", Tool.Blur),
+                        ToolItem("Magic _wand (click a colour)", Tool.Wand, "Magic wand"),
+                        ToolItem("_Brush", Tool.Brush, "Brush tool"),
+                        ToolItem("_Clone stamp (Alt-click a source first)", Tool.Clone, "Clone Stamp"),
+                        ToolItem("Blur brush", Tool.Blur, "Blur / Smudge / Liquify"),
                         ToolItem("_Liquify brush (push the pixels around)", Tool.Liquify),
                         ToolItem("S_mudge brush (drag the colour along)", Tool.Smudge),
-                        ToolItem("Spot _healing", Tool.Heal),
-                        ToolItem("_Eyedropper (click the canvas)", Tool.Eyedropper),
-                        ToolItem("_Type (click where the text goes)", Tool.Type),
-                        ToolItem("_Crop (drag a frame, then apply it)", Tool.Crop),
-                        ToolItem("_Shape (drag out a rectangle, ellipse or line)", Tool.Shape),
-                        ToolItem("_Gradient (drag the line it runs along)", Tool.Gradient),
+                        ToolItem("Spot _healing", Tool.Heal, "Spot Healing"),
+                        ToolItem("_Eyedropper (click the canvas)", Tool.Eyedropper, "Eyedropper tool"),
+                        ToolItem("_Type (click where the text goes)", Tool.Type, "Type tool"),
+                        ToolItem("_Crop (drag a frame, then apply it)", Tool.Crop, "Crop tool"),
+                        ToolItem("_Shape (drag out a rectangle, ellipse or line)", Tool.Shape, "Shape tool"),
+                        ToolItem("_Gradient (drag the line it runs along)", Tool.Gradient, "Gradient tool"),
                         new Separator(),
                         _gradientMenu,
                         new Separator(),
@@ -545,9 +574,9 @@ public sealed class MainWindow : Window
                     Header = "_Select",
                     Items =
                     {
-                        Command("Select _All", () => Change("Select All", SelectionEdits.SelectAll)),
-                        Command("_Deselect", Deselect),
-                        Command("_Inverse", () => Change("Inverse", SelectionEdits.Invert)),
+                        Command("Select _All", () => Change("Select All", SelectionEdits.SelectAll), "Select All"),
+                        Command("_Deselect", Deselect, "Deselect"),
+                        Command("_Inverse", () => Change("Inverse", SelectionEdits.Invert), "Inverse Selection"),
                         new Separator(),
                         Command("_Expand…", () => _ = ModifySelection(SelectionAmount.Expand)),
                         Command("_Contract…", () => _ = ModifySelection(SelectionAmount.Contract)),
@@ -564,10 +593,10 @@ public sealed class MainWindow : Window
                     Header = "_View",
                     Items =
                     {
-                        Command("Zoom _in", () => { _canvas.ZoomBy(1.25); Say(); }),
-                        Command("Zoom _out", () => { _canvas.ZoomBy(1 / 1.25); Say(); }),
-                        Command("_Fit on screen", () => { _canvas.Fit(); Say(); }),
-                        Command("Actual _pixels", () => { _canvas.ActualSize(); Say(); }),
+                        Command("Zoom _in", () => { _canvas.ZoomBy(1.25); Say(); }, "Zoom In"),
+                        Command("Zoom _out", () => { _canvas.ZoomBy(1 / 1.25); Say(); }, "Zoom Out"),
+                        Command("_Fit on screen", () => { _canvas.Fit(); Say(); }, "Fit Canvas"),
+                        Command("Actual _pixels", () => { _canvas.ActualSize(); Say(); }, "Actual Pixels"),
                         new Separator(),
                         _showGrid,
                         _showRulers,
@@ -582,7 +611,7 @@ public sealed class MainWindow : Window
                         _snapToLayers,
                         _snapToGrid,
                         new Separator(),
-                        Command("New _Guide…", () => _ = NewGuide(), "Ctrl+OemSemicolon"),
+                        Command("New _Guide…", () => _ = NewGuide(), "New Guide"),
                         Command("_Clear Guides", ClearGuides),
                     },
                 },
@@ -729,34 +758,373 @@ public sealed class MainWindow : Window
         return lined;
     }
 
-    private static MenuItem Command(string header, Action action, string? gesture = null)
+    /// <summary>
+    /// A row of the menus. <paramref name="key"/> names the shortcut row this row is the face of, if it is one:
+    /// both the key the row shows and the key it answers to are read from that one name, so a row cannot come
+    /// to show a key it does not fire on.
+    /// </summary>
+    private MenuItem Command(string header, Action action, string? key = null)
     {
         var item = new MenuItem { Header = header };
-        if (gesture is not null) item.HotKey = KeyGesture.Parse(gesture);
         item.Click += (_, _) => action();
+        ShowKey(item, key);
         return item;
     }
 
     /// <summary>A row of the Layer menu, remembered so it can be greyed out with the others.</summary>
-    private MenuItem LayerCommand(string header, Action action, KeyGesture gesture)
+    private MenuItem LayerCommand(string header, Action action, string? key = null,
+        Func<CanvasDocument, ImageLayer, bool>? ready = null)
     {
-        var item = Command(header, action);
-        item.HotKey = gesture;
-        _layerItems.Add(item);
+        var item = Command(header, action, key);
+        if (ready is null) _layerItems.Add(item);
+        else _layerRows.Add((item, ready));
         return item;
     }
 
+    /// <summary>How a shortcut row of the menus' group is named.</summary>
+    private static string MenuKey(string title) => $"{Shortcuts.Menus}:{title}";
+
+    /// <summary>The same for a row of the canvas's own group, which no menu shows.</summary>
+    private static string CanvasKey(string title) => $"{Shortcuts.Canvas}:{title}";
+
     /// <summary>
-    /// A row that needs more than a selection to be available: it takes its own test, which is asked
-    /// whenever the panel changes.
+    /// Remembers a menu row as the face of a shortcut row. Nothing is put on the row here: every row's key is
+    /// put on it by <see cref="ShowKeys"/> once the whole menu has been built, so a fresh start and a rebind
+    /// take the same path and cannot come out differently.
     /// </summary>
-    private MenuItem LayerCommand(string header, Action action, KeyGesture? gesture,
-        Func<CanvasDocument, ImageLayer, bool> ready)
+    private void ShowKey(MenuItem item, string? key, string group = Shortcuts.Menus)
     {
-        var item = Command(header, action);
-        if (gesture is not null) item.HotKey = gesture;
-        _layerRows.Add((item, ready));
-        return item;
+        if (key is not null) _keyRows.Add((item, $"{group}:{key}"));
+    }
+
+    /// <summary>The rows that are fields rather than built by <see cref="Command"/>, which are rows all the same.</summary>
+    private void RegisterKeys()
+    {
+        foreach (var (item, key) in new (MenuItem, string)[]
+                 {
+                     (_showGrid, "Show Grid"),
+                     (_showRulers, "Show Rulers"),
+                     (_showGuides, "Show Guides"),
+                     (_lockGuides, "Lock Guides"),
+                     (_showTransform, "Show Transform Controls"),
+                     (_snapping, "Snap"),
+                     (_merge, "Merge Layers"),
+                     (_clipping, "Toggle Clipping Mask"),
+                 })
+        {
+            ShowKey(item, key);
+        }
+    }
+
+    /// <summary>
+    /// The table in force: every menu row shows the key its shortcut row holds, and a key pressed is looked up
+    /// in the same table, so what a row shows and what it answers to are one thing. A row whose key this
+    /// build's Avalonia has no name for loses it and is said so, rather than left looking as though it worked.
+    /// </summary>
+    private void ShowKeys()
+    {
+        _keys = Shortcuts.Effective(_shortcutSettings.Overrides);
+        _byKey = [];
+        var unknown = 0;
+        foreach (var (id, chord) in _keys.ToList())
+        {
+            if (!chord.IsBound) continue;
+            if (Known(chord) is not { } known)
+            {
+                _keys[id] = ShortcutChord.Unbound;
+                unknown++;
+                continue;
+            }
+            _byKey[known] = id;
+        }
+        foreach (var (item, id) in _keyRows)
+        {
+            item.InputGesture = _keys.TryGetValue(id, out var chord) ? ShortcutKeys.Gesture(chord) : null;
+        }
+        if (unknown > 0)
+        {
+            Say($"{unknown} shortcut rows name a key this build does not know, so they are not in force");
+        }
+    }
+
+    /// <summary>A chord as this build knows it: the key name put through Avalonia's own enum, so that the two
+    /// spellings of one key — "OemOpenBrackets" and "Oem4" are the same key — come out the same and a key
+    /// pressed finds its row however the row was written down. Null is a name this build has no key for.</summary>
+    private static ShortcutChord? Known(ShortcutChord chord) => ShortcutKeys.Known(chord);
+
+    /// <summary>The text field that has the keyboard, if one has: what keeps the keys it edits itself with.</summary>
+    private TextBox? TypingIn() => FocusManager?.GetFocusedElement() as TextBox;
+
+    /// <summary>
+    /// Whether something is taking typing: the canvas while text is being typed on it, or a field with the
+    /// keyboard. What is done about it is the Mac build's own rule — the unmodified keys are the text's, so that
+    /// a letter typed into an amount never picks a tool.
+    /// </summary>
+    private bool Typing() => _canvas.TextEditing || TypingIn() is not null;
+
+    /// <summary>
+    /// Whether a text field keeps this key: the handful of combinations it edits its own text with. Everything
+    /// else with Ctrl or Alt is the window's whatever has the keyboard, so that Ctrl+S still saves with an
+    /// amount in hand — which is what the Mac build's menus do from a field as well.
+    /// </summary>
+    private static bool FieldKeepsIt(KeyEventArgs e) =>
+        e.KeyModifiers == KeyModifiers.Control && e.Key is Key.A or Key.C or Key.V or Key.X or Key.Z or Key.Y;
+
+    /// <summary>A key pressed anywhere in the window: the table says what it does, if anything.</summary>
+    private void KeyPressed(object? sender, KeyEventArgs e)
+    {
+        // The Windows key is Windows', and a chord made with it is not one the table can hold.
+        if (e.Handled || e.KeyModifiers.HasFlag(KeyModifiers.Meta)) return;
+        var held = ShortcutKeys.Held(e.KeyModifiers);
+        if (Typing() && (held is ShortcutModifiers.None or ShortcutModifiers.Shift
+            || TypingIn() is not null && FieldKeepsIt(e)))
+        {
+            return;
+        }
+        var chord = new ShortcutChord(e.Key.ToString(), held);
+        // A bare arrow belongs to whatever has the keyboard — the layer list walks its own rows with them — and
+        // only the canvas takes it, which is where the Mac build's own nudges live.
+        if (Arrows(chord) && !_canvas.IsFocused) return;
+        if (!_byKey.TryGetValue(chord, out var id) || !_verbs.TryGetValue(id, out var verb)) return;
+        LastDelivered = id;
+        // Two digits in a row make one exact opacity, and anything else starts the count again.
+        if (!_opacityRows.Contains(id)) _opacityTyped = "";
+        if (!verb(chord)) return;      // a row the key does not apply to leaves the key to whatever has it
+        e.Handled = true;
+    }
+
+    /// <summary>A key let go: the Hand the space bar was holding gives the tool back.</summary>
+    private void KeyLetGo(object? sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Space || _toolBeforeHand is not { } held) return;
+        _toolBeforeHand = null;
+        if (_tool == Tool.Pan) SetTool(held);
+    }
+
+    /// <summary>Whether a chord is one of the four arrows, which the layer list walks its rows with.</summary>
+    private static bool Arrows(ShortcutChord chord) => chord.Key is "Left" or "Right" or "Up" or "Down";
+
+    /// <summary>
+    /// Every shortcut row's own action. A verb answers whether the key applied at all: the crop's Enter with no
+    /// frame to apply answers no, so the key carries on to whatever else would have had it.
+    /// </summary>
+    private void BuildVerbs()
+    {
+        void Does(string title, Action action, string group = Shortcuts.Menus) =>
+            _verbs[$"{group}:{title}"] = _ => { action(); return true; };
+        void When(string title, Func<bool> action, string group = Shortcuts.Menus) =>
+            _verbs[$"{group}:{title}"] = _ => action();
+
+        Does("Undo", Undo);
+        Does("Redo", Redo);
+        Does("New Project", () => _ = NewProject());
+        Does("Open Project", OpenProject);
+        Does("Save", Save);
+        Does("Save As", SaveAs);
+        Does("Export PNG", ExportPng);
+        Does("Export JPEG", () => _ = ExportJpeg());
+        Does("Close Tab", () => _ = CloseTab(_open));
+        Does("Fit Canvas", () => { _canvas.Fit(); Say(); });
+        Does("Actual Pixels", () => { _canvas.ActualSize(); Say(); });
+        Does("Zoom In", () => { _canvas.ZoomBy(1.25); Say(); });
+        Does("Zoom Out", () => { _canvas.ZoomBy(1 / 1.25); Say(); });
+        Does("Show Transform Controls", ShowTransformControls);
+        Does("Cut", Cut);
+        Does("Copy", Copy);
+        Does("Copy Merged", CopyMerged);
+        Does("Paste", Paste);
+        Does("Fill with Foreground Colour", () => FillPixels(BrushColour(), "Fill"));
+        Does("Fill with Background Colour", () => FillPixels(BackgroundColour(), "Fill"));
+        Does("Content-Aware Fill", ContentAwareFill);
+        Does("Select All", () => Change("Select All", SelectionEdits.SelectAll));
+        Does("Deselect", Deselect);
+        Does("Inverse Selection", () => Change("Inverse", SelectionEdits.Invert));
+        Does("Curves", () => _ = ImageAdjustment(AdjustmentKind.Curves));
+        Does("Levels", () => _ = ImageAdjustment(AdjustmentKind.Levels));
+        Does("Hue/Saturation", () => _ = ImageAdjustment(AdjustmentKind.HueSaturation));
+        Does("Invert", () => _ = ImageAdjustment(AdjustmentKind.Invert));
+        Does("Canvas Size", () => _ = CanvasSize());
+        Does("Image Size", () => _ = ImageSize());
+        Does("Layer via Copy", LayerViaCopy);
+        Does("Duplicate Layer", DuplicateLayer);
+        Does("Toggle Clipping Mask", ToggleClipping);
+        Does("Group Layers", GroupSelected);
+        Does("Merge Layers", MergeLayers);
+        Does("New Blank Layer", NewBlankLayer);
+        Does("Move Layer Up", () => MoveLayer(1));
+        Does("Move Layer Down", () => MoveLayer(-1));
+        Does("Rename Layer", () => _ = RenameLayer());
+        Does("Delete Layer", DeleteLayer);
+        Does("Show Grid", ShowGrid);
+        Does("Show Rulers", ShowRulers);
+        Does("Show Guides", ShowGuides);
+        Does("Lock Guides", LockGuides);
+        Does("Snap", ShowSnapping);
+        Does("New Guide", () => _ = NewGuide());
+
+        // The tools. A letter that stands for a family — the two marquees, the three brushes — walks the family
+        // when it is pressed again, which is what the Mac build's own letters do.
+        Does("Hand tool", () => SetTool(Tool.Pan), Shortcuts.Canvas);
+        Does("Move / Transform tool", () => SetTool(Tool.Move), Shortcuts.Canvas);
+        Does("Marquee tool", () => ChooseTool(Tool.Marquee, Tool.Ellipse), Shortcuts.Canvas);
+        Does("Lasso tool", () => ChooseTool(Tool.Lasso, Tool.Polygon), Shortcuts.Canvas);
+        Does("Magic wand", () => SetTool(Tool.Wand), Shortcuts.Canvas);
+        Does("Brush tool", () => SetTool(Tool.Brush), Shortcuts.Canvas);
+        Does("Clone Stamp", () => SetTool(Tool.Clone), Shortcuts.Canvas);
+        Does("Blur / Smudge / Liquify", () => ChooseTool(Tool.Blur, Tool.Smudge, Tool.Liquify), Shortcuts.Canvas);
+        Does("Spot Healing", () => SetTool(Tool.Heal), Shortcuts.Canvas);
+        Does("Eyedropper tool", () => SetTool(Tool.Eyedropper), Shortcuts.Canvas);
+        Does("Type tool", () => SetTool(Tool.Type), Shortcuts.Canvas);
+        Does("Crop tool", () => SetTool(Tool.Crop), Shortcuts.Canvas);
+        Does("Shape tool", () => SetTool(Tool.Shape), Shortcuts.Canvas);
+        Does("Gradient tool", () => SetTool(Tool.Gradient), Shortcuts.Canvas);
+        Does("Swap foreground/background", SwapColours, Shortcuts.Canvas);
+        Does("Reset colours", ResetColours, Shortcuts.Canvas);
+        When("Temporary Hand tool (hold)", TakeHand, Shortcuts.Canvas);
+        When("Decrease brush size", () => StepBrushSize(false), Shortcuts.Canvas);
+        When("Increase brush size", () => StepBrushSize(true), Shortcuts.Canvas);
+        When("Decrease brush hardness", () => StepBrushHardness(false), Shortcuts.Canvas);
+        When("Increase brush hardness", () => StepBrushHardness(true), Shortcuts.Canvas);
+        When("Previous blend mode", () => StepBlend(-1), Shortcuts.Canvas);
+        When("Next blend mode", () => StepBlend(1), Shortcuts.Canvas);
+        When("Cycle shape kind", CycleShapeKind, Shortcuts.Canvas);
+        for (var digit = 0; digit <= 9; digit++)
+        {
+            var value = digit;
+            var id = CanvasKey($"Opacity digit {value} (type two for exact %)");
+            _opacityRows.Add(id);
+            _verbs[id] = _ => { OpacityDigit(value); return true; };
+        }
+        foreach (var (direction, dx, dy) in new[]
+                 {
+                     ("Left", -1.0, 0.0), ("Right", 1.0, 0.0), ("Up", 0.0, -1.0), ("Down", 0.0, 1.0),
+                 })
+        {
+            When($"Nudge {direction} 1 px", () => Nudge(dx, dy), Shortcuts.Canvas);
+            When($"Nudge {direction} 10 px", () => Nudge(dx * 10, dy * 10), Shortcuts.Canvas);
+        }
+        When("Apply Canvas Operation",
+            () => { if (_cropFrame is null) return false; ApplyCrop(); return true; }, Shortcuts.Canvas);
+        When("Cancel Canvas Operation",
+            () => { if (_cropFrame is null) return false; CancelCrop(); return true; }, Shortcuts.Canvas);
+    }
+
+    /// <summary>
+    /// Picks a tool from its letter, or the next in that letter's family when it is already in hand — the two
+    /// marquees on M, the lasso and the polygon on L, the three brushes on R.
+    /// </summary>
+    private void ChooseTool(params Tool[] family)
+    {
+        var at = Array.IndexOf(family, _tool);
+        SetTool(at < 0 ? family[0] : family[(at + 1) % family.Length]);
+    }
+
+    /// <summary>
+    /// An arrow with the canvas in hand. Which of the two it moves is the Mac build's own choice: with a
+    /// selection tool and something selected it moves the selection, and otherwise, with the Move tool in
+    /// hand, it moves the layer.
+    /// </summary>
+    private bool Nudge(double dx, double dy)
+    {
+        if (_document is not { } document) return false;
+        if (_canvas.Selection != SelectionTool.None && document.Selection.Path is not null)
+        {
+            return Edit("Move Selection", () => SelectionEdits.Move(document, dx, dy));
+        }
+        if (_tool != Tool.Move || Selected is not { } id) return false;
+        return Edit("Move Layer", () => LayerEdits.Move(document, id, dx, dy));
+    }
+
+    /// <summary>Steps the selected layer's blend mode, as the Mac build's own Shift-minus and Shift-equals do.</summary>
+    private bool StepBlend(int step)
+    {
+        if (_document is not { } document || Selected is not { } id) return false;
+        if (document.Layers.FirstOrDefault(layer => layer.ID == id) is not { } layer) return false;
+        var at = Array.IndexOf(BlendModes, layer.BlendMode);
+        var next = BlendModes[((at + step) % BlendModes.Length + BlendModes.Length) % BlendModes.Length];
+        Edit("Blend Mode", () => LayerEdits.SetBlendMode(document, id, next));
+        Say($"Blend mode: {Spell(next)}");
+        return true;
+    }
+
+    /// <summary>Steps to the next shape the Shape tool draws.</summary>
+    private bool CycleShapeKind()
+    {
+        var kinds = Enum.GetValues<ShapeKind>();
+        var at = Array.IndexOf(kinds, _options.Shape);
+        SetShapeKind(kinds[(at + 1) % kinds.Length]);
+        Say($"Shape: {_options.Shape}");
+        return true;
+    }
+
+    /// <summary>
+    /// The bracket keys, as the Mac build's own have them: a step of a fifth of the brush but never less than a
+    /// pixel, so that the smallest brushes are not left out of reach.
+    /// </summary>
+    private bool StepBrushSize(bool increase)
+    {
+        if (!_canvas.PaintEnabled) return false;
+        var current = _options.Brush.Diameter;
+        var stepped = increase
+            ? Math.Max(current + 1, Math.Round(current * 1.2))
+            : Math.Min(current - 1, Math.Round(current / 1.2));
+        _options.Brush = _options.Brush with { Diameter = Math.Clamp(stepped, 1, 2000) };
+        OptionsChanged();
+        Say($"Brush: {_options.Brush.Diameter:0} pixels");
+        return true;
+    }
+
+    /// <summary>Shift with the brackets: hardness in the Mac build's own quarter steps, 0 to 100%.</summary>
+    private bool StepBrushHardness(bool increase)
+    {
+        if (!_canvas.PaintEnabled) return false;
+        var quarter = _options.Brush.Hardness * 4;
+        var step = increase ? Math.Floor(quarter + 0.001) + 1 : Math.Ceiling(quarter - 0.001) - 1;
+        _options.Brush = _options.Brush with { Hardness = Math.Clamp(step, 0, 4) / 4 };
+        OptionsChanged();
+        Say($"Brush: {_options.Brush.Hardness * 100:0}% hard");
+        return true;
+    }
+
+    /// <summary>
+    /// A digit with the canvas in hand: the brush's opacity as a percentage, with two digits typed together
+    /// read as the whole number, so 5 alone is half and 5 then 3 is 53%.
+    /// </summary>
+    private void OpacityDigit(int digit)
+    {
+        _opacityTyped = _opacityTyped.Length >= 2 ? $"{digit}" : _opacityTyped + digit;
+        var percent = int.Parse(_opacityTyped) * 10;
+        if (_opacityTyped.Length == 2) percent = int.Parse(_opacityTyped);
+        _options.Brush = _options.Brush with { Opacity = percent / 100.0 };
+        OptionsChanged();
+        Say($"Brush opacity {_options.Brush.Opacity * 100:0}%");
+    }
+
+    /// <summary>
+    /// The space bar held: the Hand comes to hand for as long as it is down, and the tool that was in hand
+    /// comes back when it is let go. Only with the canvas in hand, so that space still works a button.
+    /// </summary>
+    private bool TakeHand()
+    {
+        if (!_canvas.IsFocused) return false;
+        if (_toolBeforeHand is null)
+        {
+            _toolBeforeHand = _tool;
+            SetTool(Tool.Pan);
+        }
+        return true;
+    }
+
+    /// <summary>Edit ▸ Keyboard Shortcuts…: the list and the recorder, and a table that passes the check.</summary>
+    private async Task KeyboardShortcuts()
+    {
+        if (await ShortcutDialog.Show(this, _shortcutSettings.Overrides) is not { } chosen) return;
+        _shortcutSettings.Overrides = chosen;
+        _shortcutSettings.Save(ShortcutDefaults.DefaultPath);
+        ShowKeys();
+        Say(chosen.Count == 0
+            ? "Keyboard shortcuts back to their defaults"
+            : $"{chosen.Count} keyboard shortcut{(chosen.Count == 1 ? "" : "s")} changed");
     }
 
     private async void OpenProject()
@@ -1021,6 +1389,128 @@ public sealed class MainWindow : Window
     /// swapped and put back, then the toolbar's zoom is stepped. It answers with what it found, one line a
     /// step, and throws when a step is wrong.
     /// </summary>
+    /// <summary>The row the last key delivered, which the check reads to watch the table doing its work.</summary>
+    internal string? LastDelivered { get; private set; }
+
+    /// <summary>A key pressed the way the keyboard presses it: through the window's own routed event, so what is
+    /// exercised is the handler the real keyboard reaches and not a way around it.</summary>
+    private string? Press(ShortcutChord chord)
+    {
+        LastDelivered = null;
+        RaiseEvent(new KeyEventArgs
+        {
+            RoutedEvent = KeyDownEvent,
+            Key = Enum.Parse<Key>(chord.Key),
+            KeyModifiers = ShortcutKeys.Modifiers(chord.Modifiers),
+        });
+        return LastDelivered;
+    }
+
+    /// <summary>
+    /// The shortcut table driven without a keyboard: what every row is on, whether the menus show the same key,
+    /// whether every row has something to do, and whether a key pressed delivers the row the table says —
+    /// including a key that has just been rebound, which is the one thing a rebind could silently get wrong.
+    /// </summary>
+    internal string ShortcutsSelfCheck(string project)
+    {
+        var report = new List<string>();
+        Open(project);
+        if (_document is null) throw new InvalidOperationException("the project did not open");
+        report.Add($"the table: {Shortcuts.Definitions.Count} rows, {_verbs.Count} with an action to call, "
+            + $"{_byKey.Count} on a key and {_keyRows.Count} of them shown in a menu");
+        report.Add($"groups: {string.Join(", ", Shortcuts.Groups)}");
+        if (Shortcuts.Problem(_shortcutSettings.Overrides) is { } problem)
+        {
+            throw new InvalidOperationException($"the table in force does not pass its own check: {problem}");
+        }
+
+        // A row ported in and never wired looks exactly like a feature nothing reaches, so this is the guard.
+        var orphans = Shortcuts.Definitions.Where(row => !_verbs.ContainsKey(row.ID)).Select(row => row.ID).ToList();
+        if (orphans.Count > 0) throw new InvalidOperationException($"nothing to do for {string.Join(", ", orphans)}");
+        report.Add("every row of the table has an action behind it");
+
+        // Every menu row shows the key its own shortcut row holds, and no other.
+        foreach (var (item, id) in _keyRows)
+        {
+            var chord = _keys[id];
+            var wanted = ShortcutKeys.Gesture(chord);
+            var shown = item.InputGesture;
+            if (wanted is null)
+            {
+                if (shown is not null) throw new InvalidOperationException($"{id} shows {shown} holding nothing");
+                continue;
+            }
+            if (shown is null || shown.Key != wanted.Key || shown.KeyModifiers != wanted.KeyModifiers)
+            {
+                throw new InvalidOperationException($"{id} shows {shown} but holds {chord.Label}");
+            }
+        }
+        report.Add($"all {_keyRows.Count} menu rows show the key their own shortcut row holds");
+        foreach (var group in Shortcuts.Groups)
+        {
+            foreach (var row in Shortcuts.Definitions.Where(row => row.Group == group))
+            {
+                report.Add($"  {row.ID} = {(_keys[row.ID].IsBound ? _keys[row.ID].Label : "nothing")}");
+            }
+        }
+
+        // A few keys pressed the way the keyboard presses them, and the row each one reached.
+        foreach (var (title, chord) in new (string, ShortcutChord)[]
+                 {
+                     ("Undo", new("Z", ShortcutModifiers.Control)),
+                     ("Redo", new("Z", ShortcutModifiers.Control | ShortcutModifiers.Shift)),
+                     ("Brush tool", new("B")),
+                     ("Crop tool", new("C")),
+                     ("Decrease brush size", new("OemOpenBrackets")),
+                 })
+        {
+            var id = _verbs.ContainsKey(MenuKey(title)) ? MenuKey(title) : CanvasKey(title);
+            var reached = Press(chord);
+            report.Add($"  {chord.Label} → {reached ?? "nothing"}{(reached == id ? "" : $" rather than {id}!")}");
+            if (reached != id) throw new InvalidOperationException($"{chord.Label} did not reach {id}");
+        }
+
+        // A key that is a menu row only with the modifiers its row asks for: the plain key is not the row.
+        if (Press(new ShortcutChord("Z")) is { } plain && plain == MenuKey("Undo"))
+        {
+            throw new InvalidOperationException("plain Z reached Undo, which is Ctrl+Z's row");
+        }
+        report.Add("plain Z reaches nothing, as only Ctrl+Z is Undo's");
+
+        // A rebind, made the way the sheet makes one: the new key delivers the row and the old key lets it go.
+        var undo = MenuKey("Undo");
+        _shortcutSettings.Overrides[undo] = new ShortcutChord("Y", ShortcutModifiers.Control);
+        ShowKeys();
+        if (Press(new ShortcutChord("Y", ShortcutModifiers.Control)) != undo)
+        {
+            throw new InvalidOperationException("the rebind did not take");
+        }
+        if (Press(new ShortcutChord("Z", ShortcutModifiers.Control)) == undo)
+        {
+            throw new InvalidOperationException("the key the row left still reached it");
+        }
+        report.Add("after rebinding Undo to Ctrl+Y: Ctrl+Y reaches it and Ctrl+Z does not");
+        _shortcutSettings.Overrides.Remove(undo);
+        ShowKeys();
+
+        // The sheet: a clash is refused with both rows named, and a sound change is not.
+        var sheet = new ShortcutDialog(new Dictionary<string, ShortcutChord>());
+        sheet.Record(undo, Key.E, KeyModifiers.Control);
+        report.Add($"the sheet with Ctrl+E recorded on Undo says \"{sheet.ComplaintText}\", "
+            + $"save {(sheet.CanSave ? "on offer" : "held back")}");
+        if (sheet.CanSave) throw new InvalidOperationException("a clash was offered for saving");
+        sheet.Record(undo, Key.Y, KeyModifiers.Control);
+        var changes = sheet.Changes();
+        report.Add($"with Ctrl+Y recorded instead, it says \"{sheet.ComplaintText}\" and would save "
+            + $"{changes.Count} row: {string.Join(", ", changes.Keys)}");
+        if (changes.Count != 1 || !changes.ContainsKey(undo)) throw new InvalidOperationException("the wrong rows would be saved");
+        // Backspace clears a row, which is how a key is taken off one.
+        sheet.Record(undo, Key.Back, KeyModifiers.None);
+        if (sheet.Draft[undo].IsBound) throw new InvalidOperationException("Backspace did not clear the row");
+        report.Add("Backspace clears the row being recorded");
+        return string.Join(Environment.NewLine, report);
+    }
+
     internal string ToolsSelfCheck(string project)
     {
         var report = new List<string>();
@@ -1640,7 +2130,7 @@ public sealed class MainWindow : Window
             });
     }
 
-    private MenuItem ToolItem(string header, Tool tool)
+    private MenuItem ToolItem(string header, Tool tool, string? key = null)
     {
         var item = new MenuItem
         {
@@ -1650,6 +2140,7 @@ public sealed class MainWindow : Window
         };
         item.Click += (_, _) => SetTool(tool);
         _toolItems[tool] = item;
+        ShowKey(item, key, Shortcuts.Canvas);
         return item;
     }
 
@@ -3069,8 +3560,13 @@ public sealed class MainWindow : Window
             _cropRatios.Items.Add(Command(label.Replace(":", ":_", StringComparison.Ordinal), () => SetCropRatio(ratio)));
         }
         _cropRatios.Items.Add(new Separator());
-        _cropRatios.Items.Add(Command("_Apply", ApplyCrop, "Ctrl+Return"));
-        _cropRatios.Items.Add(Command("_Cancel", CancelCrop));
+        // The same two rows the canvas answers to, so they show the key that really applies the frame.
+        var apply = Command("_Apply", ApplyCrop);
+        var cancel = Command("_Cancel", CancelCrop);
+        ShowKey(apply, "Apply Canvas Operation", Shortcuts.Canvas);
+        ShowKey(cancel, "Cancel Canvas Operation", Shortcuts.Canvas);
+        _cropRatios.Items.Add(apply);
+        _cropRatios.Items.Add(cancel);
     }
 
     /// <summary>Holds the crop frame to a ratio from now on, and shapes the frame it has to it.</summary>

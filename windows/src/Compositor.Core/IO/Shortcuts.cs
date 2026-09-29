@@ -262,10 +262,11 @@ public static class Shortcuts
                      ("Left", "Left"), ("Right", "Right"), ("Up", "Up"), ("Down", "Down"),
                  })
         {
+            // What the Mac has as two more rows — Command with the arrows, which lifts the selected pixels and
+            // moves them — is not here: this port has no such verb, and a row named for one it cannot do would
+            // be a row that lies. Recorded as the gap it is rather than written down as a shortcut.
             Canvas($"Nudge {direction} 1 px", key);
             Canvas($"Nudge {direction} 10 px", key, Shift);
-            Canvas($"Move selected pixels {direction} 1 px", key, Ctrl);
-            Canvas($"Move selected pixels {direction} 10 px", key, Ctrl | Shift);
         }
         Canvas("Apply Canvas Operation", "Enter");
         Canvas("Cancel Canvas Operation", "Escape");
