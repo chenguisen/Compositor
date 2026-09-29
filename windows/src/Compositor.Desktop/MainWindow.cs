@@ -298,6 +298,10 @@ public sealed class MainWindow : Window
                         Command("_Paste", Paste, "Ctrl+V"),
                         Command("Layer via Cop_y", LayerViaCopy, "Ctrl+J"),
                         new Separator(),
+                        Command("Fill with _Foreground Colour", () => FillPixels(BrushColour(), "Fill"), "Alt+Delete"),
+                        Command("Fill with _Background Colour", () => FillPixels(BackgroundColour(), "Fill"), "Ctrl+Delete"),
+                        Command("_Clear Selection Pixels", ClearPixels),
+                        new Separator(),
                         Command("Flip Layer _Horizontal", () => Flip(horizontal: true, canvas: false)),
                         Command("Flip Layer _Vertical", () => Flip(horizontal: false, canvas: false)),
                         Command("Flip _Canvas Horizontal", () => Flip(horizontal: true, canvas: true)),
@@ -454,6 +458,9 @@ public sealed class MainWindow : Window
                         Command("_Expand…", () => _ = ModifySelection(SelectionAmount.Expand)),
                         Command("_Contract…", () => _ = ModifySelection(SelectionAmount.Contract)),
                         Command("_Feather…", () => _ = ModifySelection(SelectionAmount.Feather)),
+                        new Separator(),
+                        Command("Layer's _Pixels", SelectLayerPixels),
+                        Command("_Mask's Black Areas", SelectMaskBlack),
                         new Separator(),
                         Command("Colour _Range…", () => _ = ColorRange()),
                     },
@@ -2452,10 +2459,10 @@ public sealed class MainWindow : Window
     }
 
     /// <summary>One change to the selection, as one undo step.</summary>
-    private void Change(string name, Func<CanvasDocument, bool> change)
+    private bool Change(string name, Func<CanvasDocument, bool> change)
     {
-        if (_document is not { } document) return;
-        Edit(name, () => change(document));
+        if (_document is not { } document) return false;
+        return Edit(name, () => change(document));
     }
 
     /// <summary>Lets the selection go, and any half-drawn outline with it.</summary>
@@ -2463,6 +2470,73 @@ public sealed class MainWindow : Window
     {
         _canvas.CancelDraft();
         Change("Deselect", SelectionEdits.Deselect);
+    }
+
+    /// <summary>
+    /// Select ▸ Layer's Pixels: what the layer shows becomes the selection, in its place on the document —
+    /// what Photoshop takes when a layer's thumbnail is command-clicked.
+    /// </summary>
+    private void SelectLayerPixels()
+    {
+        if (Selected is not { } id) return;
+        if (!Change("Select Layer's Pixels", document => SelectionEdits.SelectLayerPixels(document, id)))
+        {
+            Say("That layer shows no pixels to take a selection from");
+        }
+    }
+
+    /// <summary>Select ▸ Mask's Black Areas: what the layer's mask hides becomes the selection.</summary>
+    private void SelectMaskBlack()
+    {
+        if (Selected is not { } id) return;
+        if (!Change("Select Mask's Black Areas", document => SelectionEdits.SelectMaskDark(document, id)))
+        {
+            Say("That layer has no mask, or none of it is hidden");
+        }
+    }
+
+    /// <summary>The background colour, which the gradient tool draws towards and a fill can use.</summary>
+    private SKColor BackgroundColour() => new(
+        (byte)Math.Clamp(Math.Round(_gradientBackground.Red * 255), 0, 255),
+        (byte)Math.Clamp(Math.Round(_gradientBackground.Green * 255), 0, 255),
+        (byte)Math.Clamp(Math.Round(_gradientBackground.Blue * 255), 0, 255));
+
+    /// <summary>
+    /// Edit ▸ Fill: what the selection covers takes the colour. A mask is the exception — filling it sets how
+    /// much it reveals rather than painting a colour, so its three channels are read as one gray.
+    /// </summary>
+    private void FillPixels(SKColor colour, string name)
+    {
+        if (_document is not { } document || Selected is not { } id) return;
+        var filled = Edit(_paintingMask ? "Fill Mask" : name, () => _paintingMask
+            ? FillEdits.FillMask(document, id,
+                (byte)Math.Clamp(Math.Round((colour.Red + colour.Green + colour.Blue) / 3.0), 0, 255))
+            : FillEdits.Fill(document, id, colour));
+        if (!filled)
+        {
+            Say("Nothing to fill: that layer holds no pixels, or the selection does not reach it");
+        }
+    }
+
+    /// <summary>
+    /// Edit ▸ Clear: what the selection covers is made transparent. On a mask there is no transparency to
+    /// clear, so it is filled with black instead, which is what hiding that part of the layer means.
+    /// </summary>
+    private void ClearPixels()
+    {
+        if (_document is not { } document || Selected is not { } id) return;
+        if (_paintingMask)
+        {
+            if (!Edit("Clear Mask", () => FillEdits.FillMask(document, id, 0)))
+            {
+                Say("Nothing to clear: the selection does not reach that mask");
+            }
+            return;
+        }
+        if (!Edit("Clear", () => FillEdits.Clear(document, id)))
+        {
+            Say("Nothing to clear: that layer holds no pixels, or the selection does not reach it");
+        }
     }
 
     /// <summary>

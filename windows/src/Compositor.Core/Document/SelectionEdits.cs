@@ -147,9 +147,71 @@ public static class SelectionEdits
         using (path) return Apply(document, path, mode);
     }
 
-    /// <summary>The colours as the kernel wants them: three straight-sRGB bytes each, one after another.</summary>
-    private static byte[] Colours(IReadOnlyList<SKColor> colours)
+    /// <summary>
+    /// Select ▸ Layer's Pixels: what the layer shows — where it is at least half opaque — becomes the
+    /// selection, in its place on the document. A folder holds no pixels of its own, so there is nothing to
+    /// take. False when there is no such layer, when it shows nothing, or when the shape is too detailed to
+    /// outline.
+    /// </summary>
+    public static bool SelectLayerPixels(CanvasDocument document, Guid layerID, SelectionMode mode = SelectionMode.Replace)
     {
+        if (document.Layers.FirstOrDefault(layer => layer.ID == layerID) is not { IsGroup: false, Asset: { } asset } layer)
+        {
+            return false;
+        }
+        return SelectPixels(document, mode, asset.Width, asset.Height, channels: 4, picksBelow: false,
+            BrushEdits.PixelToDocument(layer.Transform, asset.Width, asset.Height), asset.Image);
+    }
+
+    /// <summary>
+    /// Select ▸ Mask's Black Areas: where the layer's mask hides it — anything darker than half — becomes the
+    /// selection, in the mask's own place, which is the layer's when the mask has no placement of its own.
+    /// </summary>
+    public static bool SelectMaskDark(CanvasDocument document, Guid layerID, SelectionMode mode = SelectionMode.Replace)
+    {
+        if (document.Layers.FirstOrDefault(layer => layer.ID == layerID) is not { Mask: { } mask } layer) return false;
+        var width = mask.Asset.Width;
+        var height = mask.Asset.Height;
+        // A mask's black is what it hides, so it is the dark pixels that are taken.
+        return SelectPixels(document, mode, width, height, channels: 1, picksBelow: true,
+            BrushEdits.PixelToDocument(layer.MaskTransform, width, height), mask.Asset.Image);
+    }
+
+    /// <summary>
+    /// The pixels of an image that pass a test — its alpha, or its gray — outlined along their exact edges and
+    /// carried into the document, where the layer or mask sits.
+    /// </summary>
+    private static bool SelectPixels(CanvasDocument document, SelectionMode mode, int width, int height,
+        int channels, bool picksBelow, SKMatrix toDocument, SKBitmap image)
+    {
+        if (width <= 0 || height <= 0) return false;
+        var mask = new byte[(long)width * height];
+        var pixels = image.GetPixelSpan();
+        var stride = image.RowBytes;
+        var picked = 0;
+        for (var y = 0; y < height; y++)
+        {
+            for (var x = 0; x < width; x++)
+            {
+                // The last channel of a pixel is its alpha; a mask is one gray channel and nothing else.
+                var value = pixels[y * stride + x * channels + channels - 1];
+                if (picksBelow ? value >= 128 : value < 128) continue;
+                mask[y * width + x] = 1;
+                picked++;
+            }
+        }
+        // Nothing passing leaves an empty selection in Replace mode, as the wand does.
+        if (picked == 0) return mode == SelectionMode.Replace ? Deselect(document) : false;
+        if (Outline(mask, width, height) is not { } path) return false;
+        using (path)
+        {
+            path.Transform(toDocument);
+            return Apply(document, path, mode);
+        }
+    }
+
+    /// <summary>The colours as the kernel wants them: three straight-sRGB bytes each, one after another.</summary>
+    private static byte[] Colours(IReadOnlyList<SKColor> colours)    {
         var bytes = new byte[colours.Count * 3];
         for (var index = 0; index < colours.Count; index++)
         {

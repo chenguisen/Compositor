@@ -443,7 +443,7 @@ public static class BrushEdits
     }
 
     /// <summary>Straight (unpremultiplied) source-over, which is the form a layer's pixels are held in.</summary>
-    private static void Blend(Span<byte> pixels, int at, double alpha, double red, double green, double blue)
+    internal static void Blend(Span<byte> pixels, int at, double alpha, double red, double green, double blue)
     {
         var under = pixels[at + 3] / 255.0;
         var outAlpha = alpha + under * (1 - alpha);

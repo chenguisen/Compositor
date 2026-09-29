@@ -32,6 +32,7 @@ internal static class Program
                 "guide" => Guide(args),
                 "distort" => Distort(args),
                 "warp" => Warp(args),
+                "fill" => Fill(args),
                 "canvas" => Canvas(args),
                 "resize" => Resize(args),
                 "trim" => Trim(args),
@@ -65,6 +66,8 @@ internal static class Program
                                               comma-separate layer names to distort several together
           warp   <in> <out> <layer> smudge|liquify x1 y1 x2 y2 [diameter] [strength]
                                               drag the layer's pixels along a stroke
+          fill   <in> <out> <layer> r g b [x y w h]
+                                              fill the layer, inside a rectangle when one is given
           canvas <in> <out> w h [anchor]      resize the canvas, moving content          resize <in> <out> w h [dpi]         resample the image and every layer
           trim   <in> <out> [tolerance]       crop the canvas to what is drawn on it
           merge  <in> <out> <layer>           merge a layer into what lies beneath it
@@ -331,6 +334,44 @@ internal static class Program
         ProjectStore.Save(ProjectSnapshot.FromDocument(document), args[2]);
         var layer = document.Layers.First(entry => entry.ID == matches[0].ID);
         Console.WriteLine($"wrote {args[2]} ({kind} over '{layer.Name}' at {layer.Asset!.Width}x{layer.Asset.Height})");
+        return 0;
+    }
+
+    private static int Fill(string[] args)
+    {
+        if (args.Length is not (7 or 11))
+        {
+            return Fail("fill needs an input, an output, a layer, three colour numbers and, if you want one, a rectangle.");
+        }
+        var colour = new byte[3];
+        for (var index = 0; index < 3; index++)
+        {
+            if (!byte.TryParse(args[index + 4], out colour[index])) return Fail("The colour is three numbers, 0 to 255.");
+        }
+        var numbers = new int[4];
+        for (var index = 0; index < args.Length - 7; index++)
+        {
+            if (!int.TryParse(args[index + 7], out numbers[index])) return Fail("A rectangle is four whole numbers.");
+        }
+        using var snapshot = ProjectStore.Load(args[1]);
+        using var document = snapshot.ToDocument();
+        var matches = document.Layers
+            .Where(layer => string.Equals(layer.Name, args[3], StringComparison.OrdinalIgnoreCase)).ToList();
+        if (matches.Count == 0) return Fail($"No layer in that project is called '{args[3]}'.");
+        if (matches.Count > 1) return Fail($"{matches.Count} layers are called '{args[3]}'; rename one of them first.");
+        var where = args.Length == 11
+            ? SelectionEdits.Select(document, SKRectI.Create(numbers[0], numbers[1], numbers[2], numbers[3]))
+            : true;
+        if (!where) return Fail("That rectangle selects nothing.");
+        if (!FillEdits.Fill(document, matches[0].ID, new SKColor(colour[0], colour[1], colour[2])))
+        {
+            return Fail("The fill was refused: the layer holds no pixels, or the selection does not reach it.");
+        }
+        ProjectStore.Save(ProjectSnapshot.FromDocument(document), args[2]);
+        Console.WriteLine($"wrote {args[2]} (filled '{args[3]}' with {colour[0]},{colour[1]},{colour[2]}" +
+            (args.Length == 11
+                ? $" inside {numbers[2]}x{numbers[3]} at {numbers[0]},{numbers[1]})"
+                : ")"));
         return 0;
     }
 
