@@ -147,6 +147,42 @@ public class TrimAndExportTests
     }
 
     [Fact]
+    public void TheQualityAJpegIsWrittenAtChangesTheFile()
+    {
+        // A picture with detail to lose: the quality has nothing to work with on a flat patch.
+        using var document = new CanvasDocument(Guid.NewGuid(), 64, 64);
+        var bitmap = new SKBitmap(Bitmaps.ColorInfo(64, 64));
+        for (var y = 0; y < 64; y++)
+            for (var x = 0; x < 64; x++)
+                bitmap.SetPixel(x, y, new SKColor((byte)(x * 3 % 256), (byte)(y * 5 % 256), (byte)((x + y) * 7 % 256)));
+        document.Layers.Add(new ImageLayer(Guid.NewGuid(), ImportedImage.Create(bitmap, "Detail"),
+            new Model.LayerTransform(0, 0, 64, 64), "Detail"));
+
+        var low = Path.Combine(Path.GetTempPath(), $"compositor-low-{Guid.NewGuid():N}.jpg");
+        var high = Path.Combine(Path.GetTempPath(), $"compositor-high-{Guid.NewGuid():N}.jpg");
+        try
+        {
+            Assert.True(ImageWriter.Write(document, low, quality: 20));
+            Assert.True(ImageWriter.Write(document, high, quality: 95));
+            Assert.True(new FileInfo(high).Length > new FileInfo(low).Length,
+                $"95 came out at {new FileInfo(high).Length} and 20 at {new FileInfo(low).Length}");
+            // Both are JPEGs of the document's size.
+            foreach (var path in new[] { low, high })
+            {
+                using var decoded = SKBitmap.Decode(path);
+                Assert.NotNull(decoded);
+                Assert.Equal(64, decoded.Width);
+                Assert.Equal(64, decoded.Height);
+            }
+        }
+        finally
+        {
+            File.Delete(low);
+            File.Delete(high);
+        }
+    }
+
+    [Fact]
     public void AFormatThatIsNotWrittenIsRefused()
     {
         using var document = Document(8, 8);

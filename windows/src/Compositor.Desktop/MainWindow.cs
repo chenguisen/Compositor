@@ -200,6 +200,7 @@ public sealed class MainWindow : Window
                         Command("Save _As…", SaveAs),
                         new Separator(),
                         Command("_Export PNG…", ExportPng),
+                        Command("Export _JPEG…", () => _ = ExportJpeg()),
                         new Separator(),
                         Command("E_xit", Close),
                     },
@@ -2001,6 +2002,40 @@ public sealed class MainWindow : Window
             if (file?.TryGetLocalPath() is not { } path) return;
             // A band of tiles at a time, so the canvas size does not have to fit in one buffer.
             TiledPngWriter.Write(document, path);
+            Say($"Exported {path}");
+        }
+        catch (Exception error)
+        {
+            Say($"Could not export: {error.Message}");
+        }
+    }
+
+    /// <summary>
+    /// File ▸ Export JPEG: the flattened document written at a quality that is asked for. A JPEG has to be
+    /// made whole, so a canvas too big to hold is refused rather than quietly written wrong.
+    /// </summary>
+    private async Task ExportJpeg()
+    {
+        if (_document is not { } document)
+        {
+            Say("Nothing to export yet.");
+            return;
+        }
+        try
+        {
+            var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+            {
+                Title = "Export JPEG",
+                SuggestedFileName = "Compositor export.jpg",
+                DefaultExtension = "jpg",
+            });
+            if (file?.TryGetLocalPath() is not { } path) return;
+            if (await QualityDialog.Ask(this) is not { } quality) return;
+            if (!ImageWriter.Write(document, path, quality))
+            {
+                Say("That canvas is too large to write as one JPEG.");
+                return;
+            }
             Say($"Exported {path}");
         }
         catch (Exception error)
