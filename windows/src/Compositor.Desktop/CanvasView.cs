@@ -368,6 +368,18 @@ public sealed class CanvasView : Control
 
     public double Zoom => _zoom;
 
+    /// <summary>The document place at the view's top left corner, which the ruler strips are numbered from.</summary>
+    public double OriginX => _origin.X;
+
+    /// <summary>The same down the side.</summary>
+    public double OriginY => _origin.Y;
+
+    /// <summary>
+    /// Called whenever the view moves over the document or changes zoom, so what is drawn around the canvas —
+    /// the rulers — can follow it.
+    /// </summary>
+    public Action? ViewportChanged { get; set; }
+
     /// <summary>The layout grid drawn under the guides and everything else, or null when it is off.</summary>
     public LayoutGrid? Grid { get; set; }
 
@@ -384,7 +396,7 @@ public sealed class CanvasView : Control
         _origin = new SKPoint(
             (float)((_document.Width - Bounds.Width / _zoom) / 2),
             (float)((_document.Height - Bounds.Height / _zoom) / 2));
-        InvalidateVisual();
+        Moved();
     }
 
     public void ActualSize()
@@ -394,7 +406,7 @@ public sealed class CanvasView : Control
             : new SKPoint(_origin.X + (float)(Bounds.Width / _zoom / 2), _origin.Y + (float)(Bounds.Height / _zoom / 2));
         SetZoom(1);
         _origin = new SKPoint((float)(centre.X - Bounds.Width / 2), (float)(centre.Y - Bounds.Height / 2));
-        InvalidateVisual();
+        Moved();
     }
 
     public void ZoomBy(double factor)
@@ -404,7 +416,14 @@ public sealed class CanvasView : Control
         SetZoom(_zoom * factor);
         // Keep the same document point under the middle of the view.
         _origin = new SKPoint((float)(before.X - Bounds.Width / _zoom / 2), (float)(before.Y - Bounds.Height / _zoom / 2));
+        Moved();
+    }
+
+    /// <summary>The view has moved or changed zoom: it is redrawn, and whatever follows it is told.</summary>
+    private void Moved()
+    {
         InvalidateVisual();
+        ViewportChanged?.Invoke();
     }
 
     private void SetZoom(double zoom)
@@ -1161,7 +1180,7 @@ public sealed class CanvasView : Control
                 (float)(_origin.X - (now.X - last.X) / _zoom),
                 (float)(_origin.Y - (now.Y - last.Y) / _zoom));
             _dragging = now;
-            InvalidateVisual();
+            Moved();
         }
         base.OnPointerMoved(e);
     }

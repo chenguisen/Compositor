@@ -27,7 +27,31 @@ internal static class Program
         {
             return Render(previewProject, previewOutput, showGrid: false, preview: true);
         }
+        // `--rulers` draws a ruler strip straight to a PNG, which is how its ticks are checked without a
+        // pointer: the strip is measured and arranged the way the window does, at a known zoom.
+        if (args is ["--rulers", var rulerOutput, var rulerScale, var rulerOrigin])
+        {
+            return Rulers(rulerOutput, double.Parse(rulerScale), double.Parse(rulerOrigin));
+        }
         Build().StartWithClassicDesktopLifetime(args);
+        return 0;
+    }
+
+    /// <summary>
+    /// A horizontal ruler from <paramref name="origin"/> along the document at <paramref name="scale"/> points
+    /// to the pixel, drawn to a PNG. It is the same control the window puts along the top of the canvas.
+    /// </summary>
+    private static int Rulers(string output, double scale, double origin)
+    {
+        Build().SetupWithoutStarting();
+        var strip = new RulerStrip { Axis = GuideAxis.Horizontal, Scale = scale, Origin = origin };
+        strip.Measure(new Size(600, 18));
+        strip.Arrange(new Rect(0, 0, 600, 18));
+        using var target = new RenderTargetBitmap(new PixelSize(600, 18));
+        target.Render(strip);
+        target.Save(output, new PngBitmapEncoderOptions());
+        Console.WriteLine($"wrote {output} for a ruler at {scale} points to the pixel from {origin}, " +
+            $"numbered every {RulerScale.MajorStep(scale)} pixels");
         return 0;
     }
 

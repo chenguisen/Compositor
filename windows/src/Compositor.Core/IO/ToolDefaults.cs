@@ -19,6 +19,9 @@ public sealed class ToolDefaults
 
     public bool ShowGrid { get; set; }
 
+    /// <summary>Whether the ruler strips are down the side and along the top of the canvas.</summary>
+    public bool ShowRulers { get; set; }
+
     public int GridSpacing { get; set; } = 64;
 
     public int GridSubdivisions { get; set; } = 8;
@@ -67,6 +70,7 @@ public sealed class ToolDefaults
     private ToolDefaults Kept() => new()
     {
         ShowGrid = ShowGrid,
+        ShowRulers = ShowRulers,
         GridSpacing = Grid().Spacing,
         GridSubdivisions = Grid().Subdivisions,
         SnapTo = SnapTo & SnapTo.All,

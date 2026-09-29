@@ -43,6 +43,15 @@ public sealed class MainWindow : Window
     private readonly MenuItem _snapToGuides = new();
     private readonly MenuItem _snapToLayers = new();
     private readonly MenuItem _snapToGrid = new();
+    /// <summary>How thick the ruler strips are, in points.</summary>
+    private const double RulerThickness = 18;
+
+    private readonly RulerStrip _rulerAcross = new() { Axis = GuideAxis.Horizontal, Height = RulerThickness };
+    private readonly RulerCorner _rulerCorner = new();
+    private readonly RulerStrip _rulerDown = new() { Axis = GuideAxis.Vertical, Width = RulerThickness };
+    private readonly MenuItem _showRulers = new();
+    private bool _rulersVisible;
+
     private SnapTo _snapTo = SnapTo.All;
     private LayoutGrid _grid = new();
     private bool _gridVisible;
@@ -223,6 +232,12 @@ public sealed class MainWindow : Window
         _canvas.Grid = _gridVisible ? _grid : null;
         _showGrid.Header = _gridVisible ? "_Hide Grid" : "Show _Grid";
         _showGrid.Click += (_, _) => ShowGrid();
+        _rulersVisible = _tools.ShowRulers;
+        _showRulers.Header = "R_ulers";
+        _showRulers.ToggleType = MenuItemToggleType.CheckBox;
+        _showRulers.IsChecked = _rulersVisible;
+        _showRulers.Click += (_, _) => ShowRulers();
+        _canvas.ViewportChanged = UpdateRulers;
         foreach (var (item, flag, label) in SnapRows())
         {
             // A tick box, so the four read as switches rather than as commands. They open where they were left,
@@ -451,6 +466,7 @@ public sealed class MainWindow : Window
                         Command("Actual _pixels", () => { _canvas.ActualSize(); Say(); }),
                         new Separator(),
                         _showGrid,
+                        _showRulers,
                         Command("_Grid Settings…", () => _ = GridSettings()),
                         _snapToCanvas,
                         _snapToGuides,
@@ -491,8 +507,38 @@ public sealed class MainWindow : Window
         root.Children.Add(menu);
         root.Children.Add(side);
         root.Children.Add(statusBar);
-        root.Children.Add(_canvas);
+        root.Children.Add(Views());
         return root;
+    }
+
+    /// <summary>
+    /// The canvas with its rulers: a strip along the top and down the side, and the little square between them
+    /// where the two meet. The strips only draw, so the canvas keeps every pointer position it worked out
+    /// before — they are outside it rather than over it.
+    /// </summary>
+    private Control Views()
+    {
+        var lined = new Grid
+        {
+            RowDefinitions = new RowDefinitions($"{RulerThickness},*"),
+            ColumnDefinitions = new ColumnDefinitions($"{RulerThickness},*"),
+        };
+        Grid.SetRow(_rulerCorner, 0);
+        Grid.SetColumn(_rulerCorner, 0);
+        Grid.SetRow(_rulerAcross, 0);
+        Grid.SetColumn(_rulerAcross, 1);
+        Grid.SetRow(_rulerDown, 1);
+        Grid.SetColumn(_rulerDown, 0);
+        Grid.SetRow(_canvas, 1);
+        Grid.SetColumn(_canvas, 1);
+        _rulerAcross.IsVisible = _rulersVisible;
+        _rulerDown.IsVisible = _rulersVisible;
+        _rulerCorner.IsVisible = _rulersVisible;
+        lined.Children.Add(_rulerCorner);
+        lined.Children.Add(_rulerAcross);
+        lined.Children.Add(_rulerDown);
+        lined.Children.Add(_canvas);
+        return lined;
     }
 
     private static MenuItem Command(string header, Action action, string? gesture = null)
@@ -1684,6 +1730,7 @@ public sealed class MainWindow : Window
     private void KeepSwitches()
     {
         _tools.ShowGrid = _gridVisible;
+        _tools.ShowRulers = _rulersVisible;
         _tools.GridSpacing = _grid.Spacing;
         _tools.GridSubdivisions = _grid.Subdivisions;
         _tools.SnapTo = _snapTo;
@@ -1699,6 +1746,33 @@ public sealed class MainWindow : Window
         KeepSwitches();
         _canvas.InvalidateVisual();
         Say(_gridVisible ? $"Grid every {_grid.Spacing} pixels" : "Grid hidden");
+    }
+
+    /// <summary>View ▸ Rulers: the strips along the top and down the side of the canvas, on or off.</summary>
+    private void ShowRulers()
+    {
+        _rulersVisible = !_rulersVisible;
+        _showRulers.IsChecked = _rulersVisible;
+        _rulerAcross.IsVisible = _rulersVisible;
+        _rulerDown.IsVisible = _rulersVisible;
+        _rulerCorner.IsVisible = _rulersVisible;
+        KeepSwitches();
+        UpdateRulers();
+        Say(_rulersVisible ? "Rulers shown" : "Rulers hidden");
+    }
+
+    /// <summary>
+    /// The strips numbered the way the canvas is scrolled and zoomed: the same zoom and the same document
+    /// place at the top left corner, so a tick lines up with what it measures.
+    /// </summary>
+    private void UpdateRulers()
+    {
+        _rulerAcross.Scale = _canvas.Zoom;
+        _rulerAcross.Origin = _canvas.OriginX;
+        _rulerDown.Scale = _canvas.Zoom;
+        _rulerDown.Origin = _canvas.OriginY;
+        _rulerAcross.InvalidateVisual();
+        _rulerDown.InvalidateVisual();
     }
 
     /// <summary>View ▸ Grid Settings: how far apart the lines are and how finely each square is split.</summary>
