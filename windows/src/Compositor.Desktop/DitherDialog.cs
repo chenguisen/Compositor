@@ -250,6 +250,19 @@ internal sealed class DitherDialog : DialogWindow
         Close();
     }
 
+    /// <summary>
+    /// The panel's body, built but not shown, for the self check: a dialog cannot be shown without a pointer,
+    /// and building it is what runs its gating — every row is asked whether the look applies to it as it is
+    /// added, so a row that would do nothing for the look is hidden before the panel is ever on a screen.
+    /// </summary>
+    internal static Control Body(DitherSettings start)
+    {
+        var dialog = new DitherDialog(start);
+        var body = (Control)dialog.Content!;
+        dialog.Content = null;
+        return body;
+    }
+
     /// <summary>The look and its amounts, or null when the panel was dismissed.</summary>
     public static async Task<(DitherStyle Style, DitherSettings Settings)?> Ask(Window owner, DitherSettings start,
         Action<DitherStyle, DitherSettings>? preview = null)

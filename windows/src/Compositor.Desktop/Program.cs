@@ -145,6 +145,25 @@ internal static class Program
         // content out in. What they hold is the same controls the sheet above shows.
         Console.WriteLine("the Brightness/Contrast and Camera Raw bodies are scroll views, which a bitmap "
             + "does not lay out: draw them on a screen to look at them");
+        // The Dither panel is a scroll view too, so it is driven and counted rather than drawn. Its rows are
+        // built and then hidden by what the look uses, which is the check: an amount that would do nothing
+        // for the look chosen must not be on the panel when Apply is pressed. Driving it works without a
+        // window because a box's selection is a property, not a template.
+        var dither = (ScrollViewer)DitherDialog.Body(new DitherSettings());
+        var panel = (StackPanel)dither.Content!;
+        var look = panel.Children.OfType<StackPanel>()
+            .SelectMany(row => row.Children.OfType<Control>()).OfType<ComboBox>().First();
+        var built = panel.Children.Count;
+        foreach (var (index, name) in new[]
+                 {
+                     (0, "Atkinson"), (2, "Bayer 2 x 2"), (5, "Halftone Dots"), (8, "Mac Patterns"), (9, "ASCII"),
+                 })
+        {
+            look.SelectedIndex = index;
+            var shown = panel.Children.Count(child => child.IsVisible);
+            Console.WriteLine($"Dither, {name}: {shown} of {built} controls shown "
+                + $"({string.Join(", ", panel.Children.Where(row => row.IsVisible).OfType<TextBlock>().Select(text => text.Text))})");
+        }
         return 0;
     }
 
