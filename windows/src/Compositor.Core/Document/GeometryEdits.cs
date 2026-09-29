@@ -195,16 +195,7 @@ public static class GeometryEdits
     }
 
     /// <summary>The layer's pixels in the premultiplied form a resample wants, so a soft edge blends right.</summary>
-    private static SKBitmap Premultiplied(SKBitmap image)
-    {
-        var work = FilterSurface.Allocate(image.Width, image.Height);
-        using var canvas = new SKCanvas(work);
-        using var paint = new SKPaint { BlendMode = SKBlendMode.Src };
-        using var source = SKImage.FromBitmap(image);
-        canvas.DrawImage(source, SKRect.Create(0, 0, image.Width, image.Height),
-            new SKSamplingOptions(SKFilterMode.Nearest), paint);
-        return work;
-    }
+    private static SKBitmap Premultiplied(SKBitmap image) => Bitmaps.Premultiplied(image);
 
     /// <summary>Warped pixels as the straight-alpha ones a layer is held in.</summary>
     private static SKBitmap Stored(SKBitmap warped)

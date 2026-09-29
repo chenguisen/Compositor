@@ -421,87 +421,17 @@ public static class CameraRawEdits
         bool shadows, bool highlights, bool sharpenMask)
     {
         if (!shadows && !highlights && !sharpenMask) return false;
-        if (!settings.IsValid) return false;
-        if (document.Layers.FirstOrDefault(layer => layer.ID == layerID) is not { } layer) return false;
-        if (!FilterSurface.Begin(layer, 0, out var work, out var placement)) return false;
-        using var _ = work;
-        var pixels = work.GetPixelSpan();
-        var width = work.Width;
-        var height = work.Height;
-        var stride = work.RowBytes;
-        // The grade is painted first, so the overlay is over what the panel is showing rather than over the
-        // picture as it was before any of the amounts were moved.
-        Grade(pixels, width, height, stride, settings);
-        AdjustPixels.CameraRawClipOverlay(pixels, width, height, stride, shadows, highlights);
-        if (sharpenMask)
-        {
-            AdjustPixels.CameraRawSharpenMaskOverlay(pixels, width, height, stride,
-                settings.SharpenRadius, settings.SharpenDetail, settings.SharpenMasking, 1);
-        }
-        // An overlay is a look, not an edit: the selection does not mix it, since nothing here is kept.
-        FilterSurface.Finish(layer, work, placement);
-        return true;
+        return Preview(document, layerID, settings, shadows, highlights, sharpenMask, out _);
     }
 
-    /// <summary>The grading stages, in the order the panel's groups are applied — geometry aside, which moves
-    /// the picture rather than grading it and so is done before any of this.</summary>
-    private static void Grade(Span<byte> pixels, int width, int height, int stride, CameraRawSettings settings)
+    /// <summary>
+    /// The grading stages, in the order the panel's groups are applied — geometry aside, which moves the
+    /// picture rather than grading it and so is done before any of this. The detail group is the last of them,
+    /// and a grain amount is seeded so the same seed lays the same grain twice.
+    /// </summary>
+    private static void Grade(Span<byte> pixels, int width, int height, int stride, CameraRawSettings settings,
+        uint seed)
     {
-        if (settings.AdjustsCalibration)
-        {
-            AdjustPixels.CameraRawCalibration(pixels, width, height, stride,
-                settings.ShadowTint, settings.RedHue, settings.RedSaturation,
-                settings.GreenHue, settings.GreenSaturation, settings.BlueHue, settings.BlueSaturation,
-                settings.ProcessVersion);
-        }
-        if (settings.AdjustsLight || settings.AdjustsColor)
-        {
-            var (red, green, blue) = settings.Gains;
-            AdjustPixels.CameraRaw(pixels, width, height, stride, red, green, blue,
-                settings.Exposure, settings.Contrast, settings.Highlights, settings.Shadows,
-                settings.Whites, settings.Blacks, settings.Vibrance, settings.Saturation, 0);
-        }
-        if (settings.AdjustsCurve || settings.AdjustsGrading)
-        {
-            var (luma, red, green, blue) = settings.Curves();
-            AdjustPixels.CameraRawCurveColor(pixels, width, height, stride, luma, red, green, blue,
-                settings.RefineSaturation / 100, settings.MixerFloats(), settings.Points.Count, settings.PointFloats(),
-                settings.Grade, settings.GradeBlending / 100, settings.GradeBalance / 100, -1);
-        }
-        if (settings.AdjustsEffects)
-        {
-            AdjustPixels.CameraRawEffects(pixels, width, height, stride,
-                settings.Texture, settings.Clarity, settings.Dehaze,
-                settings.Glow, settings.GlowStyle, settings.GlowRange, settings.GlowSpread, settings.GlowWarmth,
-                settings.VignetteAmount, settings.VignetteMidpoint, settings.VignetteRoundness,
-                settings.VignetteFeather, settings.VignetteHighlights, settings.VignetteStyle, 1);
-        }
-        if (settings.AdjustsOptics)
-        {
-            AdjustPixels.CameraRawOptics(pixels, width, height, stride,
-                settings.RemoveChromaticAberration, settings.EnableLensProfile ? 1 : 0,
-                settings.ProfileDistortion, settings.ProfileVignetting, settings.DistortionK,
-                settings.PurpleAmount, settings.PurpleHueLow, settings.PurpleHueHigh,
-                settings.GreenAmount, settings.GreenHueLow, settings.GreenHueHigh,
-                settings.OpticsVignetteAmount, settings.OpticsVignetteMidpoint, 1);
-        }
-    }
-
-    public static bool Apply(CanvasDocument document, Guid layerID, CameraRawSettings settings, uint seed = 0)
-    {
-        if (settings.IsIdentity || !settings.IsValid) return false;
-        if (document.Layers.FirstOrDefault(layer => layer.ID == layerID) is not { } layer) return false;
-        // The geometry group turns and keystones the picture itself, so it comes before anything that reads the
-        // pixels — as the Mac build warps the image before it hands it to the kernels. A shape that cannot be
-        // made refuses the whole filter rather than grading pixels the panel did not ask to be moved.
-        if (settings.AdjustsGeometry && !GeometryEdits.Apply(document, layerID, settings.Geometry)) return false;
-        if (!FilterSurface.Begin(layer, 0, out var work, out var placement)) return false;
-        using var _ = work;
-        using var was = document.Selection.Path is null ? null : FilterSurface.Copy(work);
-        var pixels = work.GetPixelSpan();
-        var width = work.Width;
-        var height = work.Height;
-        var stride = work.RowBytes;
         if (settings.AdjustsCalibration)
         {
             AdjustPixels.CameraRawCalibration(pixels, width, height, stride,
@@ -523,12 +453,11 @@ public static class CameraRawEdits
             // both are always given in full; the points are read only up to their count.
             AdjustPixels.CameraRawCurveColor(pixels, width, height, stride, luma, red, green, blue,
                 settings.RefineSaturation / 100, settings.MixerFloats(), settings.Points.Count, settings.PointFloats(),
-                settings.Grade,
-                settings.GradeBlending / 100, settings.GradeBalance / 100, -1);
+                settings.Grade, settings.GradeBlending / 100, settings.GradeBalance / 100, -1);
         }
         if (settings.AdjustsEffects)
         {
-            // A full-size apply: one preview pixel per layer pixel.
+            // One preview pixel per layer pixel.
             AdjustPixels.CameraRawEffects(pixels, width, height, stride,
                 settings.Texture, settings.Clarity, settings.Dehaze,
                 settings.Glow, settings.GlowStyle, settings.GlowRange, settings.GlowSpread, settings.GlowWarmth,
@@ -557,7 +486,61 @@ public static class CameraRawEdits
                 settings.NoiseLuminance, settings.NoiseLuminanceDetail, settings.NoiseLuminanceContrast,
                 settings.NoiseColor, settings.NoiseColorDetail, settings.NoiseColorSmoothness, 1);
         }
+    }
+
+    public static bool Apply(CanvasDocument document, Guid layerID, CameraRawSettings settings, uint seed = 0)
+    {
+        if (settings.IsIdentity || !settings.IsValid) return false;
+        if (document.Layers.FirstOrDefault(layer => layer.ID == layerID) is not { } layer) return false;
+        // The geometry group turns and keystones the picture itself, so it comes before anything that reads the
+        // pixels — as the Mac build warps the image before it hands it to the kernels. A shape that cannot be
+        // made refuses the whole filter rather than grading pixels the panel did not ask to be moved.
+        if (settings.AdjustsGeometry && !GeometryEdits.Apply(document, layerID, settings.Geometry)) return false;
+        if (!FilterSurface.Begin(layer, 0, out var work, out var placement)) return false;
+        using var _ = work;
+        using var was = document.Selection.Path is null ? null : FilterSurface.Copy(work);
+        var pixels = work.GetPixelSpan();
+        Grade(pixels, work.Width, work.Height, work.RowBytes, settings, seed);
         if (was is not null) FilterSurface.Keep(document, was, work, placement);
+        FilterSurface.Finish(layer, work, placement);
+        return true;
+    }
+
+    /// <summary>
+    /// What the panel shows while it is being worked on: the geometry, then the whole grade — the detail group
+    /// and all — and then whatever the panel paints over it. The scope is counted from the graded pixels before
+    /// an overlay is laid on them, as the Mac build counts the grade and paints the overlay over it afterwards.
+    /// Nothing here is kept: the caller passes the copy of the document its preview holds, never the document.
+    /// </summary>
+    public static bool Preview(CanvasDocument document, Guid layerID, CameraRawSettings settings,
+        bool shadows, bool highlights, bool sharpenMask, out CameraRawScope? scope)
+    {
+        scope = null;
+        if (!settings.IsValid) return false;
+        if (document.Layers.FirstOrDefault(layer => layer.ID == layerID) is not { } layer) return false;
+        // The geometry comes first here too, so what the panel shows is what Apply would make: the preview used
+        // to lose the warp the moment one of the overlays was ticked.
+        if (settings.AdjustsGeometry && !GeometryEdits.Apply(document, layerID, settings.Geometry)) return false;
+        if (!FilterSurface.Begin(layer, 0, out var work, out var placement)) return false;
+        using var _ = work;
+        using var was = document.Selection.Path is null ? null : FilterSurface.Copy(work);
+        var pixels = work.GetPixelSpan();
+        var width = work.Width;
+        var height = work.Height;
+        var stride = work.RowBytes;
+        Grade(pixels, width, height, stride, settings, 0);
+        scope = CameraRawScope.OfPremultiplied(work);
+        if (was is not null) FilterSurface.Keep(document, was, work, placement);
+        if (shadows || highlights)
+        {
+            AdjustPixels.CameraRawClipOverlay(pixels, width, height, stride, shadows, highlights);
+        }
+        if (sharpenMask)
+        {
+            AdjustPixels.CameraRawSharpenMaskOverlay(pixels, width, height, stride,
+                settings.SharpenRadius, settings.SharpenDetail, settings.SharpenMasking, 1);
+        }
+        // An overlay is a look, not an edit: what is painted over the picture is not held to the selection.
         FilterSurface.Finish(layer, work, placement);
         return true;
     }

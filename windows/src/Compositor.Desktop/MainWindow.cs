@@ -1717,12 +1717,15 @@ public sealed class MainWindow : Window
         Say("Camera Raw: the panel is docked on the right and the canvas shows what it is doing");
     }
 
-    /// <summary>Shows what the Camera Raw panel is asking for, over the layer it was opened on.</summary>
+    /// <summary>
+    /// Shows what the Camera Raw panel is asking for, over the layer it was opened on. The whole grade and the
+    /// geometry are run, not just the grade, because the panel's scope is counted from the same pass — the
+    /// picture the scope describes is the picture the canvas draws.
+    /// </summary>
     private void PreviewCameraRaw(CameraRawSettings settings, bool shadows, bool highlights, bool mask)
     {
         if (_document is not { } document || _cameraRawLayer is not { } id) return;
-        RequestPreview(document => CameraRawEdits.Overlay(document, id, settings, shadows, highlights, mask)
-            || CameraRawEdits.Apply(document, id, settings));
+        RequestPreview(document => CameraRawEdits.Preview(document, id, settings, shadows, highlights, mask, out _));
     }
 
     /// <summary>Writes the panel's amounts into the layer it was opened on, as one undo step.</summary>

@@ -47,6 +47,39 @@ public static class Bitmaps
                ?? throw new InvalidOperationException("Could not scale a bitmap.");
     }
 
+    /// <summary>
+    /// The picture reduced so its longer side is at most <paramref name="limit"/>, or a copy when it already
+    /// is: what a scope or a readout counts, rather than a whole twenty-four megapixel layer. The reduction
+    /// keeps the source's own format, so a premultiplied buffer stays premultiplied.
+    /// </summary>
+    public static SKBitmap Fitted(SKBitmap source, int limit)
+    {
+        var longest = Math.Max(source.Width, source.Height);
+        if (limit <= 0 || longest <= limit) return Scale(source, source.Width, source.Height);
+        var ratio = (double)limit / longest;
+        return Scale(source,
+            Math.Max(1, (int)Math.Round(source.Width * ratio)),
+            Math.Max(1, (int)Math.Round(source.Height * ratio)));
+    }
+
+    /// <summary>
+    /// The picture drawn premultiplied, which is the form the pixel kernels read: they divide the colour back
+    /// out themselves. Drawing it in is also what turns a straight-alpha bitmap's colour into premultiplied
+    /// ones, which a decode left straight.
+    /// </summary>
+    public static SKBitmap Premultiplied(SKBitmap source)
+    {
+        var info = new SKImageInfo(source.Width, source.Height, SKColorType.Rgba8888, SKAlphaType.Premul,
+            source.ColorSpace);
+        var work = Allocate(info);
+        using var canvas = new SKCanvas(work);
+        using var paint = new SKPaint { BlendMode = SKBlendMode.Src };
+        using var image = SKImage.FromBitmap(source);
+        canvas.DrawImage(image, SKRect.Create(0, 0, source.Width, source.Height),
+            new SKSamplingOptions(SKFilterMode.Nearest), paint);
+        return work;
+    }
+
     /// <summary>A uniform 1x1 mask, so painting decides when to allocate full-resolution pixels.</summary>
     public static SKBitmap SolidMask(bool revealing)
     {
