@@ -8,12 +8,16 @@ using SkiaSharp;
 namespace Compositor.Desktop;
 
 /// <summary>
-/// The Camera Raw Filter's panel: every group of settings as sliders, and OK to apply them to the layer's
-/// pixels. Avalonia ships no such dialog, so this is one.
+/// The Camera Raw Filter's panel: every group of settings as sliders, and Apply to write them into the layer's
+/// pixels. It is not a window of its own — the editor window docks it at its right edge, because the canvas has
+/// to stay live while it is up: the amounts are previewed on the canvas as they move, and the Mac build draws
+/// upright guides and picks colours on that same canvas, which a modal dialog would not allow.
 /// </summary>
-internal sealed class CameraRawDialog : DialogWindow
+internal sealed class CameraRawPanel
 {
     private readonly List<(Slider Slider, Action<CameraRawSettings, double> Set, TextBlock Readout, string Format)> _rows = [];
+    /// <summary>The panel's amounts by the label their row carries, which is how the self check moves one.</summary>
+    private readonly Dictionary<string, Slider> _labelled = [];
     private readonly ComboBox _glowStyle = new();
     private readonly ComboBox _vignetteStyle = new();
     private readonly ComboBox _geometryProjection = new();
@@ -23,7 +27,6 @@ internal sealed class CameraRawDialog : DialogWindow
     private CameraRawPointColor? _point;
     private bool _showingPoints;
     private CurveEditor? _curve;
-    private CameraRawSettings? _result;
 
     /// <summary>
     /// Asks for the picture to be shown with the amounts as they stand, which is called on every change. The
@@ -31,30 +34,90 @@ internal sealed class CameraRawDialog : DialogWindow
     /// </summary>
     public Action<CameraRawSettings, bool, bool, bool>? Preview { get; set; }
 
+    /// <summary>The amounts to write into the layer, once Apply is pressed.</summary>
+    public event Action<CameraRawSettings>? Applied;
+
+    /// <summary>Nothing is to be written; the caller puts the picture back as it was.</summary>
+    public event Action? Cancelled;
+
     /// <summary>What is shown over the picture while the amounts are moved: clipped shadows in blue, clipped
-    /// highlights in red, and the sharpening mask. None of it is ever applied on OK.</summary>
+    /// highlights in red, and the sharpening mask. None of it is ever applied on Apply.</summary>
     private readonly CheckBox _shadowClip = new() { Content = "Clipped shadows" };
     private readonly CheckBox _highlightClip = new() { Content = "Clipped highlights" };
     private readonly CheckBox _sharpenMaskView = new() { Content = "Sharpening mask" };
+
+    /// <summary>The body, for the window to dock at its right edge.</summary>
+    public Control View { get; }
+
+    /// <summary>How many amounts the panel is made of. A bitmap does not lay a scroll view's content out, so
+    /// the drawing cannot show the rows; the self check counts them here instead.</summary>
+    internal int AmountCount => _rows.Count;
 
     /// <summary>Shows what is being asked for now, overlays and all.</summary>
     private void RefreshPreview() => Preview?.Invoke(Current(), _shadowClip.IsChecked == true,
         _highlightClip.IsChecked == true, _sharpenMaskView.IsChecked == true);
 
-    internal CameraRawDialog(CameraRawSettings start, SKColor brush)
+    /// <summary>Asks for a picture of the amounts as they stand, without any of them having moved.</summary>
+    public void Show() => RefreshPreview();
+
+    /// <summary>Writes the amounts as they stand into the layer. The buttons go through here, and so does the
+    /// self check, so what it drives is the path a press takes.</summary>
+    public void Apply() => Applied?.Invoke(Current());
+
+    /// <summary>Asks for nothing to be written. The buttons go through here, and so does the self check.</summary>
+    public void Cancel() => Cancelled?.Invoke();
+
+    /// <summary>Puts every amount back to nothing, and the curve with them.</summary>
+    public void Reset()
+    {
+        foreach (var (slider, _, _, _) in _rows) slider.Value = 0;
+        if (_curve is not null) _curve.Curves = new Compositor.Core.Format.CurvesSettings();
+    }
+
+    /// <summary>
+    /// Moves one of the panel's own amounts, by the label its row carries. A slider's value is a property and
+    /// not a template, so the panel can be driven without a pointer: the change runs the same handler a drag
+    /// would, preview and all. The self check is the only caller.
+    /// </summary>
+    internal void Move(string label, double value)
+    {
+        if (!_labelled.TryGetValue(label, out var slider))
+        {
+            throw new InvalidOperationException($"the panel has no amount called {label}");
+        }
+        slider.Value = value;
+    }
+
+    /// <summary>The amounts as the panel has them, for a preview of what they would do.</summary>
+    public CameraRawSettings Current()
+    {
+        var settings = new CameraRawSettings
+        {
+            GlowStyle = Math.Max(0, _glowStyle.SelectedIndex),
+            VignetteStyle = Math.Max(0, _vignetteStyle.SelectedIndex),
+            Geometry = new CameraRawGeometrySettings
+            {
+                Projection = (GeometryProjection)Math.Max(0, _geometryProjection.SelectedIndex),
+            },
+            Curve = _curve is { } curve ? curve.Curves : new Compositor.Core.Format.CurvesSettings(),
+            // The mixer's places are written into by the rows, so the settings the rows are handed have all
+            // twenty-four of them whatever the layer's panel started from.
+            Mixer = new double[24],
+            Points = [.. Points()],
+        };
+        foreach (var (slider, set, _, _) in _rows) set(settings, slider.Value);
+        return settings;
+    }
+
+    internal CameraRawPanel(CameraRawSettings start, SKColor brush)
     {
         brush.ToHsl(out var brushHue, out var brushSaturation, out _);
         _brushHue = brushHue;
         _brushSaturation = brushSaturation;
-        Title = "Camera Raw Filter";
-        Width = 460;
-        Height = 760;
-        CanResize = true;
-        WindowStartupLocation = WindowStartupLocation.CenterOwner;
         var groups = new StackPanel { Margin = new Thickness(16), Spacing = 4 };
 
         // The overlays come first: they are shown over whatever the groups below are doing, and none of them
-        // is written into the layer when OK is pressed.
+        // is written into the layer when Apply is pressed.
         var overlays = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12 };
         foreach (var box in new[] { _shadowClip, _highlightClip, _sharpenMaskView })
         {
@@ -224,26 +287,36 @@ internal sealed class CameraRawDialog : DialogWindow
         _glowStyle.SelectedIndex = start.GlowStyle;
         _vignetteStyle.SelectedIndex = start.VignetteStyle;
 
-        var ok = new Button { Content = "Apply", IsDefault = true };
-        var cancel = new Button { Content = "Cancel", IsCancel = true };
+        var ok = new Button { Content = "Apply" };
+        var cancel = new Button { Content = "Cancel" };
         var reset = new Button { Content = "Reset" };
-        ok.Click += (_, _) => Accept(start);
-        cancel.Click += (_, _) => Close();
-        reset.Click += (_, _) =>
+        ok.Click += (_, _) => Apply();
+        cancel.Click += (_, _) => Cancel();
+        reset.Click += (_, _) => Reset();
+
+        var title = new TextBlock
         {
-            foreach (var (slider, _, _, _) in _rows) slider.Value = 0;
-            if (_curve is not null) _curve.Curves = new Compositor.Core.Format.CurvesSettings();
+            Text = "Camera Raw Filter",
+            Margin = new Thickness(16, 12, 16, 4),
+            Foreground = Skin.LabelBrush,
+            FontWeight = FontWeight.SemiBold,
         };
-        groups.Children.Add(new StackPanel
+        var buttons = new StackPanel
         {
             Orientation = Orientation.Horizontal,
             Spacing = 8,
-            Margin = new Thickness(0, 14, 0, 0),
+            Margin = new Thickness(16, 10, 16, 14),
             HorizontalAlignment = HorizontalAlignment.Right,
             Children = { reset, cancel, ok },
-        });
-
-        Content = new ScrollViewer { Content = groups };
+        };
+        var dock = new DockPanel();
+        DockPanel.SetDock(title, Dock.Top);
+        DockPanel.SetDock(buttons, Dock.Bottom);
+        dock.Children.Add(title);
+        dock.Children.Add(buttons);
+        // The groups fill what is left, and scroll: the panel is the height of the window and they are not.
+        dock.Children.Add(new ScrollViewer { Content = groups });
+        View = dock;
     }
 
     /// <summary>The colours as the panel has them, with the one being edited stored back first.</summary>
@@ -401,6 +474,7 @@ internal sealed class CameraRawDialog : DialogWindow
             },
         });
         _rows.Add((slider, set, readout, format));
+        _labelled[label] = slider;
     }
 
     private static Control Choice(string label, ComboBox box, string[] options)
@@ -419,30 +493,9 @@ internal sealed class CameraRawDialog : DialogWindow
         };
     }
 
-    /// <summary>The amounts as the panel has them, for a preview of what they would do.</summary>
     /// <summary>The brush's colour while the panel was opened, which is the colour a point starts at.</summary>
     private readonly double _brushHue;
     private readonly double _brushSaturation;
-
-    private CameraRawSettings Current()
-    {
-        var settings = new CameraRawSettings
-        {
-            GlowStyle = Math.Max(0, _glowStyle.SelectedIndex),
-            VignetteStyle = Math.Max(0, _vignetteStyle.SelectedIndex),
-            Geometry = new CameraRawGeometrySettings
-            {
-                Projection = (GeometryProjection)Math.Max(0, _geometryProjection.SelectedIndex),
-            },
-            Curve = _curve is { } curve ? curve.Curves : new Compositor.Core.Format.CurvesSettings(),
-            // The mixer's places are written into by the rows, so the settings the rows are handed have all
-            // twenty-four of them whatever the layer's panel started from.
-            Mixer = new double[24],
-            Points = [.. Points()],
-        };
-        foreach (var (slider, set, _, _) in _rows) set(settings, slider.Value);
-        return settings;
-    }
 
     /// <summary>
     /// The curve copied, so dragging a handle does not reach the layer until Apply: the editor writes into the
@@ -455,20 +508,4 @@ internal sealed class CameraRawDialog : DialogWindow
             .Select(points => points.Select(point => new Compositor.Core.Format.CurvePoint { X = point.X, Y = point.Y }).ToList())
             .ToList(),
     };
-
-    private void Accept(CameraRawSettings start)
-    {
-        var settings = Current();
-        _result = settings.IsValid ? settings : null;
-        Close();
-    }
-
-    /// <summary>The settings to apply, or null when the panel was dismissed or asks for nothing.</summary>
-    public static async Task<CameraRawSettings?> Ask(Window owner, CameraRawSettings start, SKColor brush,
-        Action<CameraRawSettings, bool, bool, bool>? preview = null)
-    {
-        var dialog = new CameraRawDialog(start, brush) { Preview = preview };
-        await dialog.ShowDialog(owner);
-        return dialog._result is { } settings && !settings.IsIdentity ? settings : null;
-    }
 }

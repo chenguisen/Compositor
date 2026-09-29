@@ -64,6 +64,10 @@ internal static class Program
         // `--tabs` drives the tab strip without a pointer: two projects into tabs, one brought back in front,
         // one closed, and the last closed as well. It draws the window afterwards so the strip can be looked at.
         if (args is ["--tabs", var tabsOutput]) return Tabs(tabsOutput);
+        // `--camera-raw` drives the Camera Raw panel without a pointer — opened on a layer, amounts moved, the
+        // preview run, then Apply and Cancel — and draws the window with the panel still up, which is the only
+        // way to look at the panel docked at the window's right edge.
+        if (args is ["--camera-raw", var rawOutput]) return CameraRaw(rawOutput);
         // `--updates` reads the app's real update feed and says what it makes of it, which is the whole check
         // short of the dialog: off the network it prints that the feed could not be reached instead.
         if (args is ["--updates"]) return Updates();
@@ -140,11 +144,14 @@ internal static class Program
         {
             Draw(name, Path.Combine(folder, file), width, body);
         }
-        // The two panels whose body is a scroll view cannot be drawn this way: a control's template is applied
-        // when it reaches a live window and a bitmap is not one, so a ScrollViewer has no presenter to lay its
-        // content out in. What they hold is the same controls the sheet above shows.
-        Console.WriteLine("the Brightness/Contrast and Camera Raw bodies are scroll views, which a bitmap "
-            + "does not lay out: draw them on a screen to look at them");
+        // A panel whose body is a scroll view cannot be drawn this way: a control's template is applied when it
+        // reaches a live window and a bitmap is not one, so a ScrollViewer has no presenter to lay its content
+        // out in. The Dither panel is one, so it is driven and counted rather than drawn. The Camera Raw panel
+        // is a scroll view too, but it is docked inside the window rather than a body on its own, so --camera-raw
+        // can draw it: that flag is the one to look at.
+        Console.WriteLine("the Dither and Camera Raw panels are scroll views, which a bitmap does not lay out on "
+            + "its own: --camera-raw draws the one that is docked in the window, and the Dither panel is counted "
+            + "below");
         // The Dither panel is a scroll view too, so it is driven and counted rather than drawn. Its rows are
         // built and then hidden by what the look uses, which is the check: an amount that would do nothing
         // for the look chosen must not be on the panel when Apply is pressed. Driving it works without a
@@ -284,6 +291,44 @@ internal static class Program
             target.Render(content);
             target.Save(output, new PngBitmapEncoderOptions());
             Console.WriteLine($"wrote {output}: the tab strip driven and drawn");
+            return 0;
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+        }
+    }
+
+    /// <summary>
+    /// The Camera Raw panel driven without a pointer, then drawn. The panel is a docked column inside the
+    /// window's own content, so — unlike the scroll-view bodies <c>--dialogs</c> cannot lay out — it can be
+    /// measured, arranged and drawn here, which is what puts the docked panel in the PNG beside the report.
+    /// </summary>
+    private static int CameraRaw(string output)
+    {
+        Build().SetupWithoutStarting();
+        var folder = Path.Combine(Path.GetTempPath(), "compositor-raw-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            var project = Path.Combine(folder, "raw.comp");
+            using (var document = Demo()) ProjectStore.Save(ProjectSnapshot.FromDocument(document), project);
+            var window = new MainWindow();
+            Console.WriteLine(window.CameraRawSelfCheck(project));
+            var content = (Control)window.Content!;
+            content.Measure(new Size(1280, 820));
+            content.Arrange(new Rect(0, 0, 1280, 820));
+            content.UpdateLayout();
+            using var target = new RenderTargetBitmap(new PixelSize(1280, 820));
+            target.Render(content);
+            target.Save(output, new PngBitmapEncoderOptions());
+            Console.WriteLine($"wrote {output}: the window with the Camera Raw panel docked");
             return 0;
         }
         finally

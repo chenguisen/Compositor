@@ -39,6 +39,15 @@ public sealed class MainWindow : Window
         FontSize = 11,
     };
 
+    /// <summary>The Layers panel's own column, which steps aside while the Camera Raw panel has the right edge.</summary>
+    private readonly Border _layersSide = new() { Width = 280, Background = Panel };
+    /// <summary>Where the Camera Raw panel sits: the right edge at the window's full height, as the Mac docks it.</summary>
+    private readonly Border _cameraRawHost = new() { Width = 440, Background = Panel, IsVisible = false };
+    /// <summary>The Camera Raw panel while it is up — the one panel here that is not a dialog.</summary>
+    private CameraRawPanel? _cameraRaw;
+    /// <summary>The layer the Camera Raw panel was opened on, so what Apply writes to does not follow the panel selection.</summary>
+    private Guid? _cameraRawLayer;
+
     /// <summary>One row, because what ⌘E does depends on the panel selection: it is named for it here.</summary>
     private readonly MenuItem _merge = new() { HotKey = new KeyGesture(Key.E, KeyModifiers.Control) };
 
@@ -460,7 +469,7 @@ public sealed class MainWindow : Window
                     Header = "_Filter",
                     Items =
                     {
-                        Command("_Camera Raw Filter…", () => _ = CameraRawFilter()),
+                        Command("_Camera Raw Filter…", CameraRawFilter),
                         new Separator(),
                         Command("_Gaussian Blur…", () => _ = ApplyFilter(FilterKind.GaussianBlur)),
                         Command("_Motion Blur…", () => _ = ApplyFilter(FilterKind.MotionBlur)),
@@ -593,12 +602,7 @@ public sealed class MainWindow : Window
         layers.Children.Add(Appearance());
         DockPanel.SetDock(layers.Children[1], Dock.Top);
         layers.Children.Add(new ScrollViewer { Content = _layers });
-        var side = new Border
-        {
-            Width = 280,
-            Background = Panel,
-            Child = layers,
-        };
+        _layersSide.Child = layers;
 
         var statusBar = new Border { Height = 28, Background = Panel, Child = _status };
 
@@ -611,11 +615,15 @@ public sealed class MainWindow : Window
         };
         DockPanel.SetDock(menu, Dock.Top);
         DockPanel.SetDock(tabs, Dock.Top);
-        DockPanel.SetDock(side, Dock.Right);
+        // Docking order is what decides which panel is outermost: the Camera Raw panel takes the window's own
+        // right edge and the Layers panel steps aside while it is up, as the Mac's docked panel covers it.
+        DockPanel.SetDock(_cameraRawHost, Dock.Right);
+        DockPanel.SetDock(_layersSide, Dock.Right);
         DockPanel.SetDock(statusBar, Dock.Bottom);
         root.Children.Add(menu);
         root.Children.Add(tabs);
-        root.Children.Add(side);
+        root.Children.Add(_cameraRawHost);
+        root.Children.Add(_layersSide);
         root.Children.Add(statusBar);
         root.Children.Add(Views());
         return root;
@@ -768,6 +776,84 @@ public sealed class MainWindow : Window
     }
 
     /// <summary>
+    /// The Camera Raw panel driven without a pointer, for the self check: it is opened on a layer that has
+    /// pixels, two of its amounts are moved, the preview is run the way the window's timer runs it, and Apply
+    /// is pressed and then Cancel. It answers with what it found, one line a step, and throws when a step is
+    /// wrong — which is the only way a docked panel is checked, since nothing else can press its buttons.
+    /// </summary>
+    internal string CameraRawSelfCheck(string project)
+    {
+        var report = new List<string>();
+        Open(project);
+        if (_document is not { } document) throw new InvalidOperationException("the project did not open");
+        var target = document.Layers.FirstOrDefault(layer => layer.Asset is not null && !layer.IsGroup)
+            ?? throw new InvalidOperationException("the project has no layer with pixels of its own");
+        Reselect(target.ID);
+        report.Add($"open {System.IO.Path.GetFileName(project)}: {document.Width}x{document.Height}, " +
+            $"{document.Layers.Count} layer(s), editing {target.Name}");
+
+        CameraRawFilter();
+        if (_cameraRaw is not { } panel) throw new InvalidOperationException("the Camera Raw panel did not open");
+        if (!_cameraRawHost.IsVisible) throw new InvalidOperationException("the panel's column is not showing");
+        if (_layersSide.IsVisible) throw new InvalidOperationException("the Layers panel did not step aside");
+        report.Add($"panel up: {panel.AmountCount} amounts built, the right column {_cameraRawHost.Width} wide, "
+            + "the Layers panel stepped aside");
+
+        // An amount moved and the preview run the way the window's timer runs it: what the canvas would draw is
+        // then what the panel asked for, while the layer's own pixels are not touched until Apply.
+        var was = target.Asset!.Image.GetPixel(0, 0);
+        panel.Move("Exposure, stops", 1.5);
+        panel.Move("Contrast", 40);
+        ShowPreviewOnce(null, EventArgs.Empty);
+        if (_preview is null) throw new InvalidOperationException("moving an amount did not start a preview");
+        if (_history.IsModified) throw new InvalidOperationException("the preview wrote into the document's history");
+        if (target.Asset.Image.GetPixel(0, 0) != was)
+        {
+            throw new InvalidOperationException("the preview reached the layer's own pixels");
+        }
+        report.Add("amounts moved: exposure 1.5 and contrast 40 are previewed, and the layer is untouched");
+
+        // Apply writes them into the layer as one undo step, and puts the panel away with the Layers panel back.
+        panel.Apply();
+        if (_cameraRaw is not null) throw new InvalidOperationException("Apply did not put the panel away");
+        if (_cameraRawHost.IsVisible) throw new InvalidOperationException("the panel's column is still showing");
+        if (!_layersSide.IsVisible) throw new InvalidOperationException("the Layers panel did not come back");
+        if (!_history.CanUndo || _history.UndoName != "Camera Raw Filter")
+        {
+            throw new InvalidOperationException("Apply did not leave one undo step named for the filter");
+        }
+        if (target.Asset.Image.GetPixel(0, 0) == was)
+        {
+            throw new InvalidOperationException("Apply changed nothing in the layer");
+        }
+        report.Add($"applied: the panel is away, the Layers panel is back, the history holds '{_history.UndoName}'");
+
+        // Opened again and cancelled, the layer is left exactly as Apply left it.
+        var applied = target.Asset.Image.GetPixel(0, 0);
+        CameraRawFilter();
+        if (_cameraRaw is not { } again) throw new InvalidOperationException("the panel did not open a second time");
+        again.Move("Exposure, stops", -1);
+        ShowPreviewOnce(null, EventArgs.Empty);
+        again.Cancel();
+        if (_cameraRaw is not null) throw new InvalidOperationException("Cancel did not put the panel away");
+        if (target.Asset.Image.GetPixel(0, 0) != applied)
+        {
+            throw new InvalidOperationException("Cancel left the layer changed");
+        }
+        report.Add("cancelled: the panel is away and the layer is as Apply left it");
+
+        // Left up with an amount moved: the caller draws the window, and the docked panel is what there is to
+        // look at in that picture.
+        CameraRawFilter();
+        if (_cameraRaw is not { } shown) throw new InvalidOperationException("the panel did not stay open");
+        shown.Move("Exposure, stops", 0.8);
+        shown.Move("Clarity", 30);
+        ShowPreviewOnce(null, EventArgs.Empty);
+        report.Add("left open with exposure 0.8 and clarity 30, for the drawing");
+        return string.Join(Environment.NewLine, report);
+    }
+
+    /// <summary>
     /// The tab the next project goes into: the empty one when the tab in front holds nothing, and a new one
     /// otherwise. It is put in front, and the caller fills it in.
     /// </summary>
@@ -807,6 +893,9 @@ public sealed class MainWindow : Window
     /// <summary>The tab laid out: its document on the canvas, its layers in the panel, its folder watched.</summary>
     private void Show(Tab tab)
     {
+        // The Camera Raw panel belongs to the tab it was opened on, so a tab coming in front lets it go: every
+        // way the front tab comes to change runs through here.
+        CloseCameraRaw();
         _canvas.Document = tab.Document;
         if (tab.Document is not null)
         {
@@ -1597,11 +1686,12 @@ public sealed class MainWindow : Window
         box.Height > 0 ? (point.Y - box.Top) / box.Height : 0.5);
 
     /// <summary>
-    /// The Camera Raw filter: its sliders are asked for, then the Light, Color and Effects stages run over the
-    /// selected layer's own pixels, held to the selection, as one undo step. The Mac build previews it while
-    /// the panel is open; this applies it when the panel is dismissed.
+    /// The Camera Raw filter: its panel is docked at the window's right edge and the layer is filtered into a
+    /// copy of the document as the amounts move, so the canvas shows what the panel is doing while the document
+    /// itself is not touched until Apply. It is a panel rather than a dialog because the canvas has to stay
+    /// live — the Mac build draws upright guides and picks colours on that same canvas while this panel is up.
     /// </summary>
-    private async Task CameraRawFilter()
+    private void CameraRawFilter()
     {
         if (_document is not { } document || Selected is not { } id) return;
         if (document.Layers.FirstOrDefault(layer => layer.ID == id) is not { Asset: not null, IsGroup: false })
@@ -1609,23 +1699,58 @@ public sealed class MainWindow : Window
             Say("Camera Raw needs a layer with pixels of its own");
             return;
         }
-        // The panel shows what it is doing: as its sliders move the layer is filtered into a copy of the
-        // document and the canvas draws that, while the document itself is not touched until Apply.
+        CloseCameraRaw();
         StartPreview(document, id);
+        _cameraRawLayer = id;
+        var panel = new CameraRawPanel(new CameraRawSettings(), BrushColour());
         // The preview carries the panel's overlay switches: clipped shadows and highlights and the sharpening
         // mask are shown over the grade while the amounts are moved, and the overlay is what is shown when one
         // is on. The edit that is finally made is the grade alone, never the overlay.
-        var asked = await CameraRawDialog.Ask(this, new CameraRawSettings(), BrushColour(),
-            (settings, shadows, highlights, mask) => RequestPreview(document =>
-                CameraRawEdits.Overlay(document, id, settings, shadows, highlights, mask)
-                || CameraRawEdits.Apply(document, id, settings)));
-        StopPreview();
-        if (asked is not { } settings) return;
-        if (_document is not { } current) return;
-        Edit("Camera Raw Filter", () => CameraRawEdits.Apply(current, id, settings));
-        Reselect(id);
+        panel.Preview = PreviewCameraRaw;
+        panel.Applied += ApplyCameraRaw;
+        panel.Cancelled += CloseCameraRaw;
+        _cameraRaw = panel;
+        _cameraRawHost.Child = panel.View;
+        _cameraRawHost.IsVisible = true;
+        _layersSide.IsVisible = false;
+        panel.Show();
+        Say("Camera Raw: the panel is docked on the right and the canvas shows what it is doing");
+    }
+
+    /// <summary>Shows what the Camera Raw panel is asking for, over the layer it was opened on.</summary>
+    private void PreviewCameraRaw(CameraRawSettings settings, bool shadows, bool highlights, bool mask)
+    {
+        if (_document is not { } document || _cameraRawLayer is not { } id) return;
+        RequestPreview(document => CameraRawEdits.Overlay(document, id, settings, shadows, highlights, mask)
+            || CameraRawEdits.Apply(document, id, settings));
+    }
+
+    /// <summary>Writes the panel's amounts into the layer it was opened on, as one undo step.</summary>
+    private void ApplyCameraRaw(CameraRawSettings settings)
+    {
+        // Read before the panel is let go, since putting it away forgets which layer it was opened on.
+        var id = _cameraRawLayer;
+        CloseCameraRaw();
+        if (_document is not { } current || id is not { } layer || settings.IsIdentity) return;
+        Edit("Camera Raw Filter", () => CameraRawEdits.Apply(current, layer, settings));
+        Reselect(layer);
         Say($"Camera Raw: exposure {settings.Exposure:0.##}, contrast {settings.Contrast:0}, " +
             $"saturation {settings.Saturation:0}");
+    }
+
+    /// <summary>
+    /// Puts the Camera Raw panel away and stops the preview it was driving. The document was never touched, so
+    /// there is nothing to put back.
+    /// </summary>
+    private void CloseCameraRaw()
+    {
+        if (_cameraRaw is null) return;
+        _cameraRaw = null;
+        _cameraRawLayer = null;
+        _cameraRawHost.Child = null;
+        _cameraRawHost.IsVisible = false;
+        _layersSide.IsVisible = true;
+        StopPreview();
     }
 
     /// <summary>
