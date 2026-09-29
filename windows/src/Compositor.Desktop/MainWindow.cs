@@ -46,6 +46,8 @@ public sealed class MainWindow : Window
     private SnapTo _snapTo = SnapTo.All;
     private LayoutGrid _grid = new();
     private bool _gridVisible;
+    /// <summary>The view's switches as they were left last time, which the View menu opens with.</summary>
+    private readonly ToolDefaults _tools = ToolDefaults.Load(ToolDefaults.DefaultPath);
     private readonly ComboBox _blend = new();
     private readonly Slider _opacity = new() { Minimum = 0, Maximum = 100, Width = 130 };
     private readonly TextBlock _opacityReadout = new() { Width = 40, VerticalAlignment = VerticalAlignment.Center };
@@ -214,14 +216,20 @@ public sealed class MainWindow : Window
         _eraseToggle.Click += (_, _) => SetErasing(!_erasing);
         _merge.Click += (_, _) => MergeLayers();
         _visibility.Click += (_, _) => ToggleVisibility();
-        _showGrid.Header = "Show _Grid";
+        // The View switches open where they were left last time, as the Mac build's tool defaults keep them.
+        _snapTo = _tools.SnapTo;
+        _grid = _tools.Grid();
+        _gridVisible = _tools.ShowGrid;
+        _canvas.Grid = _gridVisible ? _grid : null;
+        _showGrid.Header = _gridVisible ? "_Hide Grid" : "Show _Grid";
         _showGrid.Click += (_, _) => ShowGrid();
         foreach (var (item, flag, label) in SnapRows())
         {
-            // A tick box, so the three read as switches rather than as commands.
+            // A tick box, so the four read as switches rather than as commands. They open where they were left,
+            // as the Mac build's tool defaults do.
             item.Header = label;
             item.ToggleType = MenuItemToggleType.CheckBox;
-            item.IsChecked = true;
+            item.IsChecked = _tools.SnapTo.HasFlag(flag);
             item.Click += (_, _) => ToggleSnapTo(flag, label);
         }
         _clipping.Click += (_, _) => ToggleClipping();
@@ -1668,7 +1676,18 @@ public sealed class MainWindow : Window
         {
             if (at == flag) item.IsChecked = on;
         }
+        KeepSwitches();
         Say($"{label} {(on ? "on" : "off")}");
+    }
+
+    /// <summary>The view's switches written down, so the next launch opens the way this one was left.</summary>
+    private void KeepSwitches()
+    {
+        _tools.ShowGrid = _gridVisible;
+        _tools.GridSpacing = _grid.Spacing;
+        _tools.GridSubdivisions = _grid.Subdivisions;
+        _tools.SnapTo = _snapTo;
+        _tools.Save(ToolDefaults.DefaultPath);
     }
 
     /// <summary>View ▸ Show Grid: the layout grid on or off, which the canvas draws under everything else.</summary>
@@ -1677,6 +1696,7 @@ public sealed class MainWindow : Window
         _gridVisible = !_gridVisible;
         _canvas.Grid = _gridVisible ? _grid : null;
         _showGrid.Header = _gridVisible ? "_Hide Grid" : "Show _Grid";
+        KeepSwitches();
         _canvas.InvalidateVisual();
         Say(_gridVisible ? $"Grid every {_grid.Spacing} pixels" : "Grid hidden");
     }
@@ -1687,6 +1707,7 @@ public sealed class MainWindow : Window
         if (await GridSettingsDialog.Ask(this, _grid) is not { } asked) return;
         _grid = asked;
         if (_gridVisible) _canvas.Grid = _grid;
+        KeepSwitches();
         _canvas.InvalidateVisual();
         Say($"Grid every {_grid.Spacing} pixels, split {_grid.Subdivisions} ways");
     }
