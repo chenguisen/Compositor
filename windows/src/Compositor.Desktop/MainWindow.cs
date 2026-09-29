@@ -255,6 +255,21 @@ public sealed class MainWindow : Window
                 },
                 new MenuItem
                 {
+                    Header = "_Image",
+                    Items =
+                    {
+                        Command("_Hue/Saturation…", () => _ = ImageAdjustment(AdjustmentKind.HueSaturation)),
+                        Command("_Levels…", () => _ = ImageAdjustment(AdjustmentKind.Levels)),
+                        Command("_Exposure…", () => _ = ImageAdjustment(AdjustmentKind.Exposure)),
+                        Command("Black & _White…", () => _ = ImageAdjustment(AdjustmentKind.BlackWhite)),
+                        Command("C_olor Balance…", () => _ = ImageAdjustment(AdjustmentKind.ColorBalance)),
+                        new Separator(),
+                        Command("_Grain…", () => _ = ImageAdjustment(AdjustmentKind.Grain)),
+                        Command("_Invert", () => _ = ImageAdjustment(AdjustmentKind.Invert)),
+                    },
+                },
+                new MenuItem
+                {
                     Header = "_Filter",
                     Items =
                     {
@@ -1116,6 +1131,26 @@ public sealed class MainWindow : Window
         Edit($"{LayerPlacement.Name(changed.Kind)} Adjustment", () => LayerAdjustmentEdits.Set(current, id, changed));
         Reselect(id);
         Say($"{LayerPlacement.Name(changed.Kind)} adjustment set");
+    }
+
+    /// <summary>
+    /// One of the colour adjustments from the Image menu: its amounts are asked for, then it runs over the
+    /// selected layer's own pixels, held to the selection, as one undo step. The same settings can be left
+    /// on an adjustment layer instead, from the Layer menu.
+    /// </summary>
+    private async Task ImageAdjustment(AdjustmentKind kind)
+    {
+        if (_document is not { } document || Selected is not { } id) return;
+        if (document.Layers.FirstOrDefault(layer => layer.ID == id) is not { Asset: not null, IsGroup: false, Adjustment: null })
+        {
+            Say($"{LayerPlacement.Name(kind)} needs a layer with pixels of its own");
+            return;
+        }
+        if (await AdjustmentDialog.Ask(this, new LayerAdjustment { Kind = kind }) is not { } settings) return;
+        if (_document is not { } current) return;
+        Edit(LayerPlacement.Name(kind), () => FilterEdits.ApplyAdjustment(current, id, settings));
+        Reselect(id);
+        Say($"{LayerPlacement.Name(kind)} applied");
     }
 
     /// <summary>The ratios the Crop tool offers, as the Mac build's ratio menu does.</summary>

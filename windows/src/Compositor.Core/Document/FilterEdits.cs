@@ -1,3 +1,4 @@
+using Compositor.Core.Format;
 using Compositor.Core.Model;
 using Compositor.Core.Pixels;
 using Compositor.Core.Rendering;
@@ -195,27 +196,31 @@ public static class FilterEdits
                 }
                 break;
         }
-        if (was is not null) FilterSurface.Keep(document, was, work, placement);
-        if (Spreads(kind))
-        {
-            // The filtered layer spreads past its own edge: keep the pixels it now covers and drop the room
-            // that stayed empty, so the layer does not carry an invisible border around with it.
-            var (trimmed, placed) = LayerMerge.Trimmed(work, placement);
-            using (trimmed) FilterSurface.Finish(layer, trimmed, placed);
-            // A mask on the layer's old grid has to be drawn over the new one, or it would stretch with it.
-            if (layer.Mask is { } held && FilterSurface.PlaceMask(layer, maskPlacement, placed) is { } carried)
-            {
-                var mask = LayerMask.AssetFrom(carried);
-                mask.IsEnabled = held.IsEnabled;
-                mask.IsLinked = held.IsLinked;
-                layer.Mask = mask;
-            }
-            return true;
-        }
-        FilterSurface.Finish(layer, work, placement);
+        FilterSurface.Settle(document, layer, work, was, placement, maskPlacement, Spreads(kind));
         return true;
     }
 
+    /// <summary>
+    /// Runs an adjustment over a layer's own pixels, held to the selection, as one edit — what the Image
+    /// menu does, and what an adjustment layer does without being asked twice. False when there is nothing to
+    /// do, when the amounts or the layer cannot take it, or when the pixels would not fit in memory.
+    /// </summary>
+    public static bool ApplyAdjustment(CanvasDocument document, Guid layerID, LayerAdjustment settings)
+    {
+        if (!settings.IsValid) return false;
+        // An adjustment layer holds no pixels of its own: its effect is drawn as the stack is composited.
+        if (document.Layers.FirstOrDefault(layer => layer.ID == layerID) is not { Adjustment: null } layer) return false;
+        var maskPlacement = FilterSurface.MaskPlacementOf(layer);
+        if (!FilterSurface.Begin(layer, settings.SamplingMargin, out var work, out var placement)) return false;
+        using var _ = work;
+        using var was = document.Selection.Path is null ? null : FilterSurface.Copy(work);
+        // Grain and noise are anchored to the document, so the buffer's first pixel is placed first.
+        var origin = BrushEdits.PixelToDocument(placement, work.Width, work.Height).MapPoint(0.5f, 0.5f);
+        AdjustmentOperators.Apply(settings, 1, work.GetPixelSpan(), work.Width, work.Height, work.RowBytes,
+            (long)Math.Floor(origin.X), (long)Math.Floor(origin.Y));
+        FilterSurface.Settle(document, layer, work, was, placement, maskPlacement, settings.SamplingMargin > 0);
+        return true;
+    }
     /// <summary>The same pixels softened by <paramref name="radius"/>, which local contrast measures against.</summary>
     private static SKBitmap Blur(SKBitmap source, double radius)
     {

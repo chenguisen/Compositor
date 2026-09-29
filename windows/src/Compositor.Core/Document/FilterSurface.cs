@@ -170,6 +170,36 @@ internal static class FilterSurface
     }
 
     /// <summary>
+    /// The mask's own transform for a layer whose grid is about to change, which is what carries it across.
+    /// </summary>
+    public static LayerTransform MaskPlacementOf(ImageLayer layer) => layer.MaskTransform;
+
+    /// <summary>
+    /// Puts a finished working buffer on the layer: the selection is honoured, and when the kernel spread
+    /// past the layer's edge the empty room it was given is cut away again and any mask held on the old grid
+    /// is drawn over the new one. The caller keeps ownership of <paramref name="work"/>.
+    /// </summary>
+    public static void Settle(CanvasDocument document, ImageLayer layer, SKBitmap work, SKBitmap? was,
+        LayerTransform placement, LayerTransform maskPlacement, bool spreads)
+    {
+        if (was is not null) Keep(document, was, work, placement);
+        if (!spreads)
+        {
+            Finish(layer, work, placement);
+            return;
+        }
+        var (trimmed, placed) = LayerMerge.Trimmed(work, placement);
+        using (trimmed) Finish(layer, trimmed, placed);
+        if (layer.Mask is { } held && PlaceMask(layer, maskPlacement, placed) is { } carried)
+        {
+            var mask = LayerMask.AssetFrom(carried);
+            mask.IsEnabled = held.IsEnabled;
+            mask.IsLinked = held.IsLinked;
+            layer.Mask = mask;
+        }
+    }
+
+    /// <summary>
     /// The layer's mask drawn over its new grid, so it goes on covering the same document area at that grid's
     /// resolution rather than stretching to follow the layer. Null when the layer has no mask, or a uniform
     /// one, which looks the same over any grid.
