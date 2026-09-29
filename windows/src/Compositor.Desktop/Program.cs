@@ -51,8 +51,54 @@ internal static class Program
         // `--window` builds the whole window and draws it, which is the only way to check the parts that are
         // not the canvas — the menus, the tab strip and the panel — without a display to click them on.
         if (args is ["--window", var windowOutput]) return Window(windowOutput);
+        // `--tabs` drives the tab strip without a pointer: two projects into tabs, one brought back in front,
+        // one closed, and the last closed as well. It draws the window afterwards so the strip can be looked at.
+        if (args is ["--tabs", var tabsOutput]) return Tabs(tabsOutput);
         Build().StartWithClassicDesktopLifetime(args);
         return 0;
+    }
+
+    /// <summary>
+    /// The tab strip driven without a pointer. Two projects are written and opened into tabs, one is brought
+    /// back in front, one is closed, the last is closed as well, and the window is drawn at the end, so what
+    /// the strip looks like with an empty tab in it is in the PNG beside the report.
+    /// </summary>
+    private static int Tabs(string output)
+    {
+        Build().SetupWithoutStarting();
+        var folder = Path.Combine(Path.GetTempPath(), "compositor-tabs-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            var first = Path.Combine(folder, "first.comp");
+            var second = Path.Combine(folder, "second.comp");
+            using (var document = Demo()) ProjectStore.Save(ProjectSnapshot.FromDocument(document), first);
+            using (var document = LayerPlacement.NewDocument(100, 80))
+            {
+                ProjectStore.Save(ProjectSnapshot.FromDocument(document!), second);
+            }
+            var window = new MainWindow();
+            Console.WriteLine(window.SelfCheck(first, second));
+            var content = (Control)window.Content!;
+            content.Measure(new Size(1280, 820));
+            content.Arrange(new Rect(0, 0, 1280, 820));
+            content.UpdateLayout();
+            using var target = new RenderTargetBitmap(new PixelSize(1280, 820));
+            target.Render(content);
+            target.Save(output, new PngBitmapEncoderOptions());
+            Console.WriteLine($"wrote {output}: the tab strip driven and drawn");
+            return 0;
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+        }
     }
 
     /// <summary>

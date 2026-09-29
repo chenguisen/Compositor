@@ -700,6 +700,56 @@ public sealed class MainWindow : Window
     }
 
     /// <summary>
+    /// The tab machinery driven without a pointer, for the self check: two projects opened into tabs, one
+    /// brought back in front, one closed, and the last one closed as well. It answers with what it found, one
+    /// line a step, and throws when a step is wrong \u2014 which is the only way the tab strip is checked, since
+    /// nothing else can click it.
+    /// </summary>
+    internal string SelfCheck(string first, string second)
+    {
+        var report = new List<string>();
+        // The window opens with one empty tab, which is what the first project goes into: that is why the tab
+        // count does not change on the first open and does on the second.
+        if (_tabs.Count != 1 || _document is not null) throw new InvalidOperationException("the window did not open with one empty tab");
+        Open(first);
+        report.Add($"open first: {_tabs.Count} tab(s), front {_open.Name}, " +
+            $"{_document?.Width}x{_document?.Height}, {_rows.Count} row(s)");
+        if (_tabs.Count != 1) throw new InvalidOperationException("the first project did not take the empty tab");
+        if (_open.Name != "first.comp") throw new InvalidOperationException("the tab is not named for the project it holds");
+        if (_rows.Count != _document!.Layers.Count) throw new InvalidOperationException("the panel does not hold the first project's layers");
+
+        var firstTab = _open;
+        Open(second);
+        report.Add($"open second: {_tabs.Count} tab(s), front {_open.Name}, " +
+            $"{_document?.Width}x{_document?.Height}, {_rows.Count} row(s)");
+        if (_tabs.Count != 2) throw new InvalidOperationException("the second project did not get a tab of its own");
+        if (_open == firstTab) throw new InvalidOperationException("the first project is still in front");
+
+        Bring(firstTab);
+        report.Add($"bring first: {_tabs.Count} tab(s), front {_open.Name}, {_document?.Width}x{_document?.Height}, " +
+            $"{_rows.Count} row(s)");
+        if (!ReferenceEquals(_open, firstTab)) throw new InvalidOperationException("the first tab did not come in front");
+        // The first project is the demo document, 240 by 160, and the second is a blank 100 by 80 canvas: the
+        // size is what tells which document the canvas and the panel are holding.
+        if (_document?.Width != 240 || _document.Height != 160) throw new InvalidOperationException("the front document is not the first project's");
+        if (_rows.Count != _document.Layers.Count) throw new InvalidOperationException("the panel did not come back to the first project's layers");
+
+        _ = CloseTab(_tabs[^1]);
+        report.Add($"close the tab behind: {_tabs.Count} tab(s), front {_open.Name}");
+        if (_tabs.Count != 1) throw new InvalidOperationException("closing a background tab left the wrong number open");
+        if (!ReferenceEquals(_open, firstTab)) throw new InvalidOperationException("closing the tab behind brought the wrong one in front");
+
+        _ = CloseTab(_open);
+        report.Add($"close the last: {_tabs.Count} tab(s), document {(_document is null ? "none" : "still open")}, " +
+            $"{_rows.Count} row(s)");
+        if (_tabs.Count != 1) throw new InvalidOperationException("closing the last tab left nothing to work in");
+        if (_document is not null) throw new InvalidOperationException("the last tab still holds a document");
+        if (_rows.Count != 0) throw new InvalidOperationException("the panel still holds rows with nothing open");
+        if (_open.Name != "Untitled") throw new InvalidOperationException("the tab left behind is not a fresh one");
+        return string.Join(Environment.NewLine, report);
+    }
+
+    /// <summary>
     /// The tab the next project goes into: the empty one when the tab in front holds nothing, and a new one
     /// otherwise. It is put in front, and the caller fills it in.
     /// </summary>
