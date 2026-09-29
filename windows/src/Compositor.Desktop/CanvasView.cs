@@ -61,6 +61,7 @@ public sealed class CanvasView : Control
 
     /// <summary>Guides are drawn in the blue Photoshop uses for them, so they do not read as part of the picture.</summary>
     private static readonly Pen GuidePen = new() { Brush = new SolidColorBrush(Color.FromRgb(0x33, 0x99, 0xFF)), Thickness = 1 };
+    private static readonly Pen PixelGridPen = new() { Brush = new SolidColorBrush(Color.FromRgb(0xC0, 0xC0, 0xC0), 0.35), Thickness = 1 };
 
     private CanvasDocument? _document;
     private SKPoint _origin;
@@ -198,6 +199,9 @@ public sealed class CanvasView : Control
 
     /// <summary>Whether a guide can be taken hold of and dragged, which the Move tool allows.</summary>
     public bool GuidesDraggable { get; set; }
+
+    /// <summary>Whether a guide may be taken hold of: it has to be shown, and not locked.</summary>
+    private bool GuidesMovable => GuidesDraggable && ShowsGuides && !LocksGuides;
 
     /// <summary>A guide has been taken hold of: the window begins one undo step here.</summary>
     public Action? GuideDragStarted { get; set; }
@@ -394,6 +398,30 @@ public sealed class CanvasView : Control
     /// <summary>The layout grid drawn under the guides and everything else, or null when it is off.</summary>
     public LayoutGrid? Grid { get; set; }
 
+    /// <summary>
+    /// A line around every document pixel once the view is in far enough to see them, which is what tells one
+    /// pixel from the next when working close up. Photoshop shows it from 800% up.
+    /// </summary>
+    public bool PixelGrid { get; set; }
+
+    /// <summary>Whether the guides are drawn at all: hiding them is a view choice, not a change to them.</summary>
+    public bool ShowsGuides { get; set; } = true;
+
+    /// <summary>Whether the guides may be dragged. Locked, they are drawn but a click passes them by.</summary>
+    public bool LocksGuides { get; set; }
+
+    /// <summary>Whether the Move tool's transform handles are drawn around the selected layer.</summary>
+    public bool ShowsTransformControls { get; set; } = true;
+
+    /// <summary>
+    /// Whether the Move tool's handles are there for a click at this point: the handles are off entirely when
+    /// they are hidden, so what they draw and what they catch cannot come apart.
+    /// </summary>
+    private bool TransformHandles => TransformEnabled && ShowsTransformControls;
+
+    /// <summary>The layout grid's own zoom of 8: one document pixel covers eight view points or more.</summary>
+    private const double PixelGridZoom = 8;
+
     /// <summary>Whether the view had to stop zooming out because one screenful would be too big to draw.</summary>
     public bool ZoomedOutAsFarAsItGoes { get; private set; }
 
@@ -477,7 +505,8 @@ public sealed class CanvasView : Control
         context.DrawRectangle(Paper, null, destination);
         context.DrawImage(image, destination);
         DrawGrid(context, document);
-        DrawGuides(context, document);
+        DrawPixelGrid(context, document);
+        if (ShowsGuides) DrawGuides(context, document);
         DrawSelection(context);
         DrawStroke(context);
     }
@@ -503,6 +532,29 @@ public sealed class CanvasView : Control
         foreach (var y in lines.HorizontalFine) context.DrawLine(FineGridPen, new Point(0, y), new Point(Bounds.Width, y));
         foreach (var x in lines.VerticalMajor) context.DrawLine(MajorGridPen, new Point(x, 0), new Point(x, Bounds.Height));
         foreach (var y in lines.HorizontalMajor) context.DrawLine(MajorGridPen, new Point(0, y), new Point(Bounds.Width, y));
+    }
+
+    /// <summary>
+    /// A line around every document pixel, drawn only when one pixel is at least eight points across: any
+    /// closer and the lines would be the picture rather than a guide to it.
+    /// </summary>
+    private void DrawPixelGrid(DrawingContext context, CanvasDocument document)
+    {
+        if (!PixelGrid || _zoom < PixelGridZoom) return;
+        var left = (int)Math.Floor(_origin.X);
+        var top = (int)Math.Floor(_origin.Y);
+        var right = (int)Math.Ceiling(_origin.X + Bounds.Width / _zoom);
+        var bottom = (int)Math.Ceiling(_origin.Y + Bounds.Height / _zoom);
+        for (var x = Math.Max(0, left); x <= Math.Min(document.Width, right); x++)
+        {
+            var at = (x - _origin.X) * _zoom;
+            context.DrawLine(PixelGridPen, new Point(at, 0), new Point(at, Bounds.Height));
+        }
+        for (var y = Math.Max(0, top); y <= Math.Min(document.Height, bottom); y++)
+        {
+            var at = (y - _origin.Y) * _zoom;
+            context.DrawLine(PixelGridPen, new Point(0, at), new Point(Bounds.Width, at));
+        }
     }
 
     /// <summary>The alignment guides, across the whole canvas at the place each one sits.</summary>
@@ -943,7 +995,7 @@ public sealed class CanvasView : Control
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
-        if (GuidesDraggable && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed
+        if (GuidesMovable && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed
             && GuideAt(ToDocument(e.GetPosition(this))) is { } guide)
         {
             _guideDrag = guide;
@@ -954,7 +1006,8 @@ public sealed class CanvasView : Control
             return;
         }
         if (TransformEnabled && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed
-            && TransformBox is { } box && beginTransformDrag(box, ToDocument(e.GetPosition(this)), e.KeyModifiers))
+            && TransformHandles && TransformBox is { } box
+            && beginTransformDrag(box, ToDocument(e.GetPosition(this)), e.KeyModifiers))
         {
             e.Pointer.Capture(this);
             e.Handled = true;

@@ -27,6 +27,20 @@ internal static class Program
         {
             return Render(previewProject, previewOutput, showGrid: false, preview: true);
         }
+        // `--pixel-grid` is the same render with the pixel grid asked for, and `--zoom-in` with the view taken
+        // past 800% where the grid draws at all: the two together are how it is checked without a pointer.
+        if (args is ["--render", var gridProject2, var gridOutput2, "--pixel-grid"])
+        {
+            return Render(gridProject2, gridOutput2, showGrid: false, pixelGrid: true);
+        }
+        if (args is ["--render", var zoomProject, var zoomOutput, "--zoom-in"])
+        {
+            return Render(zoomProject, zoomOutput, showGrid: false, zoomIn: true);
+        }
+        if (args is ["--render", var zoomGridProject, var zoomGridOutput, "--zoom-in", "--pixel-grid"])
+        {
+            return Render(zoomGridProject, zoomGridOutput, showGrid: false, zoomIn: true, pixelGrid: true);
+        }
         // `--rulers` draws a ruler strip straight to a PNG, which is how its ticks are checked without a
         // pointer: the strip is measured and arranged the way the window does, at a known zoom.
         if (args is ["--rulers", var rulerOutput, var rulerScale, var rulerOrigin])
@@ -58,7 +72,8 @@ internal static class Program
     public static AppBuilder Build() =>
         AppBuilder.Configure<DesktopApp>().UsePlatformDetect().WithInterFont().LogToTrace();
 
-    private static int Render(string project, string output, bool showGrid, bool preview = false, bool shape = false)
+    private static int Render(string project, string output, bool showGrid, bool preview = false, bool shape = false,
+        bool zoomIn = false, bool pixelGrid = false)
     {
         Build().SetupWithoutStarting();
         using var document = project == "--demo" ? Demo() : ProjectStore.Load(project).ToDocument();
@@ -94,6 +109,12 @@ internal static class Program
         view.Arrange(new Rect(0, 0, 640, 480));
         view.Document = document;
         if (showGrid) view.Grid = new LayoutGrid();
+        if (pixelGrid) view.PixelGrid = true;
+        // Ten steps of a quarter is about 930%, which is past the 800% the pixel grid starts at.
+        if (zoomIn)
+        {
+            for (var step = 0; step < 10; step++) view.ZoomBy(1.25);
+        }
         if (shape)
         {
             // The shape tool's drag preview: an ellipse in a colour of its own, over a box of the canvas.

@@ -22,6 +22,21 @@ public sealed class ToolDefaults
     /// <summary>Whether the ruler strips are down the side and along the top of the canvas.</summary>
     public bool ShowRulers { get; set; }
 
+    /// <summary>Whether the guides are drawn at all.</summary>
+    public bool ShowGuides { get; set; }
+
+    /// <summary>Whether the guides may be dragged, as the View menu's Lock Guides switch has it.</summary>
+    public bool LockGuides { get; set; }
+
+    /// <summary>Whether the Move tool draws its transform handles.</summary>
+    public bool ShowTransformControls { get; set; } = true;
+
+    /// <summary>Whether a line is drawn around each document pixel when the view is in far enough.</summary>
+    public bool PixelGrid { get; set; }
+
+    /// <summary>Whether a drag lines up with anything at all, whatever the per-kind switches say.</summary>
+    public bool Snapping { get; set; } = true;
+
     public int GridSpacing { get; set; } = 64;
 
     public int GridSubdivisions { get; set; } = 8;
@@ -71,6 +86,11 @@ public sealed class ToolDefaults
     {
         ShowGrid = ShowGrid,
         ShowRulers = ShowRulers,
+        ShowGuides = ShowGuides,
+        LockGuides = LockGuides,
+        ShowTransformControls = ShowTransformControls,
+        PixelGrid = PixelGrid,
+        Snapping = Snapping,
         GridSpacing = Grid().Spacing,
         GridSubdivisions = Grid().Subdivisions,
         SnapTo = SnapTo & SnapTo.All,

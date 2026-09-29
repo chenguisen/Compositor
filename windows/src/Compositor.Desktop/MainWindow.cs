@@ -51,6 +51,16 @@ public sealed class MainWindow : Window
     private readonly RulerStrip _rulerDown = new() { Axis = GuideAxis.Vertical, Width = RulerThickness };
     private readonly MenuItem _showRulers = new();
     private bool _rulersVisible;
+    private readonly MenuItem _showGuides = new();
+    private readonly MenuItem _lockGuides = new();
+    private readonly MenuItem _showTransform = new();
+    private readonly MenuItem _pixelGrid = new();
+    private readonly MenuItem _snapping = new();
+    private bool _guidesVisible = true;
+    private bool _guidesLocked;
+    private bool _transformShown = true;
+    private bool _pixelGridShown;
+    private bool _snappingOn = true;
 
     private SnapTo _snapTo = SnapTo.All;
     private LayoutGrid _grid = new();
@@ -240,6 +250,17 @@ public sealed class MainWindow : Window
         _showRulers.ToggleType = MenuItemToggleType.CheckBox;
         _showRulers.IsChecked = _rulersVisible;
         _showRulers.Click += (_, _) => ShowRulers();
+        _guidesVisible = _tools.ShowGuides;
+        _guidesLocked = _tools.LockGuides;
+        _transformShown = _tools.ShowTransformControls;
+        _pixelGridShown = _tools.PixelGrid;
+        _snappingOn = _tools.Snapping;
+        Toggle("_Guides", _showGuides, _guidesVisible, () => ShowGuides());
+        Toggle("_Lock Guides", _lockGuides, _guidesLocked, () => LockGuides());
+        Toggle("Show _Transform Controls", _showTransform, _transformShown, () => ShowTransformControls());
+        Toggle("_Pixel Grid (800% and above)", _pixelGrid, _pixelGridShown, () => ShowPixelGrid());
+        Toggle("S_nap", _snapping, _snappingOn, () => ShowSnapping());
+        PushViewSwitches();
         _canvas.ViewportChanged = UpdateRulers;
         foreach (var (item, flag, label) in SnapRows())
         {
@@ -477,6 +498,11 @@ public sealed class MainWindow : Window
                         new Separator(),
                         _showGrid,
                         _showRulers,
+                        _showGuides,
+                        _lockGuides,
+                        _showTransform,
+                        _pixelGrid,
+                        _snapping,
                         Command("_Grid Settings…", () => _ = GridSettings()),
                         _snapToCanvas,
                         _snapToGuides,
@@ -1742,6 +1768,11 @@ public sealed class MainWindow : Window
     {
         _tools.ShowGrid = _gridVisible;
         _tools.ShowRulers = _rulersVisible;
+        _tools.ShowGuides = _guidesVisible;
+        _tools.LockGuides = _guidesLocked;
+        _tools.ShowTransformControls = _transformShown;
+        _tools.PixelGrid = _pixelGridShown;
+        _tools.Snapping = _snappingOn;
         _tools.GridSpacing = _grid.Spacing;
         _tools.GridSubdivisions = _grid.Subdivisions;
         _tools.SnapTo = _snapTo;
@@ -1757,6 +1788,74 @@ public sealed class MainWindow : Window
         KeepSwitches();
         _canvas.InvalidateVisual();
         Say(_gridVisible ? $"Grid every {_grid.Spacing} pixels" : "Grid hidden");
+    }
+
+    /// <summary>A View menu row that is a switch: it opens where it was left and turns over when clicked.</summary>
+    private static void Toggle(string header, MenuItem item, bool on, Action flip)
+    {
+        item.Header = header;
+        item.ToggleType = MenuItemToggleType.CheckBox;
+        item.IsChecked = on;
+        item.Click += (_, _) => flip();
+    }
+
+    /// <summary>View ▸ Guides: whether the guides are drawn, which does not change them.</summary>
+    private void ShowGuides()
+    {
+        _guidesVisible = !_guidesVisible;
+        _showGuides.IsChecked = _guidesVisible;
+        PushViewSwitches();
+        KeepSwitches();
+        Say(_guidesVisible ? "Guides shown" : "Guides hidden");
+    }
+
+    /// <summary>View ▸ Lock Guides: whether a guide may be dragged. Locked, a click on one passes by it.</summary>
+    private void LockGuides()
+    {
+        _guidesLocked = !_guidesLocked;
+        _lockGuides.IsChecked = _guidesLocked;
+        PushViewSwitches();
+        KeepSwitches();
+        Say(_guidesLocked ? "Guides locked" : "Guides unlocked");
+    }
+
+    /// <summary>View ▸ Show Transform Controls: whether the Move tool draws its handles.</summary>
+    private void ShowTransformControls()
+    {
+        _transformShown = !_transformShown;
+        _showTransform.IsChecked = _transformShown;
+        PushViewSwitches();
+        KeepSwitches();
+        Say(_transformShown ? "Transform controls shown" : "Transform controls hidden");
+    }
+
+    /// <summary>View ▸ Pixel Grid: a line around each document pixel when the view is in far enough.</summary>
+    private void ShowPixelGrid()
+    {
+        _pixelGridShown = !_pixelGridShown;
+        _pixelGrid.IsChecked = _pixelGridShown;
+        PushViewSwitches();
+        KeepSwitches();
+        Say(_pixelGridShown ? "Pixel grid shown from 800% up" : "Pixel grid hidden");
+    }
+
+    /// <summary>View ▸ Snap: whether a drag lines up with anything at all.</summary>
+    private void ShowSnapping()
+    {
+        _snappingOn = !_snappingOn;
+        _snapping.IsChecked = _snappingOn;
+        KeepSwitches();
+        Say(_snappingOn ? "Snapping on" : "Snapping off");
+    }
+
+    /// <summary>The canvas told where each view switch stands, so what is drawn and what is caught agree.</summary>
+    private void PushViewSwitches()
+    {
+        _canvas.ShowsGuides = _guidesVisible;
+        _canvas.LocksGuides = _guidesLocked;
+        _canvas.ShowsTransformControls = _transformShown;
+        _canvas.PixelGrid = _pixelGridShown;
+        _canvas.InvalidateVisual();
     }
 
     /// <summary>View ▸ Rulers: the strips along the top and down the side of the canvas, on or off.</summary>
@@ -2706,7 +2805,7 @@ public sealed class MainWindow : Window
         // The grid is only a target while it is being shown: snapping to lines that are not there would be
         // a surprise. It is the one target that carries a value rather than a place.
         var placed = TransformEdits.Snap(document, draft, _transformOriginals.Keys, tolerance,
-            out var lineX, out var lineY, _snapTo, _gridVisible ? _grid : null);
+            out var lineX, out var lineY, _snappingOn ? _snapTo : SnapTo.None, _gridVisible ? _grid : null);
         _canvas.SnapLines = (lineX, lineY);
         // Every layer is carried along by the box's own move, so several keep the shape they had.
         TransformEdits.Carry(document, _transformOriginals, from, placed);
