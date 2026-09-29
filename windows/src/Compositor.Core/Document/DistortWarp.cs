@@ -94,19 +94,6 @@ public static class DistortWarp
         return warped is null ? null : new WarpedImage(warped, placed);
     }
 
-    /// <summary>
-    /// A warp cut back to the pixels that are actually there, with the transform that keeps them in place. A
-    /// distorted shape rarely fills its own bounds, and the layer should hug what is there.
-    /// </summary>
-    public static WarpedImage? WarpTrimmed(SKBitmap image, LayerTransform transform, IReadOnlyList<SKPoint> corners)
-    {
-        if (Warp(image, transform, corners) is not { } warped) return null;
-        using (warped.Image)
-        {
-            var (trimmed, placed) = LayerMerge.Trimmed(warped.Image, warped.Transform);
-            return new WarpedImage(trimmed, placed);
-        }
-    }
 
     /// <summary>The rectangle a shape covers, whole pixels outward from it.</summary>
     public static SKRectI Bounds(IReadOnlyList<SKPoint> corners)

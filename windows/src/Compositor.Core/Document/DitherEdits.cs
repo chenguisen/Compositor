@@ -76,9 +76,18 @@ public sealed class DitherSettings
     /// <summary>Error diffusion: each pixel's rounding error is passed to its neighbours.</summary>
     public static bool Diffuses(DitherStyle style) => style is DitherStyle.Atkinson or DitherStyle.FloydSteinberg;
 
+    /// <summary>The half-tone shapes, which are drawn in cells that have a size and an angle.</summary>
+    public static bool IsHalftone(DitherStyle style) => style is DitherStyle.Dots or DitherStyle.Lines or DitherStyle.Diamonds;
+
     /// <summary>Diffusion and ordered styles quantize to a number of tones; the rest draw marks in two.</summary>
     public static bool HasTones(DitherStyle style) =>
         Diffuses(style) || style is DitherStyle.Bayer2 or DitherStyle.Bayer4 or DitherStyle.Bayer8;
+
+    /// <summary>
+    /// Halftone shapes, patterns and characters mark one tone on the other, so which of the two the mark is
+    /// matters — the Mac build's <c>drawsMarks</c>, and what its panel gates "Light on Dark" on.
+    /// </summary>
+    public static bool DrawsMarks(DitherStyle style) => !HasTones(style);
 
     private static double Clamp(double value, double least, double most, double fallback) =>
         double.IsFinite(value) ? Math.Clamp(value, least, most) : fallback;

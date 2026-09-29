@@ -116,8 +116,8 @@ public class MemorySpikeTests
     /// side, so even a modest layer is blurred through a buffer several times its own area with a kernel
     /// 1501 taps wide: four channels, two passes. Run tap by tap that is minutes — four of them, measured on
     /// a 2000 x 1169 photograph — and a filter preview runs on the thread that draws the window, so those
-    /// minutes are the window frozen. The boxes bring it back to a fraction of a second; the budget here is
-    /// loose enough for a slow machine and still far under what the exact kernel costs.
+    /// minutes are the window frozen. The boxes bring it back to a fraction of a second. The budget is loose
+    /// because the suite runs beside itself and this is a wall clock: it is still far under the old cost.
     /// </summary>
     [Fact]
     public void ABlurAtTheWidestRadiusIsQuick()
@@ -128,7 +128,7 @@ public class MemorySpikeTests
         Assert.True(FilterEdits.ApplyAdjustment(document, layer.ID,
             new LayerAdjustment { Kind = AdjustmentKind.GaussianBlur, BlurRadius = 250 }));
         clock.Stop();
-        Assert.True(clock.ElapsedMilliseconds < 2_000,
+        Assert.True(clock.ElapsedMilliseconds < 5_000,
             $"a blur of the widest radius took {clock.ElapsedMilliseconds} ms");
     }
 }

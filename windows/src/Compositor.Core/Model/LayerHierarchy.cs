@@ -50,9 +50,6 @@ public static class LayerHierarchy
         }
     }
 
-    public static List<ProjectLayerRecord> VisibleLayers(IReadOnlyList<ProjectLayerRecord> layers) =>
-        Entries(layers).Where(entry => entry.Visible && entry.Layer.IsGroup != true)
-            .Select(entry => entry.Layer).ToList();
 
     /// <summary>
     /// Cycles, missing or non-group parents, image-bearing groups and nesting beyond 64 ancestor levels

@@ -62,13 +62,6 @@ public static class LayerEdits
         return true;
     }
 
-    /// <summary>Puts a layer exactly where a transform says, as the transform inspector does.</summary>
-    public static bool SetTransform(CanvasDocument document, Guid layerID, Model.LayerTransform transform)
-    {
-        if (Find(document, layerID) is not { } layer) return false;
-        layer.Transform = transform;
-        return true;
-    }
 
     /// <summary>Renames a layer. A name that is empty or only spaces is refused, as the Mac build refuses it.</summary>
     public static bool Rename(CanvasDocument document, Guid layerID, string name)

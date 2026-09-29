@@ -9,16 +9,29 @@ namespace Compositor.Desktop;
 /// <summary>
 /// Filter ▸ Dither's panel: the look and its amounts, and Apply to run it over the selected layer. Avalonia
 /// ships no such dialog, so this is one.
+/// <para>
+/// The controls a look does not use are hidden, as the Mac build's panel hides them: the tone amounts belong
+/// to the styles that quantize to tones, the cell size and angle to the half-tone shapes, the characters and
+/// their size to ASCII, the ink and paper swatches to the two-colour mode, and the pixel shape to a pixel
+/// size above one. A hidden row takes no room in the stack, so the panel is as short as its look needs, and
+/// a heading goes with the last of its rows.
+/// </para>
 /// </summary>
 internal sealed class DitherDialog : DialogWindow
 {
-    private readonly List<(Slider Slider, Action<DitherSettings, double> Set)> _rows = [];
+    /// <summary>One row of the panel, and whether the look being edited uses it.</summary>
+    private readonly List<(Control Row, Func<bool> Applies)> _rows = [];
+    /// <summary>One heading and the rows under it, so the heading can go when they all have.</summary>
+    private readonly List<(Control Heading, List<Control> Rows)> _sections = [];
+    private readonly List<(Slider Slider, Action<DitherSettings, double> Set)> _sliders = [];
     private readonly List<double> _fallbacks = [];
     private readonly ComboBox _style = new();
     private readonly ComboBox _shape = new();
     private readonly ComboBox _colors = new();
     private readonly CheckBox _lightOnDark = new();
     private readonly TextBox _characters = new();
+    private readonly Slider _pixelSize;
+    private List<Control>? _under;
     private DitherSettings? _result;
 
     /// <summary>Asks for the picture to be shown with this look and its amounts as they stand.</summary>
@@ -41,44 +54,42 @@ internal sealed class DitherDialog : DialogWindow
         var defaults = new DitherSettings();
         var group = new StackPanel { Margin = new Thickness(16), Spacing = 4 };
 
-        Choice(group, "Look", _style, StyleNames, 0);
+        Choice(group, "Look", _style, StyleNames, 0, () => true);
 
-        group.Children.Add(Heading("Pixels"));
-        Add(group, "Pixel size", 1, 32, start.PixelSize, defaults.PixelSize, (s, v) => s.PixelSize = v, "0");
-        Choice(group, "Pixel shape", _shape, ["Square", "Dot"], (int)start.PixelShape);
+        Heading(group, "Pixels");
+        _pixelSize = Add(group, "Pixel size", 1, 32, start.PixelSize, defaults.PixelSize,
+            (s, v) => s.PixelSize = v, "0", () => Style() != DitherStyle.Ascii);
+        Choice(group, "Pixel shape", _shape, ["Square", "Dot"], (int)start.PixelShape,
+            () => _pixelSize.Value > 1 && Style() != DitherStyle.Ascii);
 
-        group.Children.Add(Heading("Tones"));
-        Add(group, "Levels", 2, 8, start.Levels, defaults.Levels, (s, v) => s.Levels = v, "0");
-        Add(group, "Diffusion, %", 0, 100, start.Diffusion, defaults.Diffusion, (s, v) => s.Diffusion = v, "0");
-        Add(group, "Density", -100, 100, start.Density, defaults.Density, (s, v) => s.Density = v);
-        Add(group, "Contrast", -100, 100, start.Contrast, defaults.Contrast, (s, v) => s.Contrast = v);
+        Heading(group, "Tones");
+        Add(group, "Levels", 2, 8, start.Levels, defaults.Levels, (s, v) => s.Levels = v, "0",
+            () => DitherSettings.HasTones(Style()));
+        Add(group, "Diffusion, %", 0, 100, start.Diffusion, defaults.Diffusion, (s, v) => s.Diffusion = v, "0",
+            () => DitherSettings.Diffuses(Style()));
+        Add(group, "Density", -100, 100, start.Density, defaults.Density, (s, v) => s.Density = v, "0.#", () => true);
+        Add(group, "Contrast", -100, 100, start.Contrast, defaults.Contrast, (s, v) => s.Contrast = v, "0.#", () => true);
 
-        group.Children.Add(Heading("Halftone and characters"));
-        Add(group, "Cell size", 4, 64, start.CellSize, defaults.CellSize, (s, v) => s.CellSize = v, "0");
-        Add(group, "Angle, degrees", -90, 90, start.Angle, defaults.Angle, (s, v) => s.Angle = v);
-        Add(group, "Text size", 6, 64, start.TextSize, defaults.TextSize, (s, v) => s.TextSize = v, "0");
-        group.Children.Add(new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            Spacing = 8,
-            Children =
-            {
-                new TextBlock { Text = "Characters", Width = 130, VerticalAlignment = VerticalAlignment.Center },
-                _characters,
-            },
-        });
+        Heading(group, "Halftone and characters");
+        Add(group, "Cell size", 4, 64, start.CellSize, defaults.CellSize, (s, v) => s.CellSize = v, "0",
+            () => DitherSettings.IsHalftone(Style()));
+        Add(group, "Angle, degrees", -90, 90, start.Angle, defaults.Angle, (s, v) => s.Angle = v, "0.#",
+            () => DitherSettings.IsHalftone(Style()));
+        Add(group, "Text size", 6, 64, start.TextSize, defaults.TextSize, (s, v) => s.TextSize = v, "0",
+            () => Style() == DitherStyle.Ascii);
         _characters.Text = start.Characters;
         _characters.Width = 240;
-        Choice(group, "Marks", _lightOnDark, start.LightOnDark);
+        Text(group, "Characters", _characters, () => Style() == DitherStyle.Ascii);
+        Choice(group, "Marks", _lightOnDark, start.LightOnDark, () => DitherSettings.DrawsMarks(Style()));
 
-        group.Children.Add(Heading("Colours"));
-        Choice(group, "Ink and paper", _colors, ["Black & White", "Two Colors", "Original"], (int)start.Colors);
-        Add(group, "Dark red", 0, 1, start.DarkRed, defaults.DarkRed, (s, v) => s.DarkRed = v, "0.00");
-        Add(group, "Dark green", 0, 1, start.DarkGreen, defaults.DarkGreen, (s, v) => s.DarkGreen = v, "0.00");
-        Add(group, "Dark blue", 0, 1, start.DarkBlue, defaults.DarkBlue, (s, v) => s.DarkBlue = v, "0.00");
-        Add(group, "Light red", 0, 1, start.LightRed, defaults.LightRed, (s, v) => s.LightRed = v, "0.00");
-        Add(group, "Light green", 0, 1, start.LightGreen, defaults.LightGreen, (s, v) => s.LightGreen = v, "0.00");
-        Add(group, "Light blue", 0, 1, start.LightBlue, defaults.LightBlue, (s, v) => s.LightBlue = v, "0.00");
+        Heading(group, "Colours");
+        Choice(group, "Ink and paper", _colors, ["Black & White", "Two Colors", "Original"], (int)start.Colors, () => true);
+        Add(group, "Dark red", 0, 1, start.DarkRed, defaults.DarkRed, (s, v) => s.DarkRed = v, "0.00", TwoColours);
+        Add(group, "Dark green", 0, 1, start.DarkGreen, defaults.DarkGreen, (s, v) => s.DarkGreen = v, "0.00", TwoColours);
+        Add(group, "Dark blue", 0, 1, start.DarkBlue, defaults.DarkBlue, (s, v) => s.DarkBlue = v, "0.00", TwoColours);
+        Add(group, "Light red", 0, 1, start.LightRed, defaults.LightRed, (s, v) => s.LightRed = v, "0.00", TwoColours);
+        Add(group, "Light green", 0, 1, start.LightGreen, defaults.LightGreen, (s, v) => s.LightGreen = v, "0.00", TwoColours);
+        Add(group, "Light blue", 0, 1, start.LightBlue, defaults.LightBlue, (s, v) => s.LightBlue = v, "0.00", TwoColours);
 
         var ok = new Button { Content = "Apply", IsDefault = true };
         var cancel = new Button { Content = "Cancel", IsCancel = true };
@@ -95,21 +106,55 @@ internal sealed class DitherDialog : DialogWindow
             Children = { reset, cancel, ok },
         });
 
+        // A look, a pixel size or an ink choice that changes which controls apply is followed at once.
+        _style.SelectionChanged += (_, _) => Refresh();
+        _shape.SelectionChanged += (_, _) => Refresh();
+        _colors.SelectionChanged += (_, _) => Refresh();
+        _pixelSize.PropertyChanged += (_, change) =>
+        {
+            if (change.Property == Slider.ValueProperty) Refresh();
+        };
+        Refresh();
+
         Content = new ScrollViewer { Content = group };
     }
 
-    private static Control Heading(string text) => new TextBlock
-    {
-        Text = text,
-        FontWeight = FontWeight.SemiBold,
-        Margin = new Thickness(0, 10, 0, 2),
-    };
+    /// <summary>Whether the two-colour swatches apply, which they do once the ink and paper are chosen.</summary>
+    private bool TwoColours() => (DitherColors)Math.Max(0, _colors.SelectedIndex) == DitherColors.TwoColors;
 
-    private static void Choice(StackPanel parent, string label, ComboBox box, string[] options, int selected)
+    /// <summary>Shows the rows this look uses and hides the rest, headings included when their rows have gone.</summary>
+    private void Refresh()
+    {
+        foreach (var (row, applies) in _rows) row.IsVisible = applies();
+        foreach (var (heading, rows) in _sections) heading.IsVisible = rows.Exists(row => row.IsVisible);
+    }
+
+    private void Heading(StackPanel parent, string text)
+    {
+        var heading = new TextBlock
+        {
+            Text = text,
+            FontWeight = FontWeight.SemiBold,
+            Margin = new Thickness(0, 10, 0, 2),
+        };
+        parent.Children.Add(heading);
+        _under = [];
+        _sections.Add((heading, _under));
+    }
+
+    /// <summary>Adds a row to the panel, under the heading it belongs to.</summary>
+    private void Row(StackPanel parent, Control row, Func<bool> applies)
+    {
+        parent.Children.Add(row);
+        _rows.Add((row, applies));
+        _under?.Add(row);
+    }
+
+    private void Choice(StackPanel parent, string label, ComboBox box, string[] options, int selected, Func<bool> applies)
     {
         box.ItemsSource = options;
         box.SelectedIndex = Math.Clamp(selected, 0, options.Length - 1);
-        parent.Children.Add(new StackPanel
+        Row(parent, new StackPanel
         {
             Orientation = Orientation.Horizontal,
             Spacing = 8,
@@ -118,19 +163,31 @@ internal sealed class DitherDialog : DialogWindow
                 new TextBlock { Text = label, Width = 130, VerticalAlignment = VerticalAlignment.Center },
                 box,
             },
-        });
+        }, applies);
     }
 
     /// <summary>"Light on dark" is a box, not a list, since it says yes or no.</summary>
-    private static void Choice(StackPanel parent, string label, CheckBox box, bool selected)
+    private void Choice(StackPanel parent, string label, CheckBox box, bool selected, Func<bool> applies)
     {
         box.Content = label;
         box.IsChecked = selected;
-        parent.Children.Add(box);
+        Row(parent, box, applies);
     }
 
-    private void Add(StackPanel parent, string label, double least, double most, double value, double fallback,
-        Action<DitherSettings, double> set, string format = "0.#")
+    private void Text(StackPanel parent, string label, TextBox box, Func<bool> applies) => Row(parent, new StackPanel
+    {
+        Orientation = Orientation.Horizontal,
+        Spacing = 8,
+        Children =
+        {
+            new TextBlock { Text = label, Width = 130, VerticalAlignment = VerticalAlignment.Center },
+            box,
+        },
+    }, applies);
+
+    /// <summary>Adds one amount, and hands back its slider when the caller needs to watch it.</summary>
+    private Slider Add(StackPanel parent, string label, double least, double most, double value, double fallback,
+        Action<DitherSettings, double> set, string format, Func<bool> applies)
     {
         var slider = new Slider { Minimum = least, Maximum = most, Value = value, Width = 240 };
         var readout = new TextBlock { Text = "", Width = 44, VerticalAlignment = VerticalAlignment.Center };
@@ -142,7 +199,7 @@ internal sealed class DitherDialog : DialogWindow
             Preview?.Invoke(Style(), Current());
         };
         Show();
-        parent.Children.Add(new StackPanel
+        Row(parent, new StackPanel
         {
             Orientation = Orientation.Horizontal,
             Spacing = 8,
@@ -152,20 +209,22 @@ internal sealed class DitherDialog : DialogWindow
                 slider,
                 readout,
             },
-        });
-        _rows.Add((slider, set));
+        }, applies);
+        _sliders.Add((slider, set));
         _fallbacks.Add(fallback);
+        return slider;
     }
 
     /// <summary>Back to the look Dither opens with.</summary>
     private void Restore(DitherSettings defaults)
     {
-        for (var i = 0; i < _rows.Count; i++) _rows[i].Slider.Value = _fallbacks[i];
+        for (var i = 0; i < _sliders.Count; i++) _sliders[i].Slider.Value = _fallbacks[i];
         _style.SelectedIndex = 0;
         _shape.SelectedIndex = 0;
         _colors.SelectedIndex = 0;
         _lightOnDark.IsChecked = defaults.LightOnDark;
         _characters.Text = defaults.Characters;
+        Refresh();
     }
 
     /// <summary>The look the panel has chosen.</summary>
@@ -181,21 +240,13 @@ internal sealed class DitherDialog : DialogWindow
             LightOnDark = _lightOnDark.IsChecked == true,
             Characters = _characters.Text ?? DitherSettings.DefaultCharacters,
         };
-        foreach (var (slider, set) in _rows) set(settings, slider.Value);
+        foreach (var (slider, set) in _sliders) set(settings, slider.Value);
         return settings;
     }
 
     private void Accept()
     {
-        var settings = new DitherSettings
-        {
-            PixelShape = (DitherPixelShape)Math.Max(0, _shape.SelectedIndex),
-            Colors = (DitherColors)Math.Max(0, _colors.SelectedIndex),
-            LightOnDark = _lightOnDark.IsChecked == true,
-            Characters = _characters.Text ?? DitherSettings.DefaultCharacters,
-        };
-        foreach (var (slider, set) in _rows) set(settings, slider.Value);
-        _result = settings;
+        _result = Current();
         Close();
     }
 
@@ -206,7 +257,6 @@ internal sealed class DitherDialog : DialogWindow
         var dialog = new DitherDialog(start) { Preview = preview };
         await dialog.ShowDialog(owner);
         if (dialog._result is not { } settings) return null;
-        var style = (DitherStyle)Math.Max(0, dialog._style.SelectedIndex);
-        return (style, settings);
+        return (dialog.Style(), settings);
     }
 }

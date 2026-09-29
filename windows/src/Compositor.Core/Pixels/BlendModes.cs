@@ -40,24 +40,6 @@ public static class BlendModes
         BlendMode.Hue, BlendMode.Saturation, BlendMode.Color, BlendMode.Luminosity,
     };
 
-    /// <summary>
-    /// Photoshop's grouping: darkening modes together, then lightening, then contrast, then the
-    /// comparative ones, then the component modes. The menu draws a line between each group.
-    /// </summary>
-    public static readonly BlendMode[][] Groups =
-    {
-        new[] { BlendMode.Normal },
-        new[] { BlendMode.Darken, BlendMode.Multiply, BlendMode.ColorBurn, BlendMode.LinearBurn },
-        new[] { BlendMode.Lighten, BlendMode.Screen, BlendMode.ColorDodge, BlendMode.LinearDodgeAdd },
-        new[]
-        {
-            BlendMode.Overlay, BlendMode.SoftLight, BlendMode.HardLight, BlendMode.VividLight,
-            BlendMode.LinearLight, BlendMode.PinLight, BlendMode.HardMix,
-        },
-        new[] { BlendMode.Difference, BlendMode.Exclusion, BlendMode.Subtract, BlendMode.Divide },
-        new[] { BlendMode.Hue, BlendMode.Saturation, BlendMode.Color, BlendMode.Luminosity },
-    };
-
     // Indexed by BlendMode; the enum's declaration order is the menu's order.
     private static readonly string[] ModeNames =
     {

@@ -38,6 +38,30 @@ public class DitherEditsTests
             .Count();
 
     [Fact]
+    public void EachLookSaysWhichControlsApplyToIt()
+    {
+        // What the panel hides a control by, and the Mac build's own grouping: diffusion passes each pixel's
+        // error on, the ordered styles quantize to tones too, the half-tone shapes are drawn in cells with a
+        // size and an angle, and the rest mark one tone on the other so which one is the mark matters.
+        Assert.True(DitherSettings.Diffuses(DitherStyle.Atkinson));
+        Assert.True(DitherSettings.Diffuses(DitherStyle.FloydSteinberg));
+        Assert.False(DitherSettings.Diffuses(DitherStyle.Bayer4));
+        Assert.True(DitherSettings.HasTones(DitherStyle.Bayer2));
+        Assert.True(DitherSettings.HasTones(DitherStyle.Bayer8));
+        Assert.False(DitherSettings.HasTones(DitherStyle.Dots));
+        Assert.True(DitherSettings.IsHalftone(DitherStyle.Dots));
+        Assert.True(DitherSettings.IsHalftone(DitherStyle.Lines));
+        Assert.True(DitherSettings.IsHalftone(DitherStyle.Diamonds));
+        Assert.False(DitherSettings.IsHalftone(DitherStyle.Patterns));
+        Assert.True(DitherSettings.DrawsMarks(DitherStyle.Patterns));
+        Assert.True(DitherSettings.DrawsMarks(DitherStyle.Ascii));
+        Assert.False(DitherSettings.DrawsMarks(DitherStyle.Bayer2));
+        // Every look either quantizes to tones or marks them, never neither and never both.
+        foreach (var style in Enum.GetValues<DitherStyle>())
+            Assert.NotEqual(DitherSettings.HasTones(style), DitherSettings.DrawsMarks(style));
+    }
+
+    [Fact]
     public void DefaultsAreTheLookDitherOpensWithAndAreWithinRange()
     {
         var settings = new DitherSettings().Normalized();
