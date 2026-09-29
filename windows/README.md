@@ -102,10 +102,7 @@ Nothing on this list is hidden in the code — each is either a deliberate refus
   items. All three are Apple Vision subject masks on the Mac. Adding them means an ONNX segmentation dependency
   (a model, its licence, its size), and that decision was taken deliberately: parked, with no dependency added.
   Everything downstream of a selection is complete, so the loss is the segmentation step alone — a subject must
-  be cut out here with the wand, a lasso or Color Range.
-- **The Eyedropper's Sample Ring** — an option the Mac's tool bar has and this one does not.
-- **The Mac's "move selected pixels"** (drag a selection's contents, or step them with ⌘ and an arrow). This port
-  has *move the selection outline* only, so the Mac's two shortcut rows for it are not in the key table either.
+  be cut out here with the wand, a lasso or Color Range. **This is the only feature-level gap left.**
 
 **Smaller divergences**
 
@@ -118,13 +115,17 @@ Nothing on this list is hidden in the code — each is either a deliberate refus
   look. Every other filter and adjustment is a port of the Mac's own kernel or operator.
 - **Updates**: the feed both builds read publishes a macOS `.dmg`, so Help ▸ Check for Updates reports the news
   and links the release page; building from this repository is what updates a Windows copy.
-- **Some of the window has been driven by a real pointer, and some of it has not.** A script that launches the
-  published app, clicks it and photographs it has opened menus (which is how the gestures are known to draw),
-  made a document from the New Project dialog, painted a stroke on the canvas, driven the shortcut sheet's
-  recorder with real keys, and found the two faults that nothing offscreen could see. What is still **unproven
-  by hand**: Ctrl-drag to distort a layer, the opacity slider and the blend pop-up, the curve editor's handles,
-  the text caret, the Camera Raw panel's own controls, and crop. Treat those as untested until somebody drives
-  them — `--clicks` covers the canvas paths it names, and nothing covers the rest.
+- **Most of the window has now been driven by a real pointer, and some of it has not.** `--clicks` builds the
+  real window on Avalonia's headless platform, clicks it and photographs it: a brush stroke, a marquee, an
+  ellipse with the Anti-alias tick both ways, a wand click, a Control-drag of a selection's pixels, a guide
+  pulled off a ruler and dragged, the Type tool's caret and words, the opacity slider, the Crop tool from its
+  seeded frame to its corner handle to Enter, a Control-drag distortion of a transform corner, the filter
+  preview's two states, the blend pop-up, the rail's own button and the sample ring. A script that clicks the
+  *published* app has also opened menus (which is how the gestures are known to draw), made a document from the
+  New Project dialog and driven the shortcut sheet's recorder with real keys. **What neither drives:** the curve
+  editor's handles and the filter dialogs' own widgets — both inside modal windows, and `ShowDialog` wants a
+  dispatcher loop the checks do not run — and the Camera Raw panel's own controls, whose behaviour `--camera-raw`
+  drives through the panel's API rather than by clicking them.
 
 ## Keeping this alive, or handing it on
 
