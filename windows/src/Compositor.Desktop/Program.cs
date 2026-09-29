@@ -28,6 +28,11 @@ internal static class Program
         {
             return Render(shapeProject, shapeOutput, showGrid: false, shape: true);
         }
+        // `--gradient` draws the gradient tool's drag line, which needs a pointer to make.
+        if (args is ["--render", var gradProject, var gradOutput, "--gradient"])
+        {
+            return Render(gradProject, gradOutput, showGrid: false, gradient: true);
+        }
         // `--preview` opens a preview of the top layer inverted, so the canvas drawing one can be checked.
         if (args is ["--render", var previewProject, var previewOutput, "--preview"])
         {
@@ -317,7 +322,7 @@ internal static class Program
         AppBuilder.Configure<DesktopApp>().UsePlatformDetect().WithInterFont().LogToTrace();
 
     private static int Render(string project, string output, bool showGrid, bool preview = false, bool shape = false,
-        bool zoomIn = false, bool pixelGrid = false)
+        bool zoomIn = false, bool pixelGrid = false, bool gradient = false)
     {
         Build().SetupWithoutStarting();
         using var document = project == "--demo" ? Demo() : ProjectStore.Load(project).ToDocument();
@@ -370,6 +375,13 @@ internal static class Program
             }, dragged);
             view.PreviewShape(box);
             Console.WriteLine($"showing a shape preview over {box}");
+        }
+        if (gradient)
+        {
+            // The gradient tool's drag line, from one corner of the picture towards the other.
+            view.PreviewGradient(new SKPoint(document.Width * 0.15f, document.Height * 0.25f),
+                new SKPoint(document.Width * 0.8f, document.Height * 0.7f));
+            Console.WriteLine("showing the gradient tool's drag line");
         }
         // A preview of the top layer, as a filter panel would show one: the canvas draws it in the document's
         // place while the document is left as it was.

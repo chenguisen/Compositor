@@ -587,18 +587,25 @@ public sealed class CanvasView : Control
         context.DrawLine(CaretPen, top, bottom);
     }
 
-    /// <summary>The gradient line being dragged, with a cross at each end as Photoshop draws it.</summary>
+    /// <summary>
+    /// The gradient line being dragged, with a cross at each end as the Mac draws its ends. It goes down as
+    /// the Mac's does — a black line under a white one — so it reads over a dark picture and a light one alike.
+    /// </summary>
     private void DrawGradient(DrawingContext context)
     {
         if (!_gradientDrag) return;
-        var pen = new Pen { Brush = Brushes.White, Thickness = 1 };
+        var under = new Pen(new SolidColorBrush(Color.FromArgb(0xB3, 0, 0, 0)), 3);
+        var over = new Pen(Brushes.White, 1);
         var from = ToScreen(_gradientStart);
         var to = ToScreen(_gradientEnd);
-        context.DrawLine(pen, from, to);
-        foreach (var end in new[] { from, to })
+        foreach (var pen in new[] { under, over })
         {
-            context.DrawLine(pen, new Point(end.X - 4, end.Y), new Point(end.X + 4, end.Y));
-            context.DrawLine(pen, new Point(end.X, end.Y - 4), new Point(end.X, end.Y + 4));
+            context.DrawLine(pen, from, to);
+            foreach (var end in new[] { from, to })
+            {
+                context.DrawLine(pen, new Point(end.X - 6, end.Y), new Point(end.X + 6, end.Y));
+                context.DrawLine(pen, new Point(end.X, end.Y - 6), new Point(end.X, end.Y + 6));
+            }
         }
     }
 
@@ -657,6 +664,18 @@ public sealed class CanvasView : Control
             _shapePlan = value;
             ForgetShapePreview();
         }
+    }
+
+    /// <summary>
+    /// Draws a gradient line as if it were being dragged, so the self check can look at a drawing that needs
+    /// a pointer to make. Both ends are in document pixels.
+    /// </summary>
+    public void PreviewGradient(SKPoint from, SKPoint to)
+    {
+        _gradientStart = from;
+        _gradientEnd = to;
+        _gradientDrag = true;
+        InvalidateVisual();
     }
 
     /// <summary>Drops the shape preview's own pixels, which are the canvas' to free.</summary>
