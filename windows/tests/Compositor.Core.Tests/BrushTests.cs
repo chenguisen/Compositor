@@ -1,6 +1,7 @@
 using Compositor.Core.Document;
 using Compositor.Core.Format;
 using Compositor.Core.Model;
+using Compositor.Core.Rendering;
 using SkiaSharp;
 
 namespace Compositor.Core.Tests;
@@ -171,5 +172,120 @@ public class BrushTests
         Assert.False(BrushEdits.Paint(document, layer.ID, [], new BrushSettings()));
         Assert.False(BrushEdits.Paint(document, layer.ID, [new SKPoint(10, 10)], new BrushSettings(Diameter: 0)));
         Assert.False(BrushEdits.Paint(document, Guid.NewGuid(), [new SKPoint(10, 10)], new BrushSettings()));
+    }
+
+    /// <summary>A layer of one colour with an all-black mask on it, so the layer starts hidden.</summary>
+    private static (CanvasDocument Document, ImageLayer Layer) Masked(int width, int height, bool revealing)
+    {
+        var bitmap = new SKBitmap(Bitmaps.ColorInfo(width, height));
+        bitmap.Erase(SKColors.Red);
+        var document = new CanvasDocument(Guid.NewGuid(), width, height);
+        var layer = new ImageLayer(Guid.NewGuid(), ImportedImage.Create(bitmap, "Paint"),
+            new Model.LayerTransform(0, 0, width, height), "Paint");
+        document.Layers.Add(layer);
+        LayerMaskEdits.Add(document, layer.ID, revealing);
+        return (document, layer);
+    }
+
+    [Fact]
+    public void PaintingWhiteOnAMaskRevealsWhatItHid()
+    {
+        var (document, layer) = Masked(40, 20, revealing: false);
+        using var _ = document;
+        using (var hidden = DocumentRenderer.Render(document))
+        {
+            Assert.Equal(0, hidden.GetPixel(20, 10).Alpha);
+        }
+
+        // White paint on the mask reveals the layer where the dab lands, and nowhere else.
+        var settings = new BrushSettings(Diameter: 10, Red: 1, Green: 1, Blue: 1);
+        Assert.True(BrushEdits.PaintMask(document, layer.ID, [new SKPoint(20.5f, 10.5f)], settings));
+        using var shown = DocumentRenderer.Render(document);
+        Assert.Equal(255, shown.GetPixel(20, 10).Alpha);
+        Assert.Equal(0, shown.GetPixel(2, 10).Alpha);
+        // The mask is still a mask: gray, no alpha, and the same size as the layer.
+        Assert.True(Bitmaps.IsValidMask(layer.Mask!.Asset.Image));
+        Assert.Equal(40, layer.Mask.Asset.Width);
+    }
+
+    [Fact]
+    public void PaintingBlackOnAMaskHidesWhatItShowed()
+    {
+        var (document, layer) = Masked(40, 20, revealing: true);
+        using var _ = document;
+        using (var shown = DocumentRenderer.Render(document))
+        {
+            Assert.Equal(255, shown.GetPixel(20, 10).Alpha);
+        }
+
+        var settings = new BrushSettings(Diameter: 10, Red: 0, Green: 0, Blue: 0);
+        Assert.True(BrushEdits.PaintMask(document, layer.ID, [new SKPoint(20.5f, 10.5f)], settings));
+        using var hidden = DocumentRenderer.Render(document);
+        Assert.Equal(0, hidden.GetPixel(20, 10).Alpha);
+        Assert.Equal(255, hidden.GetPixel(2, 10).Alpha);
+        // The layer's own pixels are untouched.
+        Assert.Equal(new SKColor(255, 0, 0, 255), layer.Asset!.Image.GetPixel(20, 10));
+    }
+
+    [Fact]
+    public void PaintingOnTheMaskOfABlankLayerIsRefusedAndOnALayerWithNoMaskToo()
+    {
+        using var document = new CanvasDocument(Guid.NewGuid(), 20, 20);
+        var layer = new ImageLayer(Guid.NewGuid(), null, new Model.LayerTransform(0, 0, 20, 20), "Empty");
+        document.Layers.Add(layer);
+        var settings = new BrushSettings(Diameter: 8, Red: 1);
+
+        // No mask yet, and no pixels to grow one from.
+        Assert.False(BrushEdits.PaintMask(document, layer.ID, [new SKPoint(10.5f, 10.5f)], settings));
+        Assert.False(BrushEdits.GrowMask(document, layer.ID));
+    }
+
+    [Fact]
+    public void AUniformMaskGrowsToTheLayerBeforeItIsPaintedOn()
+    {
+        var (document, layer) = Masked(40, 20, revealing: false);
+        using var _ = document;
+        // A mask made by the menu is one pixel stretched over the layer.
+        Assert.Equal(1, layer.Mask!.Asset.Width);
+        Assert.True(BrushEdits.GrowMask(document, layer.ID));
+        Assert.Equal(40, layer.Mask.Asset.Width);
+        Assert.Equal(20, layer.Mask.Asset.Height);
+        // Growing it kept the value it had: the layer is still hidden.
+        using var hidden = DocumentRenderer.Render(document);
+        Assert.Equal(0, hidden.GetPixel(20, 10).Alpha);
+        Assert.False(BrushEdits.GrowMask(document, layer.ID));
+    }
+
+    [Fact]
+    public void PaintingOnAMaskRespectsTheSelection()
+    {
+        var (document, layer) = Masked(40, 20, revealing: false);
+        using var _ = document;
+        SelectionEdits.Select(document, SKRectI.Create(15, 0, 10, 20));
+
+        var settings = new BrushSettings(Diameter: 30, Red: 1, Green: 1, Blue: 1);
+        Assert.True(BrushEdits.PaintMask(document, layer.ID, [new SKPoint(20.5f, 10.5f)], settings));
+        using var shown = DocumentRenderer.Render(document);
+        Assert.Equal(255, shown.GetPixel(20, 10).Alpha);
+        Assert.Equal(0, shown.GetPixel(2, 10).Alpha);
+        Assert.Equal(0, shown.GetPixel(37, 10).Alpha);
+    }
+
+    [Fact]
+    public void PaintingOnAMaskFollowsTheLayerWhenItIsMoved()
+    {
+        var (document, layer) = Masked(20, 20, revealing: false);
+        using var _ = document;
+        // A mask the size of the layer, offset with it: the dab is aimed in document pixels and has to
+        // land in the mask where the layer puts it.
+        Assert.True(BrushEdits.GrowMask(document, layer.ID));
+        LayerEdits.Move(document, layer.ID, 10, 0);
+
+        var settings = new BrushSettings(Diameter: 8, Red: 1, Green: 1, Blue: 1);
+        Assert.True(BrushEdits.PaintMask(document, layer.ID, [new SKPoint(15.5f, 10.5f)], settings));
+        using var shown = DocumentRenderer.Render(document);
+        // Document 15 is layer pixel 5, which is where the dab went.
+        Assert.Equal(255, shown.GetPixel(15, 10).Alpha);
+        Assert.Equal(0, shown.GetPixel(25, 10).Alpha);
     }
 }

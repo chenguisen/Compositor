@@ -8,6 +8,7 @@ using Compositor.Core.Document;
 using Compositor.Core.Format;
 using Compositor.Core.IO;
 using Compositor.Core.Model;
+using Compositor.Core.Rendering;
 using SkiaSharp;
 using SelectionMode = Compositor.Core.Document.SelectionMode;
 
@@ -39,6 +40,23 @@ public sealed class MainWindow : Window
 
     /// <summary>The rest of the Layer menu, so all of it can go dead together when nothing is selected.</summary>
     private readonly List<MenuItem> _layerItems = [];
+
+    /// <summary>Whether a brush stroke goes on the active layer's mask instead of its pixels.</summary>
+    private readonly MenuItem _paintOnMask = new()
+    {
+        Header = "Paint on the layer _mask",
+        ToggleType = MenuItemToggleType.CheckBox,
+    };
+
+    /// <summary>Whether the brush paints or erases; on a mask, that is white or black.</summary>
+    private readonly MenuItem _eraseToggle = new()
+    {
+        Header = "Brush _erases",
+        ToggleType = MenuItemToggleType.CheckBox,
+    };
+
+    private bool _paintingMask;
+    private bool _erasing;
     private readonly List<(MenuItem Item, Func<CanvasDocument, ImageLayer, bool> Ready)> _layerRows = [];
 
     /// <summary>Owns the pixels: the document's layers reference the snapshot's images, so the document
@@ -65,6 +83,7 @@ public sealed class MainWindow : Window
         Clone,
         Blur,
         Heal,
+        Eyedropper,
     }
 
     private readonly Dictionary<Tool, MenuItem> _toolItems = [];
@@ -92,6 +111,9 @@ public sealed class MainWindow : Window
         _canvas.LassoFinished = (points, mode) => LassoFinished(points, mode, _tool == Tool.Polygon);
         _canvas.WandClicked = WandClicked;
         _canvas.CloneSourceClicked = CloneSourceChosen;
+        _canvas.EyedropperClicked = Picked;
+        _paintOnMask.Click += (_, _) => SetPaintingMask(!_paintingMask);
+        _eraseToggle.Click += (_, _) => SetErasing(!_erasing);
         _merge.Click += (_, _) => MergeLayers();
         _visibility.Click += (_, _) => ToggleVisibility();
         _clipping.Click += (_, _) => ToggleClipping();
@@ -188,6 +210,10 @@ public sealed class MainWindow : Window
                         ToolItem("_Clone stamp (Alt-click a source first)", Tool.Clone),
                         ToolItem("Blur brush", Tool.Blur),
                         ToolItem("Spot _healing", Tool.Heal),
+                        ToolItem("_Eyedropper (click the canvas)", Tool.Eyedropper),
+                        new Separator(),
+                        _paintOnMask,
+                        _eraseToggle,
                         new Separator(),
                         new MenuItem
                         {
@@ -600,6 +626,7 @@ public sealed class MainWindow : Window
     {
         _tool = tool;
         _canvas.SampleSourceOnClick = tool == Tool.Clone;
+        _canvas.EyedropperOnClick = tool == Tool.Eyedropper;
         _canvas.PaintEnabled = tool is Tool.Brush or Tool.Clone or Tool.Blur or Tool.Heal;
         PushBrush();
         _canvas.MoveEnabled = tool == Tool.Move;
@@ -623,6 +650,7 @@ public sealed class MainWindow : Window
                 : $"Clone stamp copying from {_cloneSource.Value.X:0},{_cloneSource.Value.Y:0} — drag on the canvas",
             Tool.Blur => $"Blur brush: {_brush.Diameter:0} pixels — drag over what should soften",
             Tool.Heal => $"Spot healing ({_brush.Healing}): {_brush.Diameter:0} pixels — drag over what should go",
+            Tool.Eyedropper => "Eyedropper — click the canvas to take its colour",
             Tool.Move => "Move — drag the selected layer",
             Tool.Marquee => "Marquee — drag a rectangle; Shift adds, Alt subtracts",
             Tool.Ellipse => "Elliptical marquee — drag an oval; Shift adds, Alt subtracts",
@@ -643,6 +671,7 @@ public sealed class MainWindow : Window
     private void PushBrush() =>
         _canvas.Brush = _brush with
         {
+            Erasing = _erasing,
             Mode = _tool switch
             {
                 Tool.Clone => BrushMode.Clone,
@@ -651,6 +680,55 @@ public sealed class MainWindow : Window
                 _ => BrushMode.Paint,
             },
         };
+
+    /// <summary>Where a brush stroke goes: the layer's pixels, or its mask.</summary>
+    private void SetPaintingMask(bool mask)
+    {
+        _paintingMask = mask;
+        _paintOnMask.IsChecked = mask;
+        Say(mask
+            ? "The brush paints on the layer's mask — white reveals, and Erase paints black"
+            : "The brush paints on the layer's pixels");
+    }
+
+    /// <summary>The brush erases rather than paints: on a mask, that is black rather than white.</summary>
+    private void SetErasing(bool erasing)
+    {
+        _erasing = erasing;
+        _eraseToggle.IsChecked = erasing;
+        PushBrush();
+        Say(erasing ? "The brush erases" : "The brush paints");
+    }
+
+    /// <summary>The eyedropper: the colour under the click becomes the brush's.</summary>
+    private void Picked(SKPoint point)
+    {
+        if (_document is not { } document) return;
+        if ((long)document.Width * document.Height > DocumentLimits.MaxSurfacePixels)
+        {
+            Say("This canvas is too big to read a colour from in one piece");
+            return;
+        }
+        var x = (int)Math.Floor(point.X);
+        var y = (int)Math.Floor(point.Y);
+        if (x < 0 || y < 0 || x >= document.Width || y >= document.Height) return;
+        using var rendered = DocumentRenderer.Render(document);
+        var colour = rendered.GetPixel(x, y);
+        if (colour.Alpha == 0)
+        {
+            Say("Nothing is drawn there");
+            return;
+        }
+        // A transparent pixel has no colour to take; a part-transparent one is read as it looks on white.
+        _brush = _brush with
+        {
+            Red = colour.Red / 255.0,
+            Green = colour.Green / 255.0,
+            Blue = colour.Blue / 255.0,
+        };
+        PushBrush();
+        Say($"Brush colour {colour.Red},{colour.Green},{colour.Blue}");
+    }
 
     /// <summary>How Spot Healing works out what to put in the painted area.</summary>
     private void Heal(HealingMode mode)
@@ -819,8 +897,16 @@ public sealed class MainWindow : Window
             Tool.Heal => "Spot Healing",
             _ => "Brush",
         };
-        Edit(name, () =>
+        Edit(_paintingMask ? $"{name} on the mask" : name, () =>
         {
+            if (_paintingMask)
+            {
+                // White reveals and black hides; the brush's Erase is what paints black, as the Mac build's
+                // paint-white switch does.
+                var value = _erasing ? 0 : 1;
+                return BrushEdits.PaintMask(document, id,
+                    stroke, settings with { Red = value, Green = value, Blue = value, Erasing = false });
+            }
             // A blank layer gets its pixels on the first paint, as the Mac build does.
             BrushEdits.EnsurePixels(document, id);
             return BrushEdits.Paint(document, id, stroke, settings);

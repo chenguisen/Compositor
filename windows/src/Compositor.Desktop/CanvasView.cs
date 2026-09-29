@@ -72,6 +72,12 @@ public sealed class CanvasView : Control
     /// <summary>Handed the point an Alt-click landed on, in document pixels.</summary>
     public Action<SKPoint>? CloneSourceClicked { get; set; }
 
+    /// <summary>When set, clicking reports the colour under the pointer instead of painting.</summary>
+    public bool EyedropperOnClick { get; set; }
+
+    /// <summary>Handed the point the eyedropper was clicked at, in document pixels.</summary>
+    public Action<SKPoint>? EyedropperClicked { get; set; }
+
     private bool _selecting;
     private SKPoint _selectionAnchor;
     private SKRectI? _selectionBox;
@@ -379,6 +385,12 @@ public sealed class CanvasView : Control
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
+        if (EyedropperOnClick && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+        {
+            e.Handled = true;
+            EyedropperClicked?.Invoke(ToDocument(e.GetPosition(this)));
+            return;
+        }
         if (SampleSourceOnClick && e.KeyModifiers.HasFlag(KeyModifiers.Alt)
             && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
         {
