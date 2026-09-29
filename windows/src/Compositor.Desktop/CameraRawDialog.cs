@@ -15,6 +15,8 @@ internal sealed class CameraRawDialog : Window
     private readonly List<(Slider Slider, Action<CameraRawSettings, double> Set, TextBlock Readout, string Format)> _rows = [];
     private readonly ComboBox _glowStyle = new();
     private readonly ComboBox _vignetteStyle = new();
+    private readonly ComboBox _curveChannel = new();
+    private CurveEditor? _curve;
     private CameraRawSettings? _result;
 
     /// <summary>
@@ -27,7 +29,7 @@ internal sealed class CameraRawDialog : Window
     {
         Title = "Camera Raw Filter";
         Width = 460;
-        Height = 700;
+        Height = 760;
         CanResize = true;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         var groups = new StackPanel { Margin = new Thickness(16), Spacing = 4 };
@@ -103,6 +105,33 @@ internal sealed class CameraRawDialog : Window
         Add(groups, "Blue hue", -100, 100, start.BlueHue, (s, v) => s.BlueHue = v);
         Add(groups, "Blue saturation", -100, 100, start.BlueSaturation, (s, v) => s.BlueSaturation = v);
 
+        groups.Children.Add(Heading("Curve"));
+        _curveChannel.ItemsSource = new[] { "Whole picture", "Red", "Green", "Blue" };
+        _curveChannel.SelectedIndex = Math.Clamp((int)start.Curve.Channel, 0, 3);
+        _curveChannel.Width = 160;
+        _curve = new CurveEditor { Curves = Clone(start.Curve), Height = 220 };
+        _curveChannel.SelectionChanged += (_, _) => _curve.Channel = Math.Max(0, _curveChannel.SelectedIndex);
+        _curve.Changed += () => Preview?.Invoke(Current());
+        groups.Children.Add(_curveChannel);
+        groups.Children.Add(_curve);
+        Add(groups, "Refine saturation", -100, 100, start.RefineSaturation, (s, v) => s.RefineSaturation = v);
+
+        groups.Children.Add(Heading("Colour grading"));
+        Add(groups, "Shadows: hue", 0, 360, start.ShadowHue, (s, v) => s.ShadowHue = v, "0");
+        Add(groups, "Shadows: amount", 0, 100, start.ShadowSaturation, (s, v) => s.ShadowSaturation = v, "0");
+        Add(groups, "Shadows: lightness", -100, 100, start.ShadowLuminance, (s, v) => s.ShadowLuminance = v);
+        Add(groups, "Midtones: hue", 0, 360, start.MidtoneHue, (s, v) => s.MidtoneHue = v, "0");
+        Add(groups, "Midtones: amount", 0, 100, start.MidtoneSaturation, (s, v) => s.MidtoneSaturation = v, "0");
+        Add(groups, "Midtones: lightness", -100, 100, start.MidtoneLuminance, (s, v) => s.MidtoneLuminance = v);
+        Add(groups, "Highlights: hue", 0, 360, start.HighlightHue, (s, v) => s.HighlightHue = v, "0");
+        Add(groups, "Highlights: amount", 0, 100, start.HighlightSaturation, (s, v) => s.HighlightSaturation = v, "0");
+        Add(groups, "Highlights: lightness", -100, 100, start.HighlightLuminance, (s, v) => s.HighlightLuminance = v);
+        Add(groups, "Whole picture: hue", 0, 360, start.GlobalHue, (s, v) => s.GlobalHue = v, "0");
+        Add(groups, "Whole picture: amount", 0, 100, start.GlobalSaturation, (s, v) => s.GlobalSaturation = v, "0");
+        Add(groups, "Whole picture: lightness", -100, 100, start.GlobalLuminance, (s, v) => s.GlobalLuminance = v);
+        Add(groups, "Grading blending", 0, 100, start.GradeBlending, (s, v) => s.GradeBlending = v, "0");
+        Add(groups, "Grading balance", -100, 100, start.GradeBalance, (s, v) => s.GradeBalance = v);
+
         _glowStyle.SelectedIndex = start.GlowStyle;
         _vignetteStyle.SelectedIndex = start.VignetteStyle;
 
@@ -114,6 +143,7 @@ internal sealed class CameraRawDialog : Window
         reset.Click += (_, _) =>
         {
             foreach (var (slider, _, _, _) in _rows) slider.Value = 0;
+            if (_curve is not null) _curve.Curves = new Compositor.Core.Format.CurvesSettings();
         };
         groups.Children.Add(new StackPanel
         {
@@ -184,19 +214,27 @@ internal sealed class CameraRawDialog : Window
         {
             GlowStyle = Math.Max(0, _glowStyle.SelectedIndex),
             VignetteStyle = Math.Max(0, _vignetteStyle.SelectedIndex),
+            Curve = _curve is { } curve ? curve.Curves : new Compositor.Core.Format.CurvesSettings(),
         };
         foreach (var (slider, set, _, _) in _rows) set(settings, slider.Value);
         return settings;
     }
 
+    /// <summary>
+    /// The curve copied, so dragging a handle does not reach the layer until Apply: the editor writes into the
+    /// copy it is given, and a history snapshot holds the record it started from.
+    /// </summary>
+    private static Compositor.Core.Format.CurvesSettings Clone(Compositor.Core.Format.CurvesSettings curves) => new()
+    {
+        Channel = curves.Channel,
+        Channels = curves.Channels
+            .Select(points => points.Select(point => new Compositor.Core.Format.CurvePoint { X = point.X, Y = point.Y }).ToList())
+            .ToList(),
+    };
+
     private void Accept(CameraRawSettings start)
     {
-        var settings = new CameraRawSettings
-        {
-            GlowStyle = Math.Max(0, _glowStyle.SelectedIndex),
-            VignetteStyle = Math.Max(0, _vignetteStyle.SelectedIndex),
-        };
-        foreach (var (slider, set, _, _) in _rows) set(settings, slider.Value);
+        var settings = Current();
         _result = settings.IsValid ? settings : null;
         Close();
     }

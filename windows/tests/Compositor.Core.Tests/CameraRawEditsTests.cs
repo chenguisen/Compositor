@@ -1,4 +1,5 @@
 using Compositor.Core.Document;
+using Compositor.Core.Format;
 using Compositor.Core.Model;
 using SkiaSharp;
 using LayerTransform = Compositor.Core.Model.LayerTransform;
@@ -263,6 +264,88 @@ public class CameraRawEditsTests
         Assert.Equal(128, Middle(layer).Red);
         // And a settings bag that asks for nothing in any group is still the identity.
         Assert.True(new CameraRawSettings().IsIdentity);
+    }
+
+    [Fact]
+    public void TheCurvePanelBendsTheWholePicture()
+    {
+        var (document, layer) = Flat(20, 20, new SKColor(128, 128, 128));
+        using var _ = document;
+        var curve = new CurvesSettings();
+        curve.Channels[0] = [new CurvePoint { X = 0, Y = 0 }, new CurvePoint { X = 128, Y = 190 }, new CurvePoint { X = 255, Y = 255 }];
+        Assert.True(CameraRawEdits.Apply(document, layer.ID, new CameraRawSettings { Curve = curve }));
+        // The mid grey is lifted, and being grey it comes back grey: the whole picture's curve bends all three
+        // channels the same way.
+        var pixel = Middle(layer);
+        Assert.True(pixel.Red > 180, $"the mid grey became {pixel}");
+        Assert.Equal(pixel.Red, pixel.Green);
+        Assert.Equal(pixel.Green, pixel.Blue);
+    }
+
+    [Fact]
+    public void RefineSaturationHoldsTheCurveOffTheColoursAlreadyStrong()
+    {
+        static SKColor WithRefine(double refine)
+        {
+            var bitmap = new SKBitmap(Bitmaps.ColorInfo(20, 20));
+            bitmap.Erase(new SKColor(200, 60, 60));
+            using var document = new CanvasDocument(Guid.NewGuid(), 20, 20);
+            var layer = new ImageLayer(Guid.NewGuid(), ImportedImage.Create(bitmap, "Red"),
+                new LayerTransform(0, 0, 20, 20), "Red");
+            document.Layers.Add(layer);
+            var curve = new CurvesSettings();
+            curve.Channels[0] = [new CurvePoint { X = 0, Y = 0 }, new CurvePoint { X = 128, Y = 200 }, new CurvePoint { X = 255, Y = 255 }];
+            Assert.True(CameraRawEdits.Apply(document, layer.ID, new CameraRawSettings
+            {
+                Curve = curve, RefineSaturation = refine,
+            }));
+            return layer.Asset!.Image.GetPixel(10, 10);
+        }
+        var plain = WithRefine(0);
+        var refined = WithRefine(100);
+        // The curve lifts both, and holding it off the saturated ones lifts the colour less.
+        Assert.True(plain.Red > 200, $"the curve did not lift it: {plain}");
+        Assert.NotEqual(plain, refined);
+    }
+
+    [Fact]
+    public void TheGradingWheelsTintTheTonalRangeTheyAreFor()
+    {
+        var (document, layer) = Flat(20, 20, new SKColor(40, 40, 40));
+        using var _ = document;
+        // Blue into the shadows: a dark picture comes back blue-ish rather than grey.
+        Assert.True(CameraRawEdits.Apply(document, layer.ID, new CameraRawSettings
+        {
+            ShadowHue = 220, ShadowSaturation = 100,
+        }));
+        var dark = Middle(layer);
+        Assert.True(dark.Blue > dark.Red, $"the shadows were not tinted: {dark}");
+
+        // The same push into the highlights leaves a dark picture nearly where it was.
+        var (bright, brightLayer) = Flat(20, 20, new SKColor(40, 40, 40));
+        using var _bright = bright;
+        Assert.True(CameraRawEdits.Apply(bright, brightLayer.ID, new CameraRawSettings
+        {
+            HighlightHue = 220, HighlightSaturation = 100,
+        }));
+        var stillDark = Middle(brightLayer);
+        Assert.True(stillDark.Blue - stillDark.Red < dark.Blue - dark.Red,
+            $"the highlight wheel took hold of the shadows: {stillDark}");
+    }
+
+    [Fact]
+    public void TheCurveAndGradingAmountsAreCheckedLikeTheOthers()
+    {
+        var (document, layer) = Flat(20, 20, SKColors.Gray);
+        using var _ = document;
+        // A hue is a place on the wheel, so past a whole turn is not one.
+        Assert.False(CameraRawEdits.Apply(document, layer.ID, new CameraRawSettings { MidtoneHue = 400 }));
+        Assert.False(CameraRawEdits.Apply(document, layer.ID, new CameraRawSettings { GradeBlending = 200 }));
+        // A curve that is not a curve is refused, where the panel's own validation refuses it.
+        var broken = new CameraRawSettings();
+        broken.Curve.Channels[2] = [new CurvePoint { X = 0, Y = 0 }];
+        Assert.False(CameraRawEdits.Apply(document, layer.ID, broken));
+        Assert.Equal(128, Middle(layer).Red);
     }
 
     [Fact]

@@ -108,6 +108,75 @@ public sealed class CameraRawSettings
     public double OpticsVignetteMidpoint { get; set; } = 50;
 
     // Calibration: the process version the sliders are read against
+    // Curve and grading: the last of the filter's panels
+    /// <summary>The Curve panel's own curve, which bends the whole picture rather than one channel.</summary>
+    public Format.CurvesSettings Curve { get; set; } = new();
+
+    /// <summary>−100 to 100: how much of the curve's bend is held off the colours that are already saturated.</summary>
+    public double RefineSaturation { get; set; }
+
+    /// <summary>Colour grading: what each of the three tonal ranges is pushed towards, and the whole picture.
+    /// The hue is a place on the wheel in degrees, the amount 0 to 100, and the lightness −100 to 100.</summary>
+    public double ShadowHue { get; set; }
+    public double ShadowSaturation { get; set; }
+    public double ShadowLuminance { get; set; }
+    public double MidtoneHue { get; set; }
+    public double MidtoneSaturation { get; set; }
+    public double MidtoneLuminance { get; set; }
+    public double HighlightHue { get; set; }
+    public double HighlightSaturation { get; set; }
+    public double HighlightLuminance { get; set; }
+    public double GlobalHue { get; set; }
+    public double GlobalSaturation { get; set; }
+    public double GlobalLuminance { get; set; }
+    /// <summary>0 to 100: how far each range reaches into the next.</summary>
+    public double GradeBlending { get; set; } = 50;
+    /// <summary>−100 to 100: where the crossover between the shadow and highlight ranges sits.</summary>
+    public double GradeBalance { get; set; }
+
+    /// <summary>The twelve numbers the grading kernel reads: four wheels of hue, amount and lightness.</summary>
+    internal float[] Grade =>
+    [
+        (float)(ShadowHue / 360), (float)(ShadowSaturation / 100), (float)(ShadowLuminance / 100),
+        (float)(MidtoneHue / 360), (float)(MidtoneSaturation / 100), (float)(MidtoneLuminance / 100),
+        (float)(HighlightHue / 360), (float)(HighlightSaturation / 100), (float)(HighlightLuminance / 100),
+        (float)(GlobalHue / 360), (float)(GlobalSaturation / 100), (float)(GlobalLuminance / 100),
+    ];
+
+    /// <summary>Whether the curve or what is held off it asks for anything.</summary>
+    public bool AdjustsCurve =>
+        RefineSaturation != 0 || CurveMoves;
+
+    /// <summary>Whether the grading asks for anything.</summary>
+    public bool AdjustsGrading =>
+        ShadowSaturation != 0 || ShadowLuminance != 0 || MidtoneSaturation != 0 || MidtoneLuminance != 0
+        || HighlightSaturation != 0 || HighlightLuminance != 0
+        || GlobalSaturation != 0 || GlobalLuminance != 0;
+
+    /// <summary>Whether the picture's curve has been moved off the straight line it opens as. The curve is the
+    /// very record the project holds, so its written form is compared rather than its points one by one.</summary>
+    public bool CurveMoves =>
+        System.Text.Json.JsonSerializer.Serialize(Curve, Format.ManifestJson.Options)
+        != System.Text.Json.JsonSerializer.Serialize(new Format.CurvesSettings(), Format.ManifestJson.Options);
+
+    /// <summary>The curve as the four lookup tables the kernel reads: the whole picture's, then red, green and
+    /// blue — each 256 entries of 0 to 1, which is what the kernel indexes and scales itself.</summary>
+    internal (float[] Luma, float[] Red, float[] Green, float[] Blue) Curves()
+    {
+        var luma = new float[256];
+        var red = new float[256];
+        var green = new float[256];
+        var blue = new float[256];
+        for (var value = 0; value < 256; value++)
+        {
+            luma[value] = (float)(Pixels.AdjustmentOperators.CurvesValue(Curve, 0, value) / 255);
+            red[value] = (float)(Pixels.AdjustmentOperators.CurvesValue(Curve, 1, value) / 255);
+            green[value] = (float)(Pixels.AdjustmentOperators.CurvesValue(Curve, 2, value) / 255);
+            blue[value] = (float)(Pixels.AdjustmentOperators.CurvesValue(Curve, 3, value) / 255);
+        }
+        return (luma, red, green, blue);
+    }
+
     /// <summary>1 to 6, as Photoshop numbers its process versions; six is the current one.</summary>
     public int ProcessVersion { get; set; } = 6;
     public double ShadowTint { get; set; }
@@ -163,7 +232,8 @@ public sealed class CameraRawSettings
 
     /// <summary>Nothing asked for, so there is nothing to do.</summary>
     public bool IsIdentity =>
-        !AdjustsLight && !AdjustsColor && !AdjustsEffects && !AdjustsDetail && !AdjustsOptics && !AdjustsCalibration;
+        !AdjustsLight && !AdjustsColor && !AdjustsEffects && !AdjustsDetail && !AdjustsOptics && !AdjustsCalibration
+        && !AdjustsCurve && !AdjustsGrading;
 
     /// <summary>Every slider within the range its group allows.</summary>
     public bool IsValid =>
@@ -192,7 +262,13 @@ public sealed class CameraRawSettings
         && ProcessVersion is >= 1 and <= 6
         && Within(ShadowTint, -100, 100) && Within(RedHue, -100, 100) && Within(RedSaturation, -100, 100)
         && Within(GreenHue, -100, 100) && Within(GreenSaturation, -100, 100)
-        && Within(BlueHue, -100, 100) && Within(BlueSaturation, -100, 100);
+        && Within(BlueHue, -100, 100) && Within(BlueSaturation, -100, 100)
+        && Within(RefineSaturation, -100, 100) && Curve.IsValid
+        && Within(ShadowHue, 0, 360) && Within(ShadowSaturation, 0, 100) && Within(ShadowLuminance, -100, 100)
+        && Within(MidtoneHue, 0, 360) && Within(MidtoneSaturation, 0, 100) && Within(MidtoneLuminance, -100, 100)
+        && Within(HighlightHue, 0, 360) && Within(HighlightSaturation, 0, 100) && Within(HighlightLuminance, -100, 100)
+        && Within(GlobalHue, 0, 360) && Within(GlobalSaturation, 0, 100) && Within(GlobalLuminance, -100, 100)
+        && Within(GradeBlending, 0, 100) && Within(GradeBalance, -100, 100);
 
     /// <summary>The corner's distance a distortion of ±100 moves, as the Mac build's lens strength is.</summary>
     public const double LensStrength = 0.35;
@@ -236,6 +312,15 @@ public static class CameraRawEdits
             AdjustPixels.CameraRaw(pixels, width, height, stride, red, green, blue,
                 settings.Exposure, settings.Contrast, settings.Highlights, settings.Shadows,
                 settings.Whites, settings.Blacks, settings.Vibrance, settings.Saturation, 0);
+        }
+        if (settings.AdjustsCurve || settings.AdjustsGrading)
+        {
+            var (luma, red, green, blue) = settings.Curves();
+            // The mixer is indexed whatever the point count is, so it is given its twenty-four places with
+            // nothing asked for in any of them. Colour mixing is a panel this filter does not offer yet.
+            AdjustPixels.CameraRawCurveColor(pixels, width, height, stride, luma, red, green, blue,
+                settings.RefineSaturation / 100, new float[24], 0, [], settings.Grade,
+                settings.GradeBlending / 100, settings.GradeBalance / 100, -1);
         }
         if (settings.AdjustsEffects)
         {
