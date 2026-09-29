@@ -16,7 +16,7 @@ public class MotionPixelsTests
     /// deviations, weighted by the Gaussian and read bilinearly, anything outside the picture as nothing.
     /// Written out plainly, so it is a specification rather than a second copy of the code under test.
     /// </summary>
-    internal static byte[] ReferenceOf(byte[] source, int width, int height, double sigma, double radians)
+    private static byte[] Reference(byte[] source, int width, int height, double sigma, double radians)
     {
         var dx = Math.Cos(radians);
         var dy = -Math.Sin(radians);
@@ -123,7 +123,7 @@ public class MotionPixelsTests
             var sigma = distance * MotionPixels.RadiusPerPixel;
             var fast = (byte[])source.Clone();
             MotionPixels.Streak(source, fast, side, side, side * 4, sigma, radians);
-            var exact = ReferenceOf(source, side, side, sigma, radians);
+            var exact = Reference(source, side, side, sigma, radians);
             var worst = Worst(fast, exact);
             // A streak shorter than the crossover is the tapped kernel itself, so it agrees to the rounding of
             // two ways of writing the same sum; past it three boxes stand in, which is the same stand-in the
@@ -205,6 +205,6 @@ public class MotionPixelsTests
         var sigma = 0.8;
         var blurred = (byte[])source.Clone();
         MotionPixels.Streak(source, blurred, side, side, side * 4, sigma, 0.7);
-        Assert.Equal(ReferenceOf(source, side, side, sigma, 0.7), blurred);
+        Assert.Equal(Reference(source, side, side, sigma, 0.7), blurred);
     }
 }
