@@ -256,6 +256,7 @@ public sealed class MainWindow : Window
                         Command("_Camera Raw Filter…", () => _ = CameraRawFilter()),
                         new Separator(),
                         Command("_Gaussian Blur…", () => _ = ApplyFilter(FilterKind.GaussianBlur)),
+                        Command("_Motion Blur…", () => _ = ApplyFilter(FilterKind.MotionBlur)),
                         Command("Add _Noise…", () => _ = ApplyFilter(FilterKind.AddNoise)),
                         Command("_Dither…", () => _ = DitherFilter()),
                         new Separator(),

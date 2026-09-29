@@ -23,6 +23,7 @@ internal sealed class FilterDialog : Window
         Title = kind switch
         {
             FilterKind.GaussianBlur => "Gaussian Blur",
+            FilterKind.MotionBlur => "Motion Blur",
             FilterKind.AddNoise => "Add Noise",
             FilterKind.Vignette => "Vignette",
             FilterKind.TonalContrast => "Tonal Contrast",
@@ -39,6 +40,10 @@ internal sealed class FilterDialog : Window
         {
             case FilterKind.GaussianBlur:
                 Add(group, "Radius, pixels", 0.1, 250, start.BlurRadius, defaults.BlurRadius, (s, v) => s.BlurRadius = v);
+                break;
+            case FilterKind.MotionBlur:
+                Add(group, "Angle, degrees", -90, 90, start.MotionAngle, defaults.MotionAngle, (s, v) => s.MotionAngle = v);
+                Add(group, "Distance, pixels", 1, 2000, start.MotionDistance, defaults.MotionDistance, (s, v) => s.MotionDistance = v, "0");
                 break;
             case FilterKind.AddNoise:
                 Add(group, "Amount, %", 0.1, 400, start.NoiseAmount, defaults.NoiseAmount, (s, v) => s.NoiseAmount = v);

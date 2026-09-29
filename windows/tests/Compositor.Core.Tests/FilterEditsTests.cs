@@ -298,6 +298,107 @@ public class FilterEditsTests
         Assert.Equal(128, Middle(layer).Red);
     }
 
+    /// <summary>One white dot in the middle of an otherwise empty layer.</summary>
+    private static (CanvasDocument Document, ImageLayer Layer) Dot(int side)
+    {
+        var bitmap = new SKBitmap(Bitmaps.ColorInfo(side, side));
+        bitmap.Erase(SKColors.Transparent);
+        bitmap.SetPixel(side / 2, side / 2, SKColors.White);
+        var document = new CanvasDocument(Guid.NewGuid(), side, side);
+        var layer = new ImageLayer(Guid.NewGuid(), ImportedImage.Create(bitmap, "Dot"),
+            new LayerTransform(0, 0, side, side), "Dot");
+        document.Layers.Add(layer);
+        return (document, layer);
+    }
+
+    /// <summary>
+    /// How far the ink reaches from <paramref name="origin"/> along the streak and across it, in document
+    /// units, for a streak at <paramref name="radians"/> counterclockwise from horizontal.
+    /// </summary>
+    private static (double Along, double Across) Reach(ImageLayer layer, SKPoint origin, double radians)
+    {
+        var toDocument = BrushEdits.PixelToDocument(layer.Transform, layer.Asset!.Width, layer.Asset.Height);
+        Assert.True(toDocument.TryInvert(out var toPixel));
+        var dx = Math.Cos(radians);
+        var dy = -Math.Sin(radians);
+        double along = 0, across = 0;
+        for (var distance = 0.0; distance < 40; distance += 0.5)
+        {
+            var on = toPixel.MapPoint((float)(origin.X + dx * distance), (float)(origin.Y + dy * distance));
+            if (Ink(layer, on) > 0) along = distance;
+            var side = toPixel.MapPoint((float)(origin.X - dy * distance), (float)(origin.Y + dx * distance));
+            if (Ink(layer, side) > 0) across = distance;
+        }
+        return (along, across);
+    }
+
+    private static int Ink(ImageLayer layer, SKPoint at)
+    {
+        var x = (int)Math.Floor(at.X);
+        var y = (int)Math.Floor(at.Y);
+        if (x < 0 || y < 0 || x >= layer.Asset!.Width || y >= layer.Asset.Height) return 0;
+        return layer.Asset.Image.GetPixel(x, y).Alpha;
+    }
+
+    [Fact]
+    public void MotionBlurStreaksAlongItsAngleCounterclockwiseFromHorizontal()
+    {
+        // A streak of sixteen layer pixels along a horizontal line leaves the dot's ink spread along it.
+        var (horizontal, acrossLayer) = Dot(41);
+        using var _horizontal = horizontal;
+        Assert.True(FilterEdits.Apply(horizontal, acrossLayer.ID, FilterKind.MotionBlur,
+            new FilterSettings { MotionAngle = 0, MotionDistance = 16 }));
+        var flat = Reach(acrossLayer, new SKPoint(20.5f, 20.5f), 0);
+        Assert.True(flat.Along > 6, $"the dot did not streak: {flat.Along}");
+        Assert.True(flat.Across < 2, $"the streak is as wide as it is long: {flat.Across}");
+
+        // Turned a quarter counterclockwise, the same streak runs up the picture instead.
+        var (turned, turnedLayer) = Dot(41);
+        using var _turned = turned;
+        Assert.True(FilterEdits.Apply(turned, turnedLayer.ID, FilterKind.MotionBlur,
+            new FilterSettings { MotionAngle = 90, MotionDistance = 16 }));
+        var up = Reach(turnedLayer, new SKPoint(20.5f, 20.5f), Math.PI / 2);
+        Assert.True(up.Along > 6, $"the turned dot did not streak: {up.Along}");
+        Assert.True(up.Across < 2, $"the turned streak is as wide as it is long: {up.Across}");
+    }
+
+    [Fact]
+    public void MotionBlurOfADistanceOutOfRangeIsRefused()
+    {
+        var (document, layer) = Flat(20, 20, SKColors.Gray);
+        using var _ = document;
+        Assert.False(FilterEdits.Apply(document, layer.ID, FilterKind.MotionBlur, new FilterSettings { MotionDistance = 0 }));
+        Assert.False(FilterEdits.Apply(document, layer.ID, FilterKind.MotionBlur, new FilterSettings { MotionDistance = 9000 }));
+        Assert.False(FilterEdits.Apply(document, layer.ID, FilterKind.MotionBlur, new FilterSettings { MotionAngle = 120 }));
+        Assert.Equal(128, Middle(layer).Red);
+    }
+
+    [Fact]
+    public void MotionBlurIsGivenRoomPastTheEdgeAndTrimmedBackAgain()
+    {
+        var (document, layer) = HalfBlock(40, 20);
+        using var _ = document;
+        Assert.True(FilterEdits.Apply(document, layer.ID, FilterKind.MotionBlur,
+            new FilterSettings { MotionAngle = 90, MotionDistance = 16 }));
+        // Streaked upwards and downwards, the layer grew vertically; the empty half is trimmed away.
+        Assert.True(layer.Asset!.Height > 20, $"the streak did not spread past the edge: {layer.Asset.Height}");
+        Assert.True(layer.Asset.Width < 40, $"the empty half was not trimmed: {layer.Asset.Width}");
+        Assert.True(AtDocument(layer, 10, 10).Red >= 240, $"the block's middle became {AtDocument(layer, 10, 10)}");
+    }
+
+    [Fact]
+    public void MotionBlurInsideASelectionLeavesTheRestAlone()
+    {
+        var (document, layer) = Flat(60, 40, new SKColor(180, 180, 180));
+        using var _ = document;
+        SelectionEdits.Select(document, SKRectI.Create(0, 0, 30, 40));
+        Assert.True(FilterEdits.Apply(document, layer.ID, FilterKind.MotionBlur,
+            new FilterSettings { MotionAngle = 0, MotionDistance = 12 }));
+        // Outside the selection the colour is exactly what it was.
+        Assert.Equal(180, layer.Asset!.Image.GetPixel(58, 20).Red);
+        Assert.Equal(180, layer.Asset.Image.GetPixel(40, 5).Red);
+    }
+
     [Fact]
     public void AddNoiseSpecklesThePixelsAndTheSameSeedIsTheSamePicture()
     {
