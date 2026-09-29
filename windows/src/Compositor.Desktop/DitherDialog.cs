@@ -63,7 +63,7 @@ internal sealed class DitherDialog : DialogWindow
             () => _pixelSize.Value > 1 && Style() != DitherStyle.Ascii);
 
         Heading(group, "Tones");
-        Add(group, "Levels", 2, 8, start.Levels, defaults.Levels, (s, v) => s.Levels = v, "0",
+        Add(group, "Tones", 2, 8, start.Levels, defaults.Levels, (s, v) => s.Levels = v, "0",
             () => DitherSettings.HasTones(Style()));
         Add(group, "Diffusion, %", 0, 100, start.Diffusion, defaults.Diffusion, (s, v) => s.Diffusion = v, "0",
             () => DitherSettings.Diffuses(Style()));

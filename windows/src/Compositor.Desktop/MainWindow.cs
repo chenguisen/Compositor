@@ -740,6 +740,9 @@ public sealed class MainWindow : Window
         return bar;
     }
 
+    /// <summary>The toolbar's own view controls, by their label, so the checks can press them as a pointer does.</summary>
+    private readonly Dictionary<string, Button> _toolbar = [];
+
     /// <summary>A button of the toolbar: the same command a View menu row is, with the status line refreshed.</summary>
     private Button ViewButton(string text, string hint, Action act)
     {
@@ -750,6 +753,7 @@ public sealed class MainWindow : Window
             act();
             Say();
         };
+        _toolbar[text] = button;
         return button;
     }
 
@@ -1940,6 +1944,26 @@ public sealed class MainWindow : Window
         if (_tool != Tool.Brush || _rail.Marked != Tool.Brush)
         {
             throw new InvalidOperationException($"clicking the rail's Brush gave {_tool}");
+        }
+
+        // The toolbar's own zoom button, clicked: the strip under the menu bar is the Mac's furniture, and until
+        // now it had only ever been invoked through the same methods the View menu calls.
+        _canvas.Fit();
+        var zoomWas = _canvas.Zoom;
+        if (!_toolbar.TryGetValue("100%", out var actual))
+        {
+            throw new InvalidOperationException("the toolbar has no 100% button");
+        }
+        if (actual.TranslatePoint(new Point(actual.Bounds.Width / 2, actual.Bounds.Height / 2), this)
+            is not { } onActual)
+        {
+            throw new InvalidOperationException("the toolbar's 100% button is not in the window");
+        }
+        Click(onActual);
+        report.Add($"the toolbar's 100% button clicked: zoom {zoomWas * 100:0}% → {_canvas.Zoom * 100:0}%");
+        if (Math.Abs(_canvas.Zoom - 1) > 0.001)
+        {
+            throw new InvalidOperationException($"the toolbar's 100% left the zoom at {_canvas.Zoom * 100:0}%");
         }
 
         // The Camera Raw panel's own amounts, clicked rather than driven through the panel's API: the panel is
