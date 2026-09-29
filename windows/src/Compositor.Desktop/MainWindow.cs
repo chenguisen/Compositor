@@ -1869,6 +1869,26 @@ public sealed class MainWindow : Window
             + $"one \"{_history.UndoName}\" step");
         if (nowOpacity >= wasOpacity) throw new InvalidOperationException("the slider did not dim the layer");
 
+        // The Move tool's corner taken on its own with Control held: a distortion, resampled on release. This is
+        // before the crop so the layer being warped is still on the canvas for a handle to be pressed on.
+        Reselect(target.ID);
+        SetTool(Tool.Move);
+        if (_canvas.TransformBox is not { } warpBox) throw new InvalidOperationException("no transform box to distort");
+        var warpCorner = TransformEdits.Position(warpBox, TransformHandle.TopLeft);
+        var inked = InkOf(document.Layers.First(one => one.ID == target.ID).Asset!.Image);
+        var holding = RawInputModifiers.LeftMouseButton | RawInputModifiers.Control;
+        this.MouseDown(Aim(warpCorner), MouseButton.Left, holding);
+        this.MouseMove(Aim(new SKPoint(warpCorner.X + 40, warpCorner.Y + 30)), holding);
+        this.MouseUp(Aim(new SKPoint(warpCorner.X + 40, warpCorner.Y + 30)), MouseButton.Left, RawInputModifiers.None);
+        var inkedNow = InkOf(document.Layers.First(one => one.ID == target.ID).Asset!.Image);
+        report.Add($"a Control-drag on the transform box's top-left corner: the layer's pixels "
+            + $"{(inkedNow == inked ? "did NOT change" : "were resampled")}, one \"{_history.UndoName}\" step");
+        if (inkedNow == inked) throw new InvalidOperationException("the corner drag did not distort the layer");
+        if (_history.UndoName != "Distort")
+        {
+            throw new InvalidOperationException($"the distort made a \"{_history.UndoName}\" step");
+        }
+
         // The Crop tool: picking it with something selected starts its frame at the selection, as the Mac build
         // does, and a corner handle drags it in from there.
         var selected = document.Selection.Path!.Bounds;
