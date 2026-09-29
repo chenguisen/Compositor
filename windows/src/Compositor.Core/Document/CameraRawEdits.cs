@@ -276,10 +276,16 @@ public sealed class CameraRawSettings
         ShadowTint != 0 || RedHue != 0 || RedSaturation != 0 || GreenHue != 0 || GreenSaturation != 0
         || BlueHue != 0 || BlueSaturation != 0;
 
+    /// <summary>The geometry group, which moves the picture inside its own pixels rather than grading them.</summary>
+    public CameraRawGeometrySettings Geometry { get; set; } = new();
+
+    /// <summary>Whether the geometry group asks for anything.</summary>
+    public bool AdjustsGeometry => Geometry.Adjusts;
+
     /// <summary>Nothing asked for, so there is nothing to do.</summary>
     public bool IsIdentity =>
         !AdjustsLight && !AdjustsColor && !AdjustsEffects && !AdjustsDetail && !AdjustsOptics && !AdjustsCalibration
-        && !AdjustsCurve && !AdjustsGrading && !AdjustsMixer && !AdjustsPointColor;
+        && !AdjustsCurve && !AdjustsGrading && !AdjustsMixer && !AdjustsPointColor && !AdjustsGeometry;
 
     /// <summary>Every slider within the range its group allows.</summary>
     public bool IsValid =>
@@ -315,6 +321,7 @@ public sealed class CameraRawSettings
         && Within(HighlightHue, 0, 360) && Within(HighlightSaturation, 0, 100) && Within(HighlightLuminance, -100, 100)
         && Within(GlobalHue, 0, 360) && Within(GlobalSaturation, 0, 100) && Within(GlobalLuminance, -100, 100)
         && Within(GradeBlending, 0, 100) && Within(GradeBalance, -100, 100)
+        && Geometry.IsValid
         && Mixer.Length == 24 && Mixer.All(value => Within(value, -100, 100))
         && Points.Count <= MostPoints && Points.All(point => point.IsValid);
 
@@ -404,6 +411,10 @@ public static class CameraRawEdits
     {
         if (settings.IsIdentity || !settings.IsValid) return false;
         if (document.Layers.FirstOrDefault(layer => layer.ID == layerID) is not { } layer) return false;
+        // The geometry group turns and keystones the picture itself, so it comes before anything that reads the
+        // pixels — as the Mac build warps the image before it hands it to the kernels. A shape that cannot be
+        // made refuses the whole filter rather than grading pixels the panel did not ask to be moved.
+        if (settings.AdjustsGeometry && !GeometryEdits.Apply(document, layerID, settings.Geometry)) return false;
         if (!FilterSurface.Begin(layer, 0, out var work, out var placement)) return false;
         using var _ = work;
         using var was = document.Selection.Path is null ? null : FilterSurface.Copy(work);

@@ -8,14 +8,15 @@ using SkiaSharp;
 namespace Compositor.Desktop;
 
 /// <summary>
-/// The Camera Raw Filter's panel: its Light, Color and Effects groups as sliders, and OK to apply them to
-/// the layer's pixels. Avalonia ships no such dialog, so this is one.
+/// The Camera Raw Filter's panel: every group of settings as sliders, and OK to apply them to the layer's
+/// pixels. Avalonia ships no such dialog, so this is one.
 /// </summary>
 internal sealed class CameraRawDialog : Window
 {
     private readonly List<(Slider Slider, Action<CameraRawSettings, double> Set, TextBlock Readout, string Format)> _rows = [];
     private readonly ComboBox _glowStyle = new();
     private readonly ComboBox _vignetteStyle = new();
+    private readonly ComboBox _geometryProjection = new();
     private readonly ComboBox _curveChannel = new();
     private readonly ListBox _points = new() { Height = 96 };
     private readonly List<CameraRawPointColor> _pointList = [];
@@ -102,6 +103,18 @@ internal sealed class CameraRawDialog : Window
         Add(groups, "Green hue high", 0, 360, start.GreenHueHigh, (s, v) => s.GreenHueHigh = v);
         Add(groups, "Lens vignette", -100, 100, start.OpticsVignetteAmount, (s, v) => s.OpticsVignetteAmount = v);
         Add(groups, "Lens vignette midpoint", 0, 100, start.OpticsVignetteMidpoint, (s, v) => s.OpticsVignetteMidpoint = v);
+
+        groups.Children.Add(Heading("Geometry"));
+        groups.Children.Add(Choice("Projection", _geometryProjection, ["Perspective", "Rectilinear"]));
+        Add(groups, "Vertical", -100, 100, start.Geometry.Vertical, (s, v) => s.Geometry.Vertical = v);
+        Add(groups, "Horizontal", -100, 100, start.Geometry.Horizontal, (s, v) => s.Geometry.Horizontal = v);
+        Add(groups, "Rotate", -45, 45, start.Geometry.Rotate, (s, v) => s.Geometry.Rotate = v);
+        Add(groups, "Aspect", -100, 100, start.Geometry.Aspect, (s, v) => s.Geometry.Aspect = v);
+        Add(groups, "Scale", -100, 100, start.Geometry.Scale, (s, v) => s.Geometry.Scale = v);
+        Add(groups, "Offset X", -100, 100, start.Geometry.OffsetX, (s, v) => s.Geometry.OffsetX = v);
+        Add(groups, "Offset Y", -100, 100, start.Geometry.OffsetY, (s, v) => s.Geometry.OffsetY = v);
+        Add(groups, "Constrain crop", 0, 1, start.Geometry.ConstrainCrop ? 1 : 0,
+            (s, v) => s.Geometry.ConstrainCrop = v > 0.5, "0");
 
         groups.Children.Add(Heading("Calibration"));
         Add(groups, "Process version", 1, 6, start.ProcessVersion, (s, v) => s.ProcessVersion = (int)Math.Round(v), "0");
@@ -397,6 +410,10 @@ internal sealed class CameraRawDialog : Window
         {
             GlowStyle = Math.Max(0, _glowStyle.SelectedIndex),
             VignetteStyle = Math.Max(0, _vignetteStyle.SelectedIndex),
+            Geometry = new CameraRawGeometrySettings
+            {
+                Projection = (GeometryProjection)Math.Max(0, _geometryProjection.SelectedIndex),
+            },
             Curve = _curve is { } curve ? curve.Curves : new Compositor.Core.Format.CurvesSettings(),
             // The mixer's places are written into by the rows, so the settings the rows are handed have all
             // twenty-four of them whatever the layer's panel started from.
