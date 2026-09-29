@@ -85,11 +85,64 @@ public static class DocumentRenderer
     }
 
     /// <summary>
+    /// One layer's own pixels drawn at its transform, whole, with no mask, no opacity and no blend — how a
+    /// command-click reads them, and what the sample a selection tool matches against holds.
+    /// </summary>
+    public static void DrawLayerPixels(SKCanvas canvas, ImageLayer layer)
+    {
+        if (layer.Asset is not { } asset) return;
+        using var paint = new SKPaint { IsAntialias = true };
+        DrawTransformed(canvas, asset.Image, layer.Transform, SKBlendMode.SrcOver, paint);
+    }
+
+    /// <summary>
     /// A layer whose content is not a raster is not drawn yet, and drawing it as nothing would quietly
     /// change the picture. This says so instead.
     /// </summary>
     internal static NotSupportedException Unsupported(ImageLayer layer) =>
         new($"Rendering layer effects is not implemented yet (layer '{layer.Name}').");
+
+    /// <summary>
+    /// Draws one image at a layer transform: rotation clockwise about the rect's center, with the flips
+    /// applied before the rotation reads it.
+    /// </summary>
+    private static void DrawTransformed(SKCanvas canvas, SKBitmap image, Model.LayerTransform transform,
+        SKBlendMode blend, SKPaint paint)
+    {
+        canvas.Save();
+        canvas.Translate((float)(transform.X + transform.Width / 2), (float)(transform.Y + transform.Height / 2));
+        canvas.RotateDegrees((float)transform.Rotation);
+        canvas.Scale(transform.FlipX ? -1 : 1, transform.FlipY ? -1 : 1);
+        canvas.Translate((float)(-transform.Width / 2), (float)(-transform.Height / 2));
+        paint.BlendMode = blend;
+        using var source = SKImage.FromBitmap(image);
+        canvas.DrawImage(source, SKRect.Create(0, 0, (float)transform.Width, (float)transform.Height),
+            Sampling(transform, image.Width, image.Height), paint);
+        canvas.Restore();
+    }
+
+    /// <summary>
+    /// How an image is resampled into its rectangle. The Mac build overrides the requested quality: an
+    /// upright image that lands exactly on its own pixels is drawn with none at all, and anything being
+    /// shrunk is drawn low, because a filter over a reduction only blurs it further.
+    /// </summary>
+    private static SKSamplingOptions Sampling(Model.LayerTransform transform, int sourceWidth, int sourceHeight)
+    {
+        if (transform.Rotation == 0 && transform.Width == sourceWidth && transform.Height == sourceHeight) return OneToOne;
+        if (transform.Width <= sourceWidth && transform.Height <= sourceHeight)
+        {
+            return new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None);
+        }
+        return Sampling(transform.Sampling);
+    }
+
+    /// <summary>The filter a layer was imported or placed with.</summary>
+    private static SKSamplingOptions Sampling(LayerSampling sampling) => sampling switch
+    {
+        LayerSampling.Nearest => new SKSamplingOptions(SKFilterMode.Nearest, SKMipmapMode.None),
+        LayerSampling.Smooth => new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None),
+        _ => new SKSamplingOptions(SKCubicResampler.Mitchell),
+    };
 
     private sealed class Renderer
     {
@@ -503,25 +556,6 @@ public static class DocumentRenderer
             Alpha,
         }
 
-        /// <summary>
-        /// Draws one image at a layer transform: rotation clockwise about the rect's center, with the flips
-        /// applied before the rotation reads it.
-        /// </summary>
-        private static void DrawTransformed(SKCanvas canvas, SKBitmap image, Model.LayerTransform transform,
-            SKBlendMode blend, SKPaint paint)
-        {
-            canvas.Save();
-            canvas.Translate((float)(transform.X + transform.Width / 2), (float)(transform.Y + transform.Height / 2));
-            canvas.RotateDegrees((float)transform.Rotation);
-            canvas.Scale(transform.FlipX ? -1 : 1, transform.FlipY ? -1 : 1);
-            canvas.Translate((float)(-transform.Width / 2), (float)(-transform.Height / 2));
-            paint.BlendMode = blend;
-            using var source = SKImage.FromBitmap(image);
-            canvas.DrawImage(source, SKRect.Create(0, 0, (float)transform.Width, (float)transform.Height),
-                Sampling(transform, image.Width, image.Height), paint);
-            canvas.Restore();
-        }
-
         /// <summary>Places a rendered layer on the target: Skia draws the sixteen modes it has, the rest are done by hand.</summary>
         private static void Composite(Target target, SKBitmap content, SKRectI bounds, LayerBlendMode mode, double opacity)
         {
@@ -582,28 +616,6 @@ public static class DocumentRenderer
             var bottom = (float)Math.Ceiling(centreY + height / 2) + padding;
             return SKRectI.Create((int)left, (int)top, (int)(right - left), (int)(bottom - top));
         }
-
-        /// <summary>
-        /// How an image is resampled into its rectangle. The Mac build overrides the requested quality: an
-        /// upright image that lands exactly on its own pixels is drawn with none at all, and anything being
-        /// shrunk is drawn low, because a filter over a reduction only blurs it further.
-        /// </summary>
-        private static SKSamplingOptions Sampling(Model.LayerTransform transform, int sourceWidth, int sourceHeight)
-        {
-            if (transform.Rotation == 0 && transform.Width == sourceWidth && transform.Height == sourceHeight) return OneToOne;
-            if (transform.Width <= sourceWidth && transform.Height <= sourceHeight)
-            {
-                return new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None);
-            }
-            return Sampling(transform.Sampling);
-        }
-
-        private static SKSamplingOptions Sampling(LayerSampling sampling) => sampling switch
-        {
-            LayerSampling.Nearest => new SKSamplingOptions(SKFilterMode.Nearest, SKMipmapMode.None),
-            LayerSampling.Smooth => new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None),
-            _ => new SKSamplingOptions(SKCubicResampler.Mitchell),
-        };
 
         private readonly record struct Target(SKBitmap Bitmap, SKCanvas Canvas, SKPointI Origin);
     }

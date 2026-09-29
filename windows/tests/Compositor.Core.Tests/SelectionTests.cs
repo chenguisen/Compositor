@@ -24,7 +24,7 @@ public class SelectionTests
     {
         var (document, _) = Flat(20, 20);
         using var __ = document;
-        Assert.Null(document.Selection.Rect);
+        Assert.Null(document.Selection.Path);
         Assert.True(document.Selection.Contains(0, 0));
         Assert.True(document.Selection.Contains(19, 19));
     }
@@ -36,13 +36,13 @@ public class SelectionTests
         using var __ = document;
 
         Assert.True(SelectionEdits.SelectAll(document));
-        // It is a rectangle the tool can show, unlike having no selection at all.
-        Assert.Equal(SKRectI.Create(0, 0, 20, 20), document.Selection.Rect);
+        // It is an outline the tool can show, unlike having no selection at all.
+        Assert.Equal(SKRect.Create(0, 0, 20, 20), document.Selection.Path!.Bounds);
         Assert.True(document.Selection.Contains(19, 19));
         Assert.False(SelectionEdits.SelectAll(document));
 
         Assert.True(SelectionEdits.Deselect(document));
-        Assert.Null(document.Selection.Rect);
+        Assert.Null(document.Selection.Path);
         Assert.False(SelectionEdits.Deselect(document));
     }
 
@@ -52,7 +52,7 @@ public class SelectionTests
         var (document, _) = Flat(20, 20);
         using var __ = document;
         Assert.True(SelectionEdits.Select(document, SKRectI.Create(-5, 5, 40, 10)));
-        Assert.Equal(SKRectI.Create(0, 5, 20, 10), document.Selection.Rect);
+        Assert.Equal(SKRect.Create(0, 5, 20, 10), document.Selection.Path!.Bounds);
     }
 
     [Fact]
@@ -61,7 +61,7 @@ public class SelectionTests
         var (document, _) = Flat(20, 20);
         using var __ = document;
         Assert.False(SelectionEdits.Select(document, SKRectI.Create(30, 30, 5, 5)));
-        Assert.Null(document.Selection.Rect);
+        Assert.Null(document.Selection.Path);
     }
 
     [Fact]
@@ -92,12 +92,12 @@ public class SelectionTests
         SelectionEdits.Select(document, SKRectI.Create(2, 3, 5, 5));
         history.End(document, layer.ID);
 
-        Assert.Equal(SKRectI.Create(2, 3, 5, 5), document.Selection.Rect);
+        Assert.Equal(SKRect.Create(2, 3, 5, 5), document.Selection.Path!.Bounds);
         Assert.True(history.CanUndo);
 
         // A selection is part of the document, so undo covers it even though it is not saved.
         var restored = history.Undo();
         Assert.NotNull(restored);
-        Assert.Null(restored!.Value.Document!.Selection.Rect);
+        Assert.Null(restored!.Value.Document!.Selection.Path);
     }
 }

@@ -3,29 +3,200 @@ using SkiaSharp;
 namespace Compositor.Core.Model;
 
 /// <summary>
-/// What an edit is allowed to touch: a rectangle of the document, or all of it. The Mac build holds a path
-/// with a feather and a coverage mask; this holds the one shape the marquee tool draws so far, which is
-/// exact and costs nothing to keep. Lasso, wand, feather, and adding to and subtracting from a selection
-/// all need that coverage model and are not here.
+/// What an edit is allowed to touch: a path over the document, with a feather, or nothing at all.
+/// <para>
+/// The path is in document pixels with a top-left origin, and coverage is its gray level — white where a
+/// pixel is selected, a partial value on an antialiased or feathered edge, black outside. A history
+/// snapshot shares the path rather than copying it, so nothing here disposes it; the garbage collector
+/// releases the ones an edit replaces, as the Mac build lets its CGPath go out of scope.
+/// </para>
 /// </summary>
 public sealed class DocumentSelection
 {
-    private DocumentSelection(SKRectI? rect) => Rect = rect;
+    private DocumentSelection(SKPath? path, bool antialiased, double feather)
+    {
+        Path = path;
+        Antialiased = antialiased;
+        Feather = feather;
+    }
 
-    /// <summary>The selected rectangle, or null for the whole document.</summary>
-    public SKRectI? Rect { get; }
+    /// <summary>The outline, or null when there is no selection at all.</summary>
+    public SKPath? Path { get; }
+
+    /// <summary>Whether the outline is drawn with a soft edge of its own, before the feather.</summary>
+    public bool Antialiased { get; }
+
+    /// <summary>How far the edge fades, in document pixels. Zero is a hard edge.</summary>
+    public double Feather { get; }
 
     /// <summary>Nothing is selected, so an edit may touch the whole document.</summary>
-    public static DocumentSelection All { get; } = new(null);
+    public static DocumentSelection All { get; } = new(null, true, 0);
 
-    /// <summary>A rectangle of the document, held to its bounds. An empty rectangle is no selection.</summary>
+    /// <summary>A selection around a shape, which may enclose nothing at all.</summary>
+    public static DocumentSelection FromPath(SKPath path, bool antialiased = true, double feather = 0) =>
+        new(path, antialiased, feather);
+
+    /// <summary>A rectangle of the document, held to its bounds. An empty rectangle selects nothing.</summary>
     public static DocumentSelection Rectangular(SKRectI rect, int width, int height)
     {
         var held = SKRectI.Intersect(rect, SKRectI.Create(0, 0, width, height));
-        return held.Width <= 0 || held.Height <= 0 ? All : new DocumentSelection(held);
+        if (held.Width <= 0 || held.Height <= 0) return FromPath(new SKPath());
+        using var builder = new SKPathBuilder();
+        builder.AddRect(SKRect.Create(held.Left, held.Top, held.Width, held.Height), SKPathDirection.Clockwise);
+        return FromPath(builder.Detach());
     }
 
-    /// <summary>Whether a whole pixel is inside the selection.</summary>
-    public bool Contains(int x, int y) =>
-        Rect is not { } rect || (x >= rect.Left && x < rect.Right && y >= rect.Top && y < rect.Bottom);
+    /// <summary>Whether the outline encloses nothing.</summary>
+    public bool IsEmpty => Path is { } path
+        && (path.IsEmpty || path.Bounds.Width <= 0 || path.Bounds.Height <= 0);
+
+    /// <summary>Whether a whole pixel is inside the selection. A softened edge is not accounted for here.</summary>
+    public bool Contains(int x, int y) => Path is not { } path || path.Contains(x + 0.5f, y + 0.5f);
+
+    /// <summary>The same outline with a softer edge.</summary>
+    public DocumentSelection WithFeather(double feather) => new(Path, Antialiased, feather);
+
+    /// <summary>The same softening around a different outline, as Modify and Inverse keep what they were given.</summary>
+    public DocumentSelection WithPath(SKPath path) => new(path, Antialiased, Feather);
+
+    /// <summary>
+    /// The same outline moved by whole pixels. It is not held to the canvas, so it can be dragged off the
+    /// edge and back intact, as the Mac build allows.
+    /// </summary>
+    public DocumentSelection Translated(double dx, double dy)
+    {
+        if (Path is not { } path) return this;
+        using var builder = new SKPathBuilder();
+        builder.AddPath(path, SKPathAddMode.Append);
+        var moved = builder.Detach();
+        moved.Transform(SKMatrix.CreateTranslation((float)dx, (float)dy));
+        return new DocumentSelection(moved, Antialiased, Feather);
+    }
+
+    /// <summary>
+    /// The rectangle of the canvas a selection can affect: its own bounds, grown by what a feather reaches
+    /// and by a pixel for the antialiased edge. An empty rectangle means the selection affects nothing.
+    /// </summary>
+    public SKRectI CoverageRect(int canvasWidth, int canvasHeight)
+    {
+        if (Path is not { } path || IsEmpty) return SKRectI.Create(0, 0, 0, 0);
+        var reach = (float)Math.Ceiling(Feather * 2) + 1;
+        var bounds = path.Bounds;
+        var needed = SKRect.Create((float)Math.Floor(bounds.Left - reach), (float)Math.Floor(bounds.Top - reach),
+            (float)Math.Ceiling(bounds.Right + reach) - (float)Math.Floor(bounds.Left - reach),
+            (float)Math.Ceiling(bounds.Bottom + reach) - (float)Math.Floor(bounds.Top - reach));
+        var held = SKRectI.Intersect(SKRectI.Create((int)needed.Left, (int)needed.Top,
+            (int)needed.Width, (int)needed.Height), SKRectI.Create(0, 0, canvasWidth, canvasHeight));
+        return held.Width <= 0 || held.Height <= 0 ? SKRectI.Create(0, 0, 0, 0) : held;
+    }
+
+    /// <summary>
+    /// Gray coverage over a region of the document, white where selected. Null when there is no selection at
+    /// all, which means nothing is being held back.
+    /// </summary>
+    public SKBitmap? Coverage(SKRectI region)
+    {
+        if (Path is not { } path) return null;
+        var coverage = Bitmaps.Allocate(Bitmaps.MaskInfo(Math.Max(1, region.Width), Math.Max(1, region.Height)));
+        coverage.Erase(SKColors.Black);
+        if (region.Width <= 0 || region.Height <= 0 || path.IsEmpty) return coverage;
+        using (var canvas = new SKCanvas(coverage))
+        {
+            canvas.Translate(-region.Left, -region.Top);
+            using var paint = new SKPaint
+            {
+                Color = SKColors.White,
+                Style = SKPaintStyle.Fill,
+                IsAntialias = Antialiased || Feather > 0,
+            };
+            canvas.DrawPath(path, paint);
+        }
+        if (Feather > 0)
+        {
+            // A feathered edge fades either side of the outline, as Photoshop's does. The fade is worked out
+            // here, in gray levels, rather than by a paint filter, so a feathered edge always fades the way a
+            // mask's coverage has to.
+            Blur(coverage.GetPixelSpan(), coverage.Width, coverage.Height, Feather / 2);
+        }
+        return coverage;
+    }
+
+    /// <summary>
+    /// A Gaussian blur of a gray coverage, with the pixels off the edge read as the ones at the edge — Core
+    /// Image's <c>clampedToExtent</c> — so a selection that reaches the canvas edge stays solid there. A
+    /// float plane holds a pass between the two.
+    /// </summary>
+    private static void Blur(Span<byte> coverage, int width, int height, double sigma)
+    {
+        if (sigma <= 0 || width <= 0 || height <= 0) return;
+        var weights = Weights((float)sigma, out var half);
+        float[] row;
+        float[] pass;
+        try
+        {
+            row = new float[width * height];
+            pass = new float[width * height];
+        }
+        catch (OutOfMemoryException)
+        {
+            return;
+        }
+        for (var index = 0; index < row.Length; index++) row[index] = coverage[index];
+        for (var y = 0; y < height; y++)
+        {
+            for (var x = 0; x < width; x++)
+            {
+                float total = 0;
+                for (var tap = -half; tap <= half; tap++)
+                {
+                    total += weights[tap + half] * row[y * width + Math.Clamp(x + tap, 0, width - 1)];
+                }
+                pass[y * width + x] = total;
+            }
+        }
+        for (var y = 0; y < height; y++)
+        {
+            for (var x = 0; x < width; x++)
+            {
+                float total = 0;
+                for (var tap = -half; tap <= half; tap++)
+                {
+                    total += weights[tap + half] * pass[Math.Clamp(y + tap, 0, height - 1) * width + x];
+                }
+                coverage[y * width + x] = (byte)Math.Clamp(Math.Round(total), 0, 255);
+            }
+        }
+    }
+
+    /// <summary>A normalized Gaussian, three standard deviations wide, one tap per pixel.</summary>
+    private static float[] Weights(float sigma, out int half)
+    {
+        half = Math.Max(1, (int)Math.Ceiling(sigma * 3));
+        var weights = new float[half * 2 + 1];
+        float total = 0;
+        for (var tap = -half; tap <= half; tap++)
+        {
+            var weight = MathF.Exp(-(float)(tap * tap) / (2 * sigma * sigma));
+            weights[tap + half] = weight;
+            total += weight;
+        }
+        for (var index = 0; index < weights.Length; index++) weights[index] /= total;
+        return weights;
+    }
+
+    /// <summary>Whether two selections would let an edit touch the same pixels, compared by outline.</summary>
+    public bool Matches(DocumentSelection other)
+    {
+        if (ReferenceEquals(this, other)) return true;
+        if (Path is null || other.Path is null) return Path is null && other.Path is null;
+        if (Antialiased != other.Antialiased || Feather != other.Feather) return false;
+        if (Path.Bounds != other.Path.Bounds || Path.PointCount != other.Path.PointCount) return false;
+        var points = Path.Points;
+        var mine = other.Path.Points;
+        for (var index = 0; index < points.Length; index++)
+        {
+            if (!points[index].Equals(mine[index])) return false;
+        }
+        return true;
+    }
 }

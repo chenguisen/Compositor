@@ -86,7 +86,23 @@ public static class BrushEdits
         var radius = settings.Diameter / 2;
         var spacing = Spacing(settings.Diameter, settings.Hardness);
         var hard = settings.Hardness >= 1;
-        var selection = document.Selection;
+        // The selection is a gray coverage over its own rectangle of the document, so a dab that straddles
+        // its edge is painted in part rather than all or nothing.
+        var region = document.Selection.CoverageRect(document.Width, document.Height);
+        SKBitmap? clip;
+        try
+        {
+            clip = document.Selection.Coverage(region);
+        }
+        catch (InvalidOperationException)
+        {
+            // The coverage would not fit in memory. Painting without it would paint outside the selection,
+            // so the stroke is refused instead.
+            return false;
+        }
+        using var _ = clip;
+        ReadOnlySpan<byte> clipped = clip is null ? default : clip.GetPixelSpan();
+        var selection = new Clip(clipped, clip?.RowBytes ?? 0, region);
         // The first dab sits on the first sample; the rest follow it at even spacing, carrying whatever
         // distance is left over the end of one run into the next so a fast pointer leaves no gaps.
         Stamp(coverage, width, height, points[0], radius, toDocument, toPixel, hard, settings.Hardness, selection);
@@ -144,11 +160,11 @@ public static class BrushEdits
 
     /// <summary>
     /// One dab, measured in document pixels so a rotated or stretched layer still gets a round brush: every
-    /// pixel near the dab is carried back to the document and asked how far it is from the middle. A pixel
-    /// the selection leaves out is not painted at all.
+    /// pixel near the dab is carried back to the document and asked how far it is from the middle. The
+    /// selection scales each pixel, so a dab that straddles a feathered edge is painted in part.
     /// </summary>
     private static void Stamp(float[] coverage, int width, int height, SKPoint centre, double radius,
-        SKMatrix toDocument, SKMatrix toPixel, bool hard, double hardness, DocumentSelection selection)
+        SKMatrix toDocument, SKMatrix toPixel, bool hard, double hardness, Clip selection)
     {
         // The document square around the dab, brought into pixels: a generous box, since the transform may
         // turn it.
@@ -170,10 +186,8 @@ public static class BrushEdits
             for (var x = left; x < right; x++)
             {
                 var at = toDocument.MapPoint(x + 0.5f, y + 0.5f);
-                if (selection.Rect is not null
-                    && !selection.Contains((int)Math.Floor(at.X), (int)Math.Floor(at.Y))) continue;
                 var distance = Math.Sqrt(Math.Pow(at.X - centre.X, 2) + Math.Pow(at.Y - centre.Y, 2));
-                var tip = Tip(distance, radius, hardness);
+                var tip = Tip(distance, radius, hardness) * selection.At(at.X, at.Y);
                 if (tip <= 0) continue;
                 var index = y * width + x;
                 // Overlapping dabs within one stroke must not build up: they take the larger coverage, or
@@ -181,6 +195,34 @@ public static class BrushEdits
                 coverage[index] = hard ? Math.Max(coverage[index], (float)tip)
                     : coverage[index] + (float)tip - coverage[index] * (float)tip;
             }
+        }
+    }
+
+    /// <summary>
+    /// The selection as gray coverage over one rectangle of the document. Empty pixels mean there is no
+    /// selection at all, so everything is painted; a rectangle with no size means nothing is.
+    /// </summary>
+    private readonly ref struct Clip
+    {
+        private readonly ReadOnlySpan<byte> _pixels;
+        private readonly int _stride;
+        private readonly SKRectI _region;
+
+        public Clip(ReadOnlySpan<byte> pixels, int stride, SKRectI region)
+        {
+            _pixels = pixels;
+            _stride = stride;
+            _region = region;
+        }
+
+        /// <summary>How much of a document pixel the selection lets through, from 0 to 1.</summary>
+        public float At(float x, float y)
+        {
+            if (_pixels.IsEmpty) return 1;
+            var column = (int)Math.Floor(x) - _region.Left;
+            var row = (int)Math.Floor(y) - _region.Top;
+            if (column < 0 || row < 0 || column >= _region.Width || row >= _region.Height) return 0;
+            return _pixels[row * _stride + column] / 255f;
         }
     }
 

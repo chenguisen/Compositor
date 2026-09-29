@@ -8,8 +8,20 @@ using Compositor.Core.Document;
 using Compositor.Core.Model;
 using Compositor.Core.Rendering;
 using SkiaSharp;
+using SelectionMode = Compositor.Core.Document.SelectionMode;
 
 namespace Compositor.Desktop;
+
+/// <summary>The selection tools the pointer can hold: one shape each, plus the wand's single click.</summary>
+public enum SelectionTool
+{
+    None,
+    Rectangle,
+    Ellipse,
+    Lasso,
+    Polygon,
+    Wand,
+}
 
 /// <summary>
 /// The document on screen. It composites only the part of the canvas it is showing, through
@@ -42,14 +54,28 @@ public sealed class CanvasView : Control
     /// <summary>When set, dragging moves the selected layer instead of panning.</summary>
     public bool MoveEnabled { get; set; }
 
-    /// <summary>When set, dragging draws a rectangular selection instead of panning.</summary>
-    public bool MarqueeEnabled { get; set; }
+    /// <summary>Which selection tool the pointer is holding; None leaves it panning.</summary>
+    public SelectionTool Selection { get; set; }
 
-    /// <summary>Handed the rectangle the marquee ended on, in document pixels.</summary>
-    public Action<SKRectI>? MarqueeFinished { get; set; }
+    /// <summary>Handed the box a marquee drag ended on, in document pixels, and how it meets the selection.</summary>
+    public Action<SKRectI, SelectionMode>? MarqueeFinished { get; set; }
 
-    private SKPoint _marqueeAnchor;
-    private SKRectI? _marqueeDrawing;
+    /// <summary>Handed the outline a lasso or a polygonal lasso closed, in document pixels.</summary>
+    public Action<IReadOnlyList<SKPoint>, SelectionMode>? LassoFinished { get; set; }
+
+    /// <summary>Handed a click of the wand, in document pixels.</summary>
+    public Action<SKPoint, SelectionMode>? WandClicked { get; set; }
+
+    private bool _selecting;
+    private SKPoint _selectionAnchor;
+    private SKRectI? _selectionBox;
+
+    /// <summary>The outline being dragged or clicked out right now, in document pixels.</summary>
+    private readonly List<SKPoint> _lasso = [];
+
+    /// <summary>Where the pointer is, so an open polygonal lasso can show the line it would add.</summary>
+    private SKPoint? _lassoPointer;
+    private SelectionMode _draftMode = SelectionMode.Replace;
 
     public BrushSettings Brush { get; set; } = new();
 
@@ -162,19 +188,131 @@ public sealed class CanvasView : Control
         DrawStroke(context);
     }
 
-    /// <summary>The outline of what is selected, and of the rectangle being dragged right now.</summary>
+    /// <summary>Lets go of an outline that is being drawn, as Escape does in the Mac build.</summary>
+    public void CancelDraft()
+    {
+        _selecting = false;
+        ClearDraft();
+        InvalidateVisual();
+    }
+
+    /// <summary>Closes an open polygonal lasso and hands it to the app.</summary>
+    private void CompleteSelection()
+    {
+        var points = _lasso.ToList();
+        var mode = _draftMode;
+        ClearDraft();
+        InvalidateVisual();
+        LassoFinished?.Invoke(points, mode);
+    }
+
+    private void ClearDraft()
+    {
+        _lasso.Clear();
+        _lassoPointer = null;
+        _selectionBox = null;
+        _draftMode = SelectionMode.Replace;
+    }
+
+    /// <summary>Whether a new sample is far enough from the last to be worth keeping, in document pixels.</summary>
+    private bool Moved(SKPoint point) =>
+        _lasso.Count == 0 || Math.Abs(point.X - _lasso[^1].X) + Math.Abs(point.Y - _lasso[^1].Y) >= 0.5f;
+
+    /// <summary>Whether a click is on the point a polygon started from, within eight screen pixels.</summary>
+    private bool Near(Point screen, SKPoint document)
+    {
+        var start = ToScreen(document);
+        return Math.Abs(screen.X - start.X) <= 8 && Math.Abs(screen.Y - start.Y) <= 8;
+    }
+
+    /// <summary>
+    /// How a new shape meets the selection already there: Option takes away, Shift adds, otherwise it
+    /// replaces, as the Mac build reads the modifiers.
+    /// </summary>
+    private static SelectionMode ModeOf(KeyModifiers modifiers) =>
+        modifiers.HasFlag(KeyModifiers.Alt) ? SelectionMode.Subtract
+        : modifiers.HasFlag(KeyModifiers.Shift) ? SelectionMode.Add
+        : SelectionMode.Replace;
+
+    /// <summary>The outline of what is selected, and of the shape being dragged or clicked out.</summary>
     private void DrawSelection(DrawingContext context)
     {
-        var rectangle = _marqueeDrawing ?? _document?.Selection.Rect;
-        if (rectangle is not { } rect || rect.Width <= 0 || rect.Height <= 0) return;
         var pen = new Pen
         {
             Brush = Brushes.White,
             Thickness = 1,
             DashStyle = new DashStyle([4.0, 4.0], 0),
         };
-        var topLeft = ToScreen(new SKPoint(rect.Left, rect.Top));
-        context.DrawRectangle(null, pen, new Rect(topLeft.X, topLeft.Y, rect.Width * _zoom, rect.Height * _zoom));
+        DrawDraft(context, pen);
+        if (_document?.Selection.Path is not { } path || path.IsEmpty) return;
+        foreach (var contour in Contours(path))
+        {
+            for (var index = 1; index < contour.Count; index++)
+            {
+                context.DrawLine(pen, ToScreen(contour[index - 1]), ToScreen(contour[index]));
+            }
+        }
+    }
+
+    /// <summary>The shape being drawn right now, before it becomes a selection.</summary>
+    private void DrawDraft(DrawingContext context, Pen pen)
+    {
+        if (Selection == SelectionTool.Polygon)
+        {
+            if (_lasso.Count > 0) DrawPolyline(context, pen, _lasso, _lassoPointer);
+            return;
+        }
+        if (!_selecting) return;
+        if (Selection == SelectionTool.Lasso)
+        {
+            DrawPolyline(context, pen, _lasso, null);
+            return;
+        }
+        if (_selectionBox is not { } box || box.Width <= 0 || box.Height <= 0) return;
+        var corner = ToScreen(new SKPoint(box.Left, box.Top));
+        var width = box.Width * _zoom;
+        var height = box.Height * _zoom;
+        if (Selection == SelectionTool.Ellipse)
+        {
+            context.DrawEllipse(null, pen, new Point(corner.X + width / 2, corner.Y + height / 2), width / 2, height / 2);
+            return;
+        }
+        context.DrawRectangle(null, pen, new Rect(corner.X, corner.Y, width, height));
+    }
+
+    private void DrawPolyline(DrawingContext context, Pen pen, List<SKPoint> points, SKPoint? to)
+    {
+        for (var index = 1; index < points.Count; index++)
+        {
+            context.DrawLine(pen, ToScreen(points[index - 1]), ToScreen(points[index]));
+        }
+        if (to is { } last && points.Count > 0) context.DrawLine(pen, ToScreen(points[^1]), ToScreen(last));
+    }
+
+    /// <summary>
+    /// An outline as polylines: Skia measures the path and hands back points along it, about two screen
+    /// pixels apart, so a lasso or an ellipse is drawn as closely as the screen can show it.
+    /// </summary>
+    private List<List<SKPoint>> Contours(SKPath path)
+    {
+        var step = (float)Math.Max(0.25, 2 / Math.Max(_zoom, 0.01));
+        var contours = new List<List<SKPoint>>();
+        using var measure = new SKPathMeasure();
+        measure.SetPath(path, forceClosed: true);
+        do
+        {
+            var length = measure.Length;
+            if (length <= 0) continue;
+            var points = new List<SKPoint> { measure.GetPosition(0) };
+            for (var at = step; at < length && points.Count < 20_000; at += step)
+            {
+                points.Add(measure.GetPosition(at));
+            }
+            points.Add(measure.GetPosition(length));
+            contours.Add(points);
+        }
+        while (measure.NextContour());
+        return contours;
     }
 
     /// <summary>The whole pixels between two points, whichever way round they are.</summary>
@@ -254,10 +392,35 @@ public sealed class CanvasView : Control
             e.Handled = true;
             return;
         }
-        if (MarqueeEnabled && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+        if (Selection != SelectionTool.None && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
         {
-            _marqueeAnchor = ToDocument(e.GetPosition(this));
-            _marqueeDrawing = null;
+            var point = ToDocument(e.GetPosition(this));
+            if (Selection == SelectionTool.Wand)
+            {
+                e.Handled = true;
+                WandClicked?.Invoke(point, ModeOf(e.KeyModifiers));
+                return;
+            }
+            if (Selection == SelectionTool.Polygon)
+            {
+                // The mode is fixed when the first point goes down, as the Mac build fixes it.
+                if (_lasso.Count == 0) _draftMode = ModeOf(e.KeyModifiers);
+                var closes = e.ClickCount > 1
+                    || (_lasso.Count >= 3 && Near(e.GetPosition(this), _lasso[0]));
+                _lasso.Add(point);
+                _lassoPointer = point;
+                e.Handled = true;
+                if (closes) CompleteSelection();
+                else InvalidateVisual();
+                return;
+            }
+            _selecting = true;
+            _draftMode = ModeOf(e.KeyModifiers);
+            _selectionAnchor = point;
+            _selectionBox = null;
+            _lasso.Clear();
+            _lasso.Add(point);
+            _lassoPointer = point;
             e.Pointer.Capture(this);
             e.Handled = true;
             return;
@@ -291,9 +454,22 @@ public sealed class CanvasView : Control
             base.OnPointerMoved(e);
             return;
         }
-        if (_marqueeDrawing is not null || MarqueeEnabled && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+        if (_selecting)
         {
-            _marqueeDrawing = Between(_marqueeAnchor, ToDocument(now));
+            var point = ToDocument(now);
+            if (Selection == SelectionTool.Lasso && Moved(point)) _lasso.Add(point);
+            if (Selection is SelectionTool.Rectangle or SelectionTool.Ellipse)
+            {
+                _selectionBox = Between(_selectionAnchor, point);
+            }
+            _lassoPointer = point;
+            InvalidateVisual();
+            base.OnPointerMoved(e);
+            return;
+        }
+        if (Selection == SelectionTool.Polygon && _lasso.Count > 0)
+        {
+            _lassoPointer = ToDocument(now);
             InvalidateVisual();
             base.OnPointerMoved(e);
             return;
@@ -328,12 +504,28 @@ public sealed class CanvasView : Control
             MoveFinished?.Invoke();
             return;
         }
-        if (_marqueeDrawing is { } rectangle)
+        if (_selecting)
         {
-            _marqueeDrawing = null;
+            _selecting = false;
             e.Pointer.Capture(null);
+            var mode = _draftMode;
+            if (Selection == SelectionTool.Lasso)
+            {
+                var points = _lasso.ToList();
+                ClearDraft();
+                InvalidateVisual();
+                LassoFinished?.Invoke(points, mode);
+                return;
+            }
+            if (_selectionBox is { } box)
+            {
+                ClearDraft();
+                InvalidateVisual();
+                MarqueeFinished?.Invoke(box, mode);
+                return;
+            }
+            ClearDraft();
             InvalidateVisual();
-            MarqueeFinished?.Invoke(rectangle);
             return;
         }
         _dragging = null;

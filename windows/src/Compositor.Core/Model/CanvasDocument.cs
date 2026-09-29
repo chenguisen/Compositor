@@ -88,7 +88,7 @@ public sealed class CanvasDocument : IDisposable
     {
         if (ID != other.ID || Width != other.Width || Height != other.Height || Resolution != other.Resolution
             || Layers.Count != other.Layers.Count || Guides.Count != other.Guides.Count
-            || Selection.Rect != other.Selection.Rect) return false;
+            || !Selection.Matches(other.Selection)) return false;
         for (var index = 0; index < Layers.Count; index++)
         {
             if (!Layers[index].SameAs(other.Layers[index])) return false;

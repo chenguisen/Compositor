@@ -1,7 +1,26 @@
+using Compositor.Core.Format;
 using Compositor.Core.Model;
+using Compositor.Core.Pixels;
+using Compositor.Core.Rendering;
 using SkiaSharp;
 
 namespace Compositor.Core.Document;
+
+/// <summary>How a new shape meets the selection already there.</summary>
+public enum SelectionMode
+{
+    /// <summary>What the shape encloses becomes the selection.</summary>
+    Replace,
+
+    /// <summary>The shape is added to it.</summary>
+    Add,
+
+    /// <summary>The shape is taken out of it.</summary>
+    Subtract,
+}
+
+/// <summary>What the Magic Wand matches, as its tool header sets it.</summary>
+public sealed record WandOptions(int Radius = 4, int Tolerance = 32, bool Contiguous = true);
 
 /// <summary>
 /// Choosing what later edits act on. A selection is part of the document, so undo and redo cover changing
@@ -9,34 +28,272 @@ namespace Compositor.Core.Document;
 /// </summary>
 public static class SelectionEdits
 {
+    /// <summary>How far an expand, a contract or a feather may go, as the Mac build limits them.</summary>
+    public const int MaxAmount = 500;
+    public const int MaxFeather = 250;
+
     /// <summary>
     /// Selects the whole canvas. It is not the same as having no selection: an edit may touch everything
-    /// either way, but this one is a selection the tool shows, so a crop or a fill can be aimed at it.
+    /// either way, but this one is a selection the tools show, so a fill or a filter can be aimed at it.
     /// </summary>
-    public static bool SelectAll(CanvasDocument document)
-    {
-        var whole = SKRectI.Create(0, 0, document.Width, document.Height);
-        if (document.Selection.Rect == whole) return false;
-        document.Selection = DocumentSelection.Rectangular(whole, document.Width, document.Height);
-        return true;
-    }
+    public static bool SelectAll(CanvasDocument document) => Adopt(document, WholeCanvas(document));
 
     /// <summary>Leaves nothing selected, so edits act on the whole document again.</summary>
     public static bool Deselect(CanvasDocument document)
     {
-        if (document.Selection.Rect is null) return false;
+        if (document.Selection.Path is null) return false;
         document.Selection = DocumentSelection.All;
         return true;
     }
 
-    /// <summary>Selects a rectangle of the document, held to its bounds.</summary>
+    /// <summary>
+    /// Selects a rectangle of the document, held to its bounds, as the marquee tool does. A drag that never
+    /// enters the canvas draws no marquee at all, so it leaves nothing selected rather than making a
+    /// selection that holds every later edit back — the one place this port reads an empty shape as no
+    /// selection, where the Mac build would keep an empty outline.
+    /// </summary>
     public static bool Select(CanvasDocument document, SKRectI rect)
     {
-        var selection = DocumentSelection.Rectangular(rect, document.Width, document.Height);
-        if (Same(document.Selection, selection)) return false;
-        document.Selection = selection;
+        var shape = Rectangular(document, rect);
+        return shape.IsEmpty ? Deselect(document) : Adopt(document, shape);
+    }
+
+    /// <summary>Selects the ellipse inside a box, which is what the elliptical marquee drags out.</summary>
+    public static bool SelectEllipse(CanvasDocument document, SKRectI box)
+    {
+        var held = SKRectI.Intersect(box, SKRectI.Create(0, 0, document.Width, document.Height));
+        if (held.Width <= 0 || held.Height <= 0) return Adopt(document, new SKPath());
+        using var builder = new SKPathBuilder();
+        builder.AddOval(SKRect.Create(held.Left, held.Top, held.Width, held.Height), SKPathDirection.Clockwise);
+        return Adopt(document, builder.Detach());
+    }
+
+    /// <summary>
+    /// A freehand or polygonal lasso: the outline through the points, closed. Fewer than three points
+    /// enclose nothing, so the selection is let go, as clicking the lasso on its own does in Photoshop.
+    /// </summary>
+    public static bool SelectLasso(CanvasDocument document, IReadOnlyList<SKPoint> points) =>
+        points.Count < 3 ? Deselect(document) : Adopt(document, Lasso(points));
+
+    /// <summary>The outline a lasso would close, for the tool to draw while it is still being dragged.</summary>
+    public static SKPath Lasso(IReadOnlyList<SKPoint> points)
+    {
+        using var builder = new SKPathBuilder();
+        if (points.Count == 0) return builder.Detach();
+        if (points.Count < 3)
+        {
+            // Not an outline yet: a line from the first point to the last encloses nothing.
+            builder.MoveTo(points[0]);
+            if (points.Count == 2) builder.LineTo(points[1]);
+            return builder.Detach();
+        }
+        builder.AddPoly(points is SKPoint[] array ? array : points.ToArray(), close: true);
+        return builder.Detach();
+    }
+
+    /// <summary>
+    /// The Magic Wand: everything like the pixel at a point. It reads the sample the caller made — the canvas
+    /// as shown, or one layer's own pixels — matches from the seed, and outlines the result along exact pixel
+    /// edges. Nothing matching leaves an empty selection in Replace mode, as the Mac build does.
+    /// </summary>
+    public static bool SelectWand(CanvasDocument document, SKBitmap sample, int x, int y, WandOptions options,
+        SelectionMode mode)
+    {
+        if (sample.Width <= 0 || sample.Height <= 0 || x < 0 || y < 0 || x >= sample.Width || y >= sample.Height)
+        {
+            return false;
+        }
+        var mask = new byte[(long)sample.Width * sample.Height];
+        var matched = WandPixels.WandMask(sample.GetPixelSpan(), sample.Width, sample.Height, sample.RowBytes,
+            x, y, Math.Clamp(options.Radius, 0, 100), Math.Clamp(options.Tolerance, 0, 255), options.Contiguous, mask);
+        if (matched <= 0) return mode == SelectionMode.Replace ? Deselect(document) : false;
+        if (WandPixels.WandTrace(mask, sample.Width, sample.Height, out var points, out _, out var loops,
+            out var loopCount) != 0 || loopCount == 0)
+        {
+            // Too detailed to draw, or nothing came back: the selection is left as it was.
+            return false;
+        }
+        using var builder = new SKPathBuilder();
+        var index = 0;
+        for (var loop = 0; loop < loopCount; loop++)
+        {
+            var length = loops[loop];
+            var corners = new SKPoint[length];
+            for (var corner = 0; corner < length; corner++)
+            {
+                corners[corner] = new SKPoint(points[(index + corner) * 2], points[(index + corner) * 2 + 1]);
+            }
+            builder.AddPoly(corners, close: true);
+            index += length;
+        }
+        return Apply(document, builder.Detach(), mode);
+    }
+
+    /// <summary>The whole canvas minus what is selected, which is Select ▸ Inverse.</summary>
+    public static bool Invert(CanvasDocument document)
+    {
+        if (document.Selection.Path is not { } path) return false;
+        var inverted = Combine(WholeCanvas(document), path, SKPathOp.Difference);
+        if (inverted is null) return false;
+        document.Selection = document.Selection.WithPath(inverted);
         return true;
     }
 
-    private static bool Same(DocumentSelection left, DocumentSelection right) => left.Rect == right.Rect;
+    /// <summary>
+    /// Moves the outline only, never the pixels: Select ▸ Move, and the arrow-key nudges. Whole pixels, so
+    /// edges stay crisp.
+    /// </summary>
+    public static bool Move(CanvasDocument document, double dx, double dy)
+    {
+        if (document.Selection.Path is null) return false;
+        var moved = document.Selection.Translated(Math.Round(dx), Math.Round(dy));
+        if (moved.Matches(document.Selection)) return false;
+        document.Selection = moved;
+        return true;
+    }
+
+    /// <summary>
+    /// Grows the outline by whole pixels with rounded corners, held to the canvas — Photoshop's Expand.
+    /// </summary>
+    public static bool Expand(CanvasDocument document, int amount) =>
+        Resize(document, amount, "Expand Selection");
+
+    /// <summary>
+    /// Shrinks the outline by whole pixels, including away from the canvas edges. Contracting past the middle
+    /// leaves an explicit empty selection.
+    /// </summary>
+    public static bool Contract(CanvasDocument document, int amount) =>
+        Resize(document, -amount, "Contract Selection");
+
+    /// <summary>
+    /// Softens the edge by whole pixels, as Select ▸ Modify ▸ Feather does. Applying it again softens
+    /// further, the way Expand and Contract stack up.
+    /// </summary>
+    public static bool Feather(CanvasDocument document, int amount)
+    {
+        if (document.Selection.Path is null || document.Selection.IsEmpty || amount <= 0) return false;
+        // Two soft edges together spread a little less than their sum, as blurs do.
+        var softened = Math.Sqrt(document.Selection.Feather * document.Selection.Feather + (double)amount * amount);
+        document.Selection = document.Selection.WithFeather(Math.Min(MaxFeather, softened));
+        return true;
+    }
+
+    /// <summary>
+    /// A shape met against what is selected already: replacing it, adding to it, or taking out of it.
+    /// Subtracting from nothing changes nothing, as in the Mac build.
+    /// </summary>
+    public static bool Apply(CanvasDocument document, SKPath shape, SelectionMode mode)
+    {
+        var canvas = WholeCanvas(document);
+        var clipped = Combine(shape, canvas, SKPathOp.Intersect);
+        switch (mode)
+        {
+            case SelectionMode.Replace:
+                return Adopt(document, clipped ?? new SKPath());
+            case SelectionMode.Add:
+                if (clipped is null) return false;
+                if (document.Selection.Path is not { } current) return Adopt(document, clipped);
+                return Adopt(document, Combine(current, clipped, SKPathOp.Union) ?? new SKPath());
+            default:
+                if (document.Selection.Path is not { } held || clipped is null) return false;
+                return Adopt(document, Combine(held, clipped, SKPathOp.Difference) ?? new SKPath());
+        }
+    }
+
+    /// <summary>
+    /// The shape a marquee drags out, un-clipped: the app hands it to <see cref="Apply"/> when it is adding
+    /// to or taking out of a selection, which holds the result to the canvas itself.
+    /// </summary>
+    public static SKPath Shape(SKRectI box, bool ellipse)
+    {
+        using var builder = new SKPathBuilder();
+        if (box.Width > 0 && box.Height > 0)
+        {
+            var rectangle = SKRect.Create(box.Left, box.Top, box.Width, box.Height);
+            if (ellipse) builder.AddOval(rectangle, SKPathDirection.Clockwise);
+            else builder.AddRect(rectangle, SKPathDirection.Clockwise);
+        }
+        return builder.Detach();
+    }
+
+    /// <summary>
+    /// What the wand and the object tool read: the canvas as shown, or one layer's own pixels drawn at its
+    /// transform without its mask, as a command-click selection reads them. Null when the layer has none.
+    /// The caller owns the bitmap.
+    /// </summary>
+    public static SKBitmap? Sample(CanvasDocument document, Guid? layerID)
+    {
+        if (layerID is not { } id) return DocumentRenderer.Render(document);
+        if (document.Layers.FirstOrDefault(layer => layer.ID == id) is not { Asset: { } } layer) return null;
+        var sample = DocumentRenderer.Allocate(document.Width, document.Height);
+        using (var canvas = new SKCanvas(sample)) DocumentRenderer.DrawLayerPixels(canvas, layer);
+        return sample;
+    }
+
+    private static SKPath WholeCanvas(CanvasDocument document)
+    {
+        using var builder = new SKPathBuilder();
+        if (document.Width > 0 && document.Height > 0)
+        {
+            builder.AddRect(SKRect.Create(0, 0, document.Width, document.Height), SKPathDirection.Clockwise);
+        }
+        return builder.Detach();
+    }
+
+    private static SKPath Rectangular(CanvasDocument document, SKRectI rect)
+    {
+        var held = SKRectI.Intersect(rect, SKRectI.Create(0, 0, document.Width, document.Height));
+        using var builder = new SKPathBuilder();
+        if (held.Width > 0 && held.Height > 0)
+        {
+            builder.AddRect(SKRect.Create(held.Left, held.Top, held.Width, held.Height), SKPathDirection.Clockwise);
+        }
+        return builder.Detach();
+    }
+
+    /// <summary>
+    /// A band <c>|delta|</c> wide on each side of the outline, added to it or taken out of it. The band is
+    /// what a round-capped stroke of twice that width would cover.
+    /// </summary>
+    private static bool Resize(CanvasDocument document, int amount, string name)
+    {
+        if (document.Selection.Path is not { } current || document.Selection.IsEmpty || amount == 0
+            || Math.Abs(amount) > MaxAmount)
+        {
+            return false;
+        }
+        SKPath band;
+        using (var builder = new SKPathBuilder())
+        using (var paint = new SKPaint
+        {
+            Style = SKPaintStyle.Stroke,
+            StrokeWidth = Math.Abs(amount) * 2,
+            StrokeCap = SKStrokeCap.Round,
+            StrokeJoin = SKStrokeJoin.Round,
+            StrokeMiter = 10,
+        })
+        {
+            paint.GetFillPath(current, builder);
+            band = builder.Detach();
+        }
+        if (band.IsEmpty) return false;
+        var result = amount > 0
+            ? Combine(Combine(current, band, SKPathOp.Union) ?? current, WholeCanvas(document), SKPathOp.Intersect)
+            : Combine(current, band, SKPathOp.Difference);
+        if (result is null) return false;
+        document.Selection = document.Selection.WithPath(result);
+        return true;
+    }
+
+    /// <summary>One outline combined with another, or null when Skia cannot work it out.</summary>
+    private static SKPath? Combine(SKPath left, SKPath right, SKPathOp operation) => left.Op(right, operation);
+
+    /// <summary>Adopts a shape as the whole selection, unless it is the selection already.</summary>
+    private static bool Adopt(CanvasDocument document, SKPath shape)
+    {
+        var replaced = DocumentSelection.FromPath(shape);
+        if (replaced.Matches(document.Selection)) return false;
+        document.Selection = replaced;
+        return true;
+    }
 }

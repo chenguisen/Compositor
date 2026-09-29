@@ -9,6 +9,7 @@ using Compositor.Core.Format;
 using Compositor.Core.IO;
 using Compositor.Core.Model;
 using SkiaSharp;
+using SelectionMode = Compositor.Core.Document.SelectionMode;
 
 namespace Compositor.Desktop;
 
@@ -56,6 +57,10 @@ public sealed class MainWindow : Window
         Pan,
         Move,
         Marquee,
+        Ellipse,
+        Lasso,
+        Polygon,
+        Wand,
         Brush,
     }
 
@@ -75,7 +80,9 @@ public sealed class MainWindow : Window
         _canvas.MoveStarted = MoveStarted;
         _canvas.MoveChanged = MoveChanged;
         _canvas.MoveFinished = MoveFinished;
-        _canvas.MarqueeFinished = MarqueeFinished;
+        _canvas.MarqueeFinished = (box, mode) => MarqueeFinished(box, mode, _tool == Tool.Ellipse);
+        _canvas.LassoFinished = (points, mode) => LassoFinished(points, mode, _tool == Tool.Polygon);
+        _canvas.WandClicked = WandClicked;
         _merge.Click += (_, _) => MergeLayers();
         _visibility.Click += (_, _) => ToggleVisibility();
         _clipping.Click += (_, _) => ToggleClipping();
@@ -164,6 +171,10 @@ public sealed class MainWindow : Window
                         ToolItem("_Pan (drag to scroll)", Tool.Pan),
                         ToolItem("_Move (drag the layer)", Tool.Move),
                         ToolItem("Marquee (_rectangular selection)", Tool.Marquee),
+                        ToolItem("_Elliptical marquee", Tool.Ellipse),
+                        ToolItem("_Lasso (freehand)", Tool.Lasso),
+                        ToolItem("_Polygonal lasso (click each corner)", Tool.Polygon),
+                        ToolItem("Magic _wand (click a colour)", Tool.Wand),
                         ToolItem("_Brush", Tool.Brush),
                     },
                 },
@@ -173,7 +184,12 @@ public sealed class MainWindow : Window
                     Items =
                     {
                         Command("Select _All", () => Change("Select All", SelectionEdits.SelectAll)),
-                        Command("_Deselect", () => Change("Deselect", SelectionEdits.Deselect)),
+                        Command("_Deselect", Deselect),
+                        Command("_Inverse", () => Change("Inverse", SelectionEdits.Invert)),
+                        new Separator(),
+                        Command("_Expand…", () => _ = ModifySelection(SelectionAmount.Expand)),
+                        Command("_Contract…", () => _ = ModifySelection(SelectionAmount.Contract)),
+                        Command("_Feather…", () => _ = ModifySelection(SelectionAmount.Feather)),
                     },
                 },
                 new MenuItem
@@ -557,14 +573,28 @@ public sealed class MainWindow : Window
         _tool = tool;
         _canvas.PaintEnabled = tool == Tool.Brush;
         _canvas.MoveEnabled = tool == Tool.Move;
-        _canvas.MarqueeEnabled = tool == Tool.Marquee;
+        _canvas.Selection = tool switch
+        {
+            Tool.Marquee => SelectionTool.Rectangle,
+            Tool.Ellipse => SelectionTool.Ellipse,
+            Tool.Lasso => SelectionTool.Lasso,
+            Tool.Polygon => SelectionTool.Polygon,
+            Tool.Wand => SelectionTool.Wand,
+            _ => SelectionTool.None,
+        };
+        // An outline that is half drawn is let go when the tool changes, rather than left hanging.
+        _canvas.CancelDraft();
         _canvas.Brush = new BrushSettings(Diameter: 40, Hardness: 1, Red: 0, Green: 0, Blue: 0, Opacity: 1);
         foreach (var (which, item) in _toolItems) item.IsChecked = which == tool;
         Say(tool switch
         {
             Tool.Brush => "Brush: 40 pixels, hard, black — drag on the canvas",
             Tool.Move => "Move — drag the selected layer",
-            Tool.Marquee => "Marquee — drag a rectangle to select; painting stays inside it",
+            Tool.Marquee => "Marquee — drag a rectangle; Shift adds, Alt subtracts",
+            Tool.Ellipse => "Elliptical marquee — drag an oval; Shift adds, Alt subtracts",
+            Tool.Lasso => "Lasso — drag round a shape; Shift adds, Alt subtracts",
+            Tool.Polygon => "Polygonal lasso — click each corner, double-click to close",
+            Tool.Wand => "Magic wand — click a colour to take everything like it",
             _ => "Pan — drag to scroll",
         });
     }
@@ -576,7 +606,68 @@ public sealed class MainWindow : Window
         Edit(name, () => change(document));
     }
 
-    private void MarqueeFinished(SKRectI rectangle) => Change("Select", document => SelectionEdits.Select(document, rectangle));
+    /// <summary>Lets the selection go, and any half-drawn outline with it.</summary>
+    private void Deselect()
+    {
+        _canvas.CancelDraft();
+        Change("Deselect", SelectionEdits.Deselect);
+    }
+
+    /// <summary>
+    /// A marquee drag: the box becomes the selection, or is added to it or taken out of it, as the
+    /// modifiers asked.
+    /// </summary>
+    private void MarqueeFinished(SKRectI box, SelectionMode mode, bool ellipse) =>
+        Change(ellipse ? "Elliptical Marquee" : "Rectangular Marquee", document => mode == SelectionMode.Replace
+            ? ellipse ? SelectionEdits.SelectEllipse(document, box) : SelectionEdits.Select(document, box)
+            : SelectionEdits.Apply(document, SelectionEdits.Shape(box, ellipse), mode));
+
+    /// <summary>A lasso or polygonal lasso drag: the outline through the points it gathered.</summary>
+    private void LassoFinished(IReadOnlyList<SKPoint> points, SelectionMode mode, bool polygonal) =>
+        Change(polygonal ? "Polygonal Lasso" : "Lasso", document => mode == SelectionMode.Replace
+            ? SelectionEdits.SelectLasso(document, points)
+            : SelectionEdits.Apply(document, SelectionEdits.Lasso(points), mode));
+
+    /// <summary>A click of the wand: everything like the pixel under it, read from the canvas as shown.</summary>
+    private void WandClicked(SKPoint point, SelectionMode mode) =>
+        Change("Magic Wand", document =>
+        {
+            using var sample = SelectionEdits.Sample(document, null);
+            return sample is not null && SelectionEdits.SelectWand(document, sample,
+                (int)Math.Floor(point.X), (int)Math.Floor(point.Y), new WandOptions(), mode);
+        });
+
+    /// <summary>Asks for an amount and modifies the selection by it, as Select ▸ Modify does.</summary>
+    private async Task ModifySelection(SelectionAmount which)
+    {
+        if (_document is not { } document || document.Selection.Path is null)
+        {
+            Say("Select something first");
+            return;
+        }
+        var most = which == SelectionAmount.Feather ? SelectionEdits.MaxFeather : SelectionEdits.MaxAmount;
+        var label = which == SelectionAmount.Feather ? "Feather radius in pixels" : "Pixels";
+        if (await TextPrompt.Ask(this, $"Modify Selection — {which}", label, "4") is not { } typed) return;
+        if (!int.TryParse(typed.Trim(), out var amount) || amount < 1 || amount > most)
+        {
+            Say($"The amount has to be a whole number from 1 to {most}");
+            return;
+        }
+        if (_document is not { } current) return;
+        Edit($"{which} Selection", () => which switch
+        {
+            SelectionAmount.Expand => SelectionEdits.Expand(current, amount),
+            SelectionAmount.Contract => SelectionEdits.Contract(current, amount),
+            _ => SelectionEdits.Feather(current, amount),
+        });
+    }
+
+    private enum SelectionAmount
+    {
+        Expand,
+        Contract,
+        Feather,
+    }
 
     /// <summary>Paints a finished stroke into the selected layer, as one undo step.</summary>
     private void Painted(IReadOnlyList<SKPoint> stroke)
