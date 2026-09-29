@@ -10,7 +10,7 @@ namespace Compositor.Desktop;
 /// Image ▸ Canvas Size: the canvas in pixels, and which corner or edge the picture keeps. Avalonia ships no
 /// such dialog, so this is one.
 /// </summary>
-internal sealed class CanvasSizeDialog : Window
+internal sealed class CanvasSizeDialog : DialogWindow
 {
     private readonly TextBox _width;
     private readonly TextBox _height;

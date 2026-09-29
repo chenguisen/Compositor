@@ -10,7 +10,7 @@ namespace Compositor.Desktop;
 /// A one-line prompt, for the name a layer is being renamed to. Avalonia ships no such dialog, so this is
 /// one: a text box, Enter to accept, Escape to cancel.
 /// </summary>
-internal sealed class TextPrompt : Window
+internal sealed class TextPrompt : DialogWindow
 {
     private readonly TextBox _box;
     private bool _accepted;

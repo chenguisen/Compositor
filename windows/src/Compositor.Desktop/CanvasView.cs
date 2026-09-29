@@ -41,27 +41,16 @@ public sealed class CanvasView : Control
     /// </summary>
     private const long ViewportPixelLimit = 32L * 1024 * 1024;
 
-    private static readonly IBrush Backdrop = new SolidColorBrush(Color.FromRgb(0x18, 0x1A, 0x1E));
-    private static readonly IBrush Paper = new SolidColorBrush(Color.FromRgb(0x2A, 0x2D, 0x33));
-
-    /// <summary>The transform box: solid white, so it reads against any picture.</summary>
-    private static readonly Pen TransformPen = new() { Brush = Brushes.White, Thickness = 1 };
+    // Every colour the canvas draws with comes from Skin, which takes them from the Mac's own canvas.
+    private static readonly IBrush Backdrop = Skin.PasteboardBrush;
+    /// <summary>What shows through a transparent picture: the checkerboard, as the Mac's canvas draws it.</summary>
+    private static readonly IBrush Paper = Skin.Checker;
 
     /// <summary>The caret: white, over whatever it is on.</summary>
     private static readonly Pen CaretPen = new() { Brush = Brushes.White, Thickness = 1 };
 
     /// <summary>What a crop is about to take away.</summary>
-    private static readonly IBrush DimBrush = new SolidColorBrush(Color.FromArgb(150, 0, 0, 0));
-
-    /// <summary>A line a drag has snapped to: cyan, as Photoshop shows them.</summary>
-    private static readonly Pen SnapPen = new() { Brush = Brushes.Cyan, Thickness = 1 };
-
-    private static readonly Pen FineGridPen = new() { Brush = new SolidColorBrush(Color.FromRgb(0x70, 0x70, 0x70), 0.5), Thickness = 1 };
-    private static readonly Pen MajorGridPen = new() { Brush = new SolidColorBrush(Color.FromRgb(0xA0, 0xA0, 0xA0), 0.7), Thickness = 1 };
-
-    /// <summary>Guides are drawn in the blue Photoshop uses for them, so they do not read as part of the picture.</summary>
-    private static readonly Pen GuidePen = new() { Brush = new SolidColorBrush(Color.FromRgb(0x33, 0x99, 0xFF)), Thickness = 1 };
-    private static readonly Pen PixelGridPen = new() { Brush = new SolidColorBrush(Color.FromRgb(0xC0, 0xC0, 0xC0), 0.35), Thickness = 1 };
+    private static readonly IBrush DimBrush = Skin.CropDimBrush;
 
     private CanvasDocument? _document;
     private SKPoint _origin;
@@ -502,13 +491,34 @@ public sealed class CanvasView : Control
             (region.Top - _origin.Y) * _zoom,
             region.Width * _zoom,
             region.Height * _zoom);
+        DrawPaperShadow(context, destination);
+        // The checkerboard under the picture, so transparent pixels show through it as they do on the Mac.
         context.DrawRectangle(Paper, null, destination);
         context.DrawImage(image, destination);
+        context.DrawRectangle(null, Skin.PictureEdgePen, destination);
         DrawGrid(context, document);
         DrawPixelGrid(context, document);
         if (ShowsGuides) DrawGuides(context, document);
         DrawSelection(context);
         DrawStroke(context);
+    }
+
+    /// <summary>
+    /// The shadow the paper casts on the pasteboard, as the Mac's canvas draws it: black at 0.35, blurred 14
+    /// points, three points down. A drawing context has no blur, so it goes down as bands of falling strength,
+    /// each drawn over the last so they accumulate against the picture and fade away from it.
+    /// </summary>
+    private static void DrawPaperShadow(DrawingContext context, Rect paper)
+    {
+        const int bands = 7;
+        const double blur = 14;
+        for (var band = bands; band >= 1; band--)
+        {
+            var spread = blur * band / bands;
+            var brush = new SolidColorBrush(Color.FromArgb(0x0D, 0, 0, 0));
+            context.DrawRectangle(brush, null, new Rect(paper.X - spread, paper.Y - spread + 3,
+                paper.Width + spread * 2, paper.Height + spread * 2));
+        }
     }
 
     /// <summary>The layout grid, drawn over the picture as Photoshop draws it and under everything else.</summary>
@@ -528,10 +538,10 @@ public sealed class CanvasView : Control
     {
         if (Grid is not { } grid) return;
         var lines = grid.Lines(document.Width, document.Height, _zoom, _origin.X, _origin.Y);
-        foreach (var x in lines.VerticalFine) context.DrawLine(FineGridPen, new Point(x, 0), new Point(x, Bounds.Height));
-        foreach (var y in lines.HorizontalFine) context.DrawLine(FineGridPen, new Point(0, y), new Point(Bounds.Width, y));
-        foreach (var x in lines.VerticalMajor) context.DrawLine(MajorGridPen, new Point(x, 0), new Point(x, Bounds.Height));
-        foreach (var y in lines.HorizontalMajor) context.DrawLine(MajorGridPen, new Point(0, y), new Point(Bounds.Width, y));
+        foreach (var x in lines.VerticalFine) context.DrawLine(Skin.GridFinePen, new Point(x, 0), new Point(x, Bounds.Height));
+        foreach (var y in lines.HorizontalFine) context.DrawLine(Skin.GridFinePen, new Point(0, y), new Point(Bounds.Width, y));
+        foreach (var x in lines.VerticalMajor) context.DrawLine(Skin.GridPen, new Point(x, 0), new Point(x, Bounds.Height));
+        foreach (var y in lines.HorizontalMajor) context.DrawLine(Skin.GridPen, new Point(0, y), new Point(Bounds.Width, y));
     }
 
     /// <summary>
@@ -548,12 +558,12 @@ public sealed class CanvasView : Control
         for (var x = Math.Max(0, left); x <= Math.Min(document.Width, right); x++)
         {
             var at = (x - _origin.X) * _zoom;
-            context.DrawLine(PixelGridPen, new Point(at, 0), new Point(at, Bounds.Height));
+            context.DrawLine(Skin.PixelGridPen, new Point(at, 0), new Point(at, Bounds.Height));
         }
         for (var y = Math.Max(0, top); y <= Math.Min(document.Height, bottom); y++)
         {
             var at = (y - _origin.Y) * _zoom;
-            context.DrawLine(PixelGridPen, new Point(0, at), new Point(Bounds.Width, at));
+            context.DrawLine(Skin.PixelGridPen, new Point(0, at), new Point(Bounds.Width, at));
         }
     }
 
@@ -564,7 +574,7 @@ public sealed class CanvasView : Control
         {
             var (x1, y1, x2, y2) = GuideEdits.ScreenLine(guide, document.Width, document.Height,
                 _zoom, _origin.X, _origin.Y);
-            context.DrawLine(GuidePen, new Point(x1, y1), new Point(x2, y2));
+            context.DrawLine(Skin.GuidePen, new Point(x1, y1), new Point(x2, y2));
         }
     }
 
@@ -774,37 +784,37 @@ public sealed class CanvasView : Control
     /// <summary>The outline of what is selected, and of the shape being dragged or clicked out.</summary>
     private void DrawSelection(DrawingContext context)
     {
-        var pen = new Pen
-        {
-            Brush = Brushes.White,
-            Thickness = 1,
-            DashStyle = new DashStyle([4.0, 4.0], 0),
-        };
         DrawCaret(context);
         DrawGradient(context);
         DrawShape(context);
-        DrawDraft(context, pen);
+        DrawDraft(context);
         DrawCrop(context);
         DrawTransform(context);
         if (_document?.Selection.Path is not { } path || path.IsEmpty) return;
+        // A white line with a black dashed one over it, as the Mac's overlay draws the marching ants.
+        var outline = new Pen(Brushes.White, 1);
+        var ants = new Pen(Brushes.Black, 1) { DashStyle = new DashStyle([4.0, 4.0], 0) };
         foreach (var contour in Contours(path))
         {
             for (var index = 1; index < contour.Count; index++)
             {
-                context.DrawLine(pen, ToScreen(contour[index - 1]), ToScreen(contour[index]));
+                var from = ToScreen(contour[index - 1]);
+                var to = ToScreen(contour[index]);
+                context.DrawLine(outline, from, to);
+                context.DrawLine(ants, from, to);
             }
         }
     }
 
     /// <summary>
     /// The crop frame: what will be kept is left clear, what will go is dimmed, and the eight handles say
-    /// where it can be dragged.
+    /// where it can be dragged. The frame carries the thirds the Mac's does, so a picture can be laid out on it.
     /// </summary>
     private void DrawCrop(DrawingContext context)
     {
         if (!CropEnabled || _document is not { } document) return;
         var frame = CropBox ?? WholeCanvas();
-        var pen = new Pen { Brush = Brushes.White, Thickness = 1 };
+        var pen = new Pen(Brushes.White, 1);
         var corner = ToScreen(new SKPoint(frame.Left, frame.Top));
         var right = corner.X + frame.Width * _zoom;
         var bottom = corner.Y + frame.Height * _zoom;
@@ -820,7 +830,16 @@ public sealed class CanvasView : Control
         {
             context.FillRectangle(DimBrush, band);
         }
-        context.DrawRectangle(null, pen, new Rect(corner.X, corner.Y, frame.Width * _zoom, frame.Height * _zoom));
+        var box = new Rect(corner.X, corner.Y, frame.Width * _zoom, frame.Height * _zoom);
+        context.DrawRectangle(null, pen, box);
+        var thirds = new Pen(new SolidColorBrush(Color.FromArgb(0x66, 0xFF, 0xFF, 0xFF)), 1);
+        for (var index = 1; index <= 2; index++)
+        {
+            var across = box.X + box.Width * index / 3;
+            var down = box.Y + box.Height * index / 3;
+            context.DrawLine(thirds, new Point(across, box.Y), new Point(across, box.Bottom));
+            context.DrawLine(thirds, new Point(box.X, down), new Point(box.Right, down));
+        }
         foreach (var handle in new[]
                  {
                      TransformHandle.TopLeft, TransformHandle.Top, TransformHandle.TopRight, TransformHandle.Right,
@@ -828,23 +847,25 @@ public sealed class CanvasView : Control
                  })
         {
             var at = ToScreen(TransformEdits.Position(CropEdits.Box(frame), handle));
-            context.DrawRectangle(null, pen, new Rect(at.X - 3, at.Y - 3, 6, 6));
+            var knobs = new Rect(at.X - 4, at.Y - 4, 8, 8);
+            context.FillRectangle(Brushes.White, knobs);
+            context.DrawRectangle(null, new Pen(Brushes.Black, 1), knobs);
         }
     }
 
     /// <summary>The transform box: its outline, its eight handles, the grip that turns it, and the lines a
-    /// drag has snapped to.</summary>
+    /// drag has snapped to. The box is the accent's line with white handles, as the Mac's overlay draws it.</summary>
     private void DrawTransform(DrawingContext context)
     {
         if (SnapLines is ({ } lineX, _))
         {
             var top = ToScreen(new SKPoint((float)lineX, 0));
-            context.DrawLine(SnapPen, top, new Point(top.X, Bounds.Height));
+            context.DrawLine(Skin.SnapPen, top, new Point(top.X, Bounds.Height));
         }
         if (SnapLines is (_, { } lineY))
         {
             var left = ToScreen(new SKPoint(0, (float)lineY));
-            context.DrawLine(SnapPen, left, new Point(Bounds.Width, left.Y));
+            context.DrawLine(Skin.SnapPen, left, new Point(Bounds.Width, left.Y));
         }
         if (!TransformEnabled) return;
         // A distortion in progress is its own shape: the box is what it is being dragged away from.
@@ -852,9 +873,8 @@ public sealed class CanvasView : Control
         {
             for (var index = 0; index < shape.Length; index++)
             {
-                context.DrawLine(TransformPen, ToScreen(shape[index]), ToScreen(shape[(index + 1) % shape.Length]));
-                var at = ToScreen(shape[index]);
-                context.DrawRectangle(null, TransformPen, new Rect(at.X - 3, at.Y - 3, 6, 6));
+                context.DrawLine(Skin.TransformPen, ToScreen(shape[index]), ToScreen(shape[(index + 1) % shape.Length]));
+                Handle(context, ToScreen(shape[index]), 7);
             }
             return;
         }
@@ -862,7 +882,7 @@ public sealed class CanvasView : Control
         var corners = TransformEdits.Corners(box);
         for (var index = 0; index < corners.Length; index++)
         {
-            context.DrawLine(TransformPen, ToScreen(corners[index]),
+            context.DrawLine(Skin.TransformPen, ToScreen(corners[index]),
                 ToScreen(corners[(index + 1) % corners.Length]));
         }
         foreach (var handle in Enum.GetValues<TransformHandle>())
@@ -871,44 +891,76 @@ public sealed class CanvasView : Control
                 ? TransformEdits.RotatePosition(box, TransformEdits.RotateGrip / _zoom)
                 : TransformEdits.Position(box, handle);
             var centre = ToScreen(at);
-            context.DrawRectangle(null, TransformPen,
-                new Rect(centre.X - 3, centre.Y - 3, 6, 6));
+            // The grip that turns the box is round, so it is not mistaken for one that resizes it.
+            Handle(context, centre, handle == TransformHandle.Rotate ? 8 : 7, round: handle == TransformHandle.Rotate);
         }
     }
 
-    /// <summary>The shape being drawn right now, before it becomes a selection.</summary>
-    private void DrawDraft(DrawingContext context, Pen pen)
+    /// <summary>One handle of the transform box: a white square or circle the accent outlines.</summary>
+    private static void Handle(DrawingContext context, Point centre, double size, bool round = false)
     {
+        var rect = new Rect(centre.X - size / 2, centre.Y - size / 2, size, size);
+        if (round)
+        {
+            var circle = new EllipseGeometry(rect);
+            context.DrawGeometry(Skin.HandleFill, Skin.HandlePen, circle);
+            return;
+        }
+        context.FillRectangle(Skin.HandleFill, rect);
+        context.DrawRectangle(null, Skin.HandlePen, rect);
+    }
+
+    /// <summary>
+    /// The shape being drawn right now, before it becomes a selection. It goes down as the Mac's does — a
+    /// dark line under a light one — so it reads over the picture and over the pasteboard alike.
+    /// </summary>
+    private void DrawDraft(DrawingContext context)
+    {
+        var under = new Pen(new SolidColorBrush(Color.FromArgb(0xCC, 0, 0, 0)), 2);
+        var over = new Pen(Brushes.White, 1);
         if (Selection == SelectionTool.Polygon)
         {
-            if (_lasso.Count > 0) DrawPolyline(context, pen, _lasso, _lassoPointer);
+            if (_lasso.Count > 0) DrawPolyline(context, under, over, _lasso, _lassoPointer);
             return;
         }
         if (!_selecting) return;
         if (Selection == SelectionTool.Lasso)
         {
-            DrawPolyline(context, pen, _lasso, null);
+            DrawPolyline(context, under, over, _lasso, null);
             return;
         }
         if (_selectionBox is not { } box || box.Width <= 0 || box.Height <= 0) return;
         var corner = ToScreen(new SKPoint(box.Left, box.Top));
         var width = box.Width * _zoom;
         var height = box.Height * _zoom;
-        if (Selection == SelectionTool.Ellipse)
+        foreach (var pen in new[] { under, over })
         {
-            context.DrawEllipse(null, pen, new Point(corner.X + width / 2, corner.Y + height / 2), width / 2, height / 2);
-            return;
+            if (Selection == SelectionTool.Ellipse)
+            {
+                context.DrawEllipse(null, pen, new Point(corner.X + width / 2, corner.Y + height / 2),
+                    width / 2, height / 2);
+                continue;
+            }
+            context.DrawRectangle(null, pen, new Rect(corner.X, corner.Y, width, height));
         }
-        context.DrawRectangle(null, pen, new Rect(corner.X, corner.Y, width, height));
     }
 
-    private void DrawPolyline(DrawingContext context, Pen pen, List<SKPoint> points, SKPoint? to)
+    private void DrawPolyline(DrawingContext context, Pen under, Pen over, List<SKPoint> points, SKPoint? to)
     {
         for (var index = 1; index < points.Count; index++)
         {
-            context.DrawLine(pen, ToScreen(points[index - 1]), ToScreen(points[index]));
+            var from = ToScreen(points[index - 1]);
+            var to2 = ToScreen(points[index]);
+            context.DrawLine(under, from, to2);
+            context.DrawLine(over, from, to2);
         }
-        if (to is { } last && points.Count > 0) context.DrawLine(pen, ToScreen(points[^1]), ToScreen(last));
+        if (to is { } last && points.Count > 0)
+        {
+            var from = ToScreen(points[^1]);
+            var end = ToScreen(last);
+            context.DrawLine(under, from, end);
+            context.DrawLine(over, from, end);
+        }
     }
 
     /// <summary>

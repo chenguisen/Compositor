@@ -17,13 +17,15 @@ internal sealed class CurveEditor : Control
     /// <summary>How near a handle a click has to be, in screen pixels, to take hold of it.</summary>
     private const double Grab = 9;
 
-    private static readonly IBrush Backdrop = new SolidColorBrush(Color.FromRgb(0x20, 0x20, 0x20));
+    /// <summary>The graph's own colours, as the Mac's CurvesControls draws them: black at 35% behind the plot,
+    /// a grid of white at 12%, a white curve, and handles that are white until one is taken hold of.</summary>
+    private static readonly IBrush Backdrop = Skin.CurveGround;
 
-    private static readonly Pen GridPen = new() { Brush = new SolidColorBrush(Color.FromRgb(0x40, 0x40, 0x40)), Thickness = 1 };
-    private static readonly Pen DiagonalPen = new() { Brush = new SolidColorBrush(Color.FromRgb(0x55, 0x55, 0x55)), Thickness = 1 };
-    private static readonly Pen CurvePen = new() { Brush = new SolidColorBrush(Color.FromRgb(0xE0, 0xE0, 0xE0)), Thickness = 2 };
-    private static readonly IBrush HandleBrush = new SolidColorBrush(Color.FromRgb(0x33, 0x99, 0xFF));
-    private static readonly IBrush ChosenBrush = Brushes.White;
+    private static readonly Pen GridPen = new() { Brush = Skin.CurveGrid, Thickness = 1 };
+    private static readonly Pen DiagonalPen = new() { Brush = Skin.CurveGrid, Thickness = 1 };
+    private static readonly Pen CurvePen = new() { Brush = Brushes.White, Thickness = 2 };
+    private static readonly IBrush HandleBrush = Brushes.White;
+    private static readonly IBrush ChosenBrush = Skin.AccentBrush;
 
     private CurvesSettings _curves = new();
     private int _channel;

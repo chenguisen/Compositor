@@ -9,13 +9,24 @@ namespace Compositor.Desktop;
 /// View ▸ Grid Settings: how far apart the major lines are and how finely each square is split. Avalonia
 /// ships no such dialog, so this is one.
 /// </summary>
-internal sealed class GridSettingsDialog : Window
+internal sealed class GridSettingsDialog : DialogWindow
 {
     private readonly TextBox _spacing;
     private readonly TextBox _subdivisions;
     private LayoutGrid? _result;
 
-    private GridSettingsDialog(LayoutGrid start)
+    /// <summary>
+    /// The body this dialog is made of, handed over and let go of, for the colour check — a control can only
+    /// be drawn once it has no window of its own holding it.
+    /// </summary>
+    internal Control TakeBody()
+    {
+        var body = (Control)Content!;
+        Content = null;
+        return body;
+    }
+
+    internal GridSettingsDialog(LayoutGrid start)
     {
         Title = "Grid Settings";
         Width = 380;

@@ -1,6 +1,11 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Layout;
+using Avalonia.Media;
 using Avalonia.Media.Imaging;
+using Avalonia.Styling;
+using Avalonia.Themes.Fluent;
+using Avalonia.VisualTree;
 using Compositor.Core.Document;
 using Compositor.Core.Format;
 using Compositor.Core.IO;
@@ -57,9 +62,139 @@ internal static class Program
         // `--updates` reads the app's real update feed and says what it makes of it, which is the whole check
         // short of the dialog: off the network it prints that the feed could not be reached instead.
         if (args is ["--updates"]) return Updates();
+        if (args.Length >= 1 && args[0] == "--theme-probe") return ThemeProbe(args[1..]);
+        // `--dialogs` draws a few dialog bodies under the real theme, which is the only way to look at their
+        // colours: what a control's text and fill resolve to is the theme's business, not the dialog's.
+        if (args is ["--dialogs", var dialogOutput]) return Dialogs(dialogOutput);
         Build().StartWithClassicDesktopLifetime(args);
         return 0;
     }
+
+    /// <summary>
+    /// Prints the colours the Fluent theme resolves to: every key, or only those whose names hold one of the
+    /// given words. The colours a control is drawn with are the theme's rather than the app's, so this is how
+    /// they are read — it is what found the hundred keys that follow Fluent's own blue, which <see cref="Skin"/>
+    /// moves onto the Mac's. What it says first is whether that took: no key should still hold Fluent's blue.
+    /// </summary>
+    private static int ThemeProbe(string[] names)
+    {
+        Build().SetupWithoutStarting();
+        var theme = Application.Current!.Styles.OfType<FluentTheme>().First();
+        if (theme.Resources is not ResourceDictionary resources) return 0;
+        foreach (var variant in resources.ThemeDictionaries)
+        {
+            if (variant.Key != ThemeVariant.Dark || variant.Value is not IResourceDictionary dark) continue;
+            var flaunted = 0;
+            foreach (var key in dark.Keys)
+            {
+                dark.TryGetResource(key, null, out var held);
+                if (HoldsFluentBlue(held)) flaunted++;
+            }
+            Console.WriteLine($"variant {Application.Current!.RequestedThemeVariant}; {dark.Count} resources, " +
+                $"{flaunted} still in Fluent's own blue");
+            foreach (var key in dark.Keys.OrderBy(k => k.ToString(), StringComparer.Ordinal))
+            {
+                var name = key.ToString()!;
+                if (names.Length > 0 && !names.All(part => name.Contains(part, StringComparison.OrdinalIgnoreCase))) continue;
+                dark.TryGetResource(key, null, out var value);
+                Console.WriteLine($"  {name} = {value}");
+            }
+        }
+        return 0;
+    }
+
+    /// <summary>Whether a resource still holds one of the three shades Fluent draws its accent in.</summary>
+    private static bool HoldsFluentBlue(object? value)
+    {
+        var colour = value switch
+        {
+            Color one => one,
+            ISolidColorBrush brush => brush.Color,
+            _ => (Color?)null,
+        };
+        return colour is { } held && (held == Color.FromRgb(0x00, 0x78, 0xD4)
+            || held == Color.FromRgb(0x23, 0xA0, 0xFF) || held == Color.FromRgb(0x00, 0x58, 0x9B));
+    }
+
+    /// <summary>
+    /// A few dialogs' bodies drawn one under another under the real theme. A dialog's colours are mostly the
+    /// theme's — the text, a field's fill, a slider's track and thumb, a tick box — so this is how they are
+    /// looked at without a pointer: each is composed the way its window composes it, its own background behind
+    /// its content, and the background it resolved to is printed beside it.
+    /// </summary>
+    private static int Dialogs(string output)
+    {
+        Build().SetupWithoutStarting();
+        var folder = Path.GetDirectoryName(Path.GetFullPath(output))!;
+        foreach (var (name, file, width, body) in new (string, string, double, Control)[]
+                 {
+                     ("New Project", "new-project.png", 400, new NewDocumentDialog().TakeBody()),
+                     ("Grid Settings", "grid-settings.png", 380, new GridSettingsDialog(new LayoutGrid()).TakeBody()),
+                     ("Controls", "controls.png", 420, Controls()),
+                 })
+        {
+            Draw(name, Path.Combine(folder, file), width, body);
+        }
+        // The two panels whose body is a scroll view cannot be drawn this way: a control's template is applied
+        // when it reaches a live window and a bitmap is not one, so a ScrollViewer has no presenter to lay its
+        // content out in. What they hold is the same controls the sheet above shows.
+        Console.WriteLine("the Brightness/Contrast and Camera Raw bodies are scroll views, which a bitmap "
+            + "does not lay out: draw them on a screen to look at them");
+        return 0;
+    }
+
+    /// <summary>
+    /// The controls a dialog is made of, side by side under the app's own window: this is where a slider's
+    /// track and thumb, a tick box's mark, a pop-up's field and a selected row show what the theme draws them.
+    /// </summary>
+    private static Control Controls()
+    {
+        var selected = new ListBoxItem { Content = "A selected row", IsSelected = true };
+        return new StackPanel
+        {
+            Margin = new Thickness(16),
+            Spacing = 10,
+            Children =
+            {
+                new TextBlock { Text = "A label" },
+                new TextBlock { Text = "A second line", Foreground = Skin.SecondaryBrush },
+                new Slider { Minimum = 0, Maximum = 100, Value = 40 },
+                new CheckBox { Content = "A tick box", IsChecked = true },
+                new RadioButton { Content = "A radio button", IsChecked = true },
+                new ComboBox
+                {
+                    ItemsSource = new[] { "A pop-up", "Another choice" },
+                    SelectedIndex = 0,
+                },
+                new ListBox { ItemsSource = new object[] { "A row", selected }, Height = 72 },
+                new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 8,
+                    Children = { new Button { Content = "Cancel" }, new Button { Content = "OK" } },
+                },
+            },
+        };
+    }
+
+    /// <summary>One body drawn on a window of the app's own make, at the width its dialog asks for.</summary>
+    private static void Draw(string name, string path, double width, Control body)
+    {
+        var holder = new CheckWindow { Width = width };
+        var shown = new Border { Background = holder.Background, Child = body };
+        holder.Content = shown;
+        shown.Measure(new Size(width, double.PositiveInfinity));
+        shown.Arrange(new Rect(0, 0, width, Math.Max(80, shown.DesiredSize.Height)));
+        shown.UpdateLayout();
+        var tall = (int)Math.Ceiling(shown.Bounds.Height);
+        using var target = new RenderTargetBitmap(new PixelSize((int)width, tall));
+        target.Render(shown);
+        target.Save(path, new PngBitmapEncoderOptions());
+        Console.WriteLine($"{name}: {body.GetType().Name} drawn {width}x{tall} on {holder.Background} to {path}");
+    }
+
+    /// <summary>A window of the app's own make, to hold a dialog's body while it is drawn.</summary>
+    private sealed class CheckWindow : DialogWindow;
 
     /// <summary>
     /// Help ▸ Check for Updates without the dialog: the feed is read from where the Mac build reads it, parsed,

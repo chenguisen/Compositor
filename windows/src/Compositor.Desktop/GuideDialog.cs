@@ -8,7 +8,7 @@ namespace Compositor.Desktop;
 /// <summary>
 /// View ▸ New Guide: which way the line runs and where it sits. Avalonia ships no such dialog, so this is one.
 /// </summary>
-internal sealed class GuideDialog : Window
+internal sealed class GuideDialog : DialogWindow
 {
     private readonly ComboBox _axis = new();
     private readonly TextBox _position;

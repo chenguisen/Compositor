@@ -8,7 +8,7 @@ namespace Compositor.Desktop;
 /// A question with two answers, for the places where something would be thrown away. Avalonia ships no such
 /// dialog, so this is one: the answer is false when it is dismissed by the window's own close button.
 /// </summary>
-internal sealed class ConfirmDialog : Window
+internal sealed class ConfirmDialog : DialogWindow
 {
     private bool _answered;
 

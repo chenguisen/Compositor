@@ -8,7 +8,7 @@ namespace Compositor.Desktop;
 /// <summary>
 /// The quality a JPEG is written at, as one slider. Avalonia ships no such dialog, so this is one.
 /// </summary>
-internal sealed class QualityDialog : Window
+internal sealed class QualityDialog : DialogWindow
 {
     private readonly Slider _quality = new() { Minimum = 1, Maximum = 100, Value = ImageWriter.DefaultQuality, Width = 220 };
     private int? _result;

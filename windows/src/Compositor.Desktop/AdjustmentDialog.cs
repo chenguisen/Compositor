@@ -12,7 +12,7 @@ namespace Compositor.Desktop;
 /// made, so one panel serves them all; whatever the panel does not show is carried over from the layer, so
 /// Apply never loses anything. Avalonia ships no such dialog, so this is one.
 /// </summary>
-internal sealed class AdjustmentDialog : Window
+internal sealed class AdjustmentDialog : DialogWindow
 {
     private readonly List<(Slider Slider, Action<LayerAdjustment, double> Set)> _rows = [];
     private readonly List<double> _fallbacks = [];
@@ -26,7 +26,7 @@ internal sealed class AdjustmentDialog : Window
     /// <summary>Asks for the picture to be shown with these settings as they stand.</summary>
     public Action<LayerAdjustment>? Preview { get; set; }
 
-    private AdjustmentDialog(LayerAdjustment start)
+    internal AdjustmentDialog(LayerAdjustment start)
     {
         _start = start;
         var kind = start.Kind;

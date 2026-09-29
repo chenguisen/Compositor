@@ -9,7 +9,7 @@ namespace Compositor.Desktop;
 /// Image ▸ Trim: which edges to take away, and what counts as border. Avalonia ships no such dialog, so this
 /// is one.
 /// </summary>
-internal sealed class TrimDialog : Window
+internal sealed class TrimDialog : DialogWindow
 {
     private readonly ComboBox _basedOn = new();
     private readonly CheckBox _top = new() { Content = "Top" };

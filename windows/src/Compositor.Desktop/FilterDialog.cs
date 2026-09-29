@@ -11,7 +11,7 @@ namespace Compositor.Desktop;
 /// one short group of amounts, and Apply runs it over the selected layer's pixels. Avalonia ships no such
 /// dialog, so this is one.
 /// </summary>
-internal sealed class FilterDialog : Window
+internal sealed class FilterDialog : DialogWindow
 {
     /// <summary>Asks for the picture to be shown with this filter's amounts as they stand.</summary>
     public Action<FilterSettings>? Preview { get; set; }

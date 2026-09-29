@@ -11,7 +11,7 @@ namespace Compositor.Desktop;
 /// are the amounts that effect reads; ticked off it takes the effect away. Avalonia ships no such dialog, so
 /// this is one.
 /// </summary>
-internal sealed class EffectDialog : Window
+internal sealed class EffectDialog : DialogWindow
 {
     private readonly List<(Slider Slider, Action<object, double> Set)> _rows = [];
     private readonly List<double> _fallbacks = [];

@@ -9,7 +9,7 @@ namespace Compositor.Desktop;
 /// File ▸ New: how big the canvas is and how finely it is measured, with the sizes a screen or a post is
 /// usually wanted at a menu away. Avalonia ships no such dialog, so this is one.
 /// </summary>
-internal sealed class NewDocumentDialog : Window
+internal sealed class NewDocumentDialog : DialogWindow
 {
     /// <summary>A size worth starting from, as the Mac build's presets menu lists them.</summary>
     private static readonly (string Title, int Width, int Height)[] Presets =
@@ -34,7 +34,18 @@ internal sealed class NewDocumentDialog : Window
     private bool _choosing;
     private (int Width, int Height, double Resolution)? _result;
 
-    private NewDocumentDialog()
+    /// <summary>
+    /// The body this dialog is made of, handed over and let go of, for the colour check — a control can only
+    /// be drawn once it has no window of its own holding it.
+    /// </summary>
+    internal Control TakeBody()
+    {
+        var body = (Control)Content!;
+        Content = null;
+        return body;
+    }
+
+    internal NewDocumentDialog()
     {
         Title = "New Project";
         Width = 400;

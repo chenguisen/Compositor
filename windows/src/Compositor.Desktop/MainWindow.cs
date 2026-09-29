@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Documents;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
@@ -22,15 +23,21 @@ namespace Compositor.Desktop;
 /// </summary>
 public sealed class MainWindow : Window
 {
-    private static readonly IBrush Panel = new SolidColorBrush(Color.FromRgb(0x22, 0x24, 0x28));
+    /// <summary>The panels, the strip and the bar under the canvas: the Mac's editor background.</summary>
+    private static readonly IBrush Panel = Skin.ChromeBrush;
     /// <summary>The tab in front, marked: a lighter panel than the strip it sits on.</summary>
-    private static readonly IBrush Accent = new SolidColorBrush(Color.FromRgb(0x3A, 0x3E, 0x46));
-    private static readonly IBrush Ink = new SolidColorBrush(Color.FromRgb(0xE6, 0xE8, 0xEB));
+    private static readonly IBrush Accent = Skin.TabFront;
+    private static readonly IBrush Ink = Skin.LabelBrush;
 
     private readonly CanvasView _canvas = new();
     /// <summary>The layers panel: several rows may be selected, and the current row is the one an edit acts on.</summary>
     private readonly ListBox _layers = new() { SelectionMode = Avalonia.Controls.SelectionMode.Multiple };
-    private readonly TextBlock _status = new() { Margin = new Thickness(10, 3, 10, 3), Foreground = Ink };
+    private readonly TextBlock _status = new()
+    {
+        Margin = new Thickness(10, 3, 10, 3),
+        Foreground = Skin.SecondaryBrush,
+        FontSize = 11,
+    };
 
     /// <summary>One row, because what ⌘E does depends on the panel selection: it is named for it here.</summary>
     private readonly MenuItem _merge = new() { HotKey = new KeyGesture(Key.E, KeyModifiers.Control) };
@@ -244,7 +251,10 @@ public sealed class MainWindow : Window
         Title = "Compositor";
         Width = 1280;
         Height = 820;
-        Background = new SolidColorBrush(Color.FromRgb(0x18, 0x1A, 0x1E));
+        Background = Skin.ChromeBrush;
+        // The window's plain labels (a heading, a readout) take their colour from here, as the Mac's do from
+        // the appearance; controls that name their own text keep it.
+        TextElement.SetForeground(this, Skin.LabelBrush);
         _canvas.StrokeFinished = Painted;
         _canvas.MarqueeFinished = (box, mode) => MarqueeFinished(box, mode, _tool == Tool.Ellipse);
         _canvas.LassoFinished = (points, mode) => LassoFinished(points, mode, _tool == Tool.Polygon);
@@ -853,15 +863,23 @@ public sealed class MainWindow : Window
         _tabStrip.Children.Clear();
         foreach (var tab in _tabs)
         {
-            var name = new Button { Content = tab.Name, Tag = tab };
+            // The buttons carry the tab, so they are left unpainted and the capsule behind them shows.
+            var name = new Button { Content = tab.Name, Tag = tab, Background = Brushes.Transparent };
             name.Click += (_, _) => Bring(tab);
-            var close = new Button { Content = "×", Padding = new Thickness(4, 0, 4, 0), Tag = tab };
+            var close = new Button
+            {
+                Content = "×", Padding = new Thickness(4, 0, 4, 0), Tag = tab, Background = Brushes.Transparent,
+            };
             close.Click += (_, _) => _ = CloseTab(tab);
+            // A tab is a capsule, as the Mac draws one: the one in front the brighter of the two.
+            var front = ReferenceEquals(tab, _open);
             _tabStrip.Children.Add(new Border
             {
-                Background = ReferenceEquals(tab, _open) ? Accent : Brushes.Transparent,
-                CornerRadius = new CornerRadius(4),
-                Padding = new Thickness(4, 0, 4, 0),
+                Background = front ? Skin.TabFront : Skin.TabBack,
+                BorderBrush = front ? Skin.TabFrontEdge : Skin.TabBackEdge,
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(11),
+                Padding = new Thickness(8, 0, 2, 0),
                 Child = new StackPanel
                 {
                     Orientation = Orientation.Horizontal,

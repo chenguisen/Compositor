@@ -19,11 +19,12 @@ internal sealed class RulerStrip : Control
     private const double MidTick = 5;
     private const double MinorTick = 3;
 
-    private static readonly IBrush Face = new SolidColorBrush(Color.FromRgb(0x33, 0x33, 0x33));
-    private static readonly IBrush Tick = new SolidColorBrush(Color.FromRgb(0x9E, 0x9E, 0x9E));
-    private static readonly IBrush Label = new SolidColorBrush(Color.FromRgb(0xC7, 0xC7, 0xC7));
+    // The Mac's CanvasRulers colours: a 0.2 face, 0.62 ticks and 0.78 labels, shut off with a 0.08 line.
+    private static readonly IBrush Face = new SolidColorBrush(Skin.RulerFace);
+    private static readonly IBrush Tick = new SolidColorBrush(Skin.RulerTick);
+    private static readonly IBrush Label = new SolidColorBrush(Skin.RulerLabel);
     private static readonly IPen TickPen = new Pen(Tick, 1);
-    private static readonly IPen Edge = new Pen(new SolidColorBrush(Color.FromRgb(0x14, 0x14, 0x14)), 1);
+    private static readonly IPen Edge = new Pen(new SolidColorBrush(Skin.RulerEdge), 1);
     private static readonly Typeface Digits = new("Consolas");
 
     /// <summary>Which edge this strip is on: the numbers run left to right, or down the side.</summary>
@@ -80,7 +81,7 @@ internal sealed class RulerStrip : Control
 /// <summary>The little square between the two rulers, with the diagonal the Mac build's corner has.</summary>
 internal sealed class RulerCorner : Control
 {
-    private static readonly IBrush Face = new SolidColorBrush(Color.FromRgb(0x33, 0x33, 0x33));
+    private static readonly IBrush Face = new SolidColorBrush(Skin.RulerFace);
     private static readonly IPen Diagonal = new Pen(new SolidColorBrush(Color.FromArgb(0x48, 0xFF, 0xFF, 0xFF)), 1);
 
     public override void Render(DrawingContext context)

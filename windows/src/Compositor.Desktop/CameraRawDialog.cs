@@ -11,7 +11,7 @@ namespace Compositor.Desktop;
 /// The Camera Raw Filter's panel: every group of settings as sliders, and OK to apply them to the layer's
 /// pixels. Avalonia ships no such dialog, so this is one.
 /// </summary>
-internal sealed class CameraRawDialog : Window
+internal sealed class CameraRawDialog : DialogWindow
 {
     private readonly List<(Slider Slider, Action<CameraRawSettings, double> Set, TextBlock Readout, string Format)> _rows = [];
     private readonly ComboBox _glowStyle = new();
@@ -41,7 +41,7 @@ internal sealed class CameraRawDialog : Window
     private void RefreshPreview() => Preview?.Invoke(Current(), _shadowClip.IsChecked == true,
         _highlightClip.IsChecked == true, _sharpenMaskView.IsChecked == true);
 
-    private CameraRawDialog(CameraRawSettings start, SKColor brush)
+    internal CameraRawDialog(CameraRawSettings start, SKColor brush)
     {
         brush.ToHsl(out var brushHue, out var brushSaturation, out _);
         _brushHue = brushHue;

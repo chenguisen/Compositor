@@ -10,7 +10,7 @@ namespace Compositor.Desktop;
 /// Image ▸ Image Size: the whole picture resampled, with the resolution it is to be measured at. Avalonia
 /// ships no such dialog, so this is one.
 /// </summary>
-internal sealed class ImageSizeDialog : Window
+internal sealed class ImageSizeDialog : DialogWindow
 {
     private readonly TextBox _width;
     private readonly TextBox _height;

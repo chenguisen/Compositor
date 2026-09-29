@@ -12,7 +12,7 @@ namespace Compositor.Desktop;
 /// Select ▸ Colour Range: the colour to look for, how near a colour counts, and what to do with what is
 /// found. Avalonia ships no such dialog, so this is one.
 /// </summary>
-internal sealed class ColorRangeDialog : Window
+internal sealed class ColorRangeDialog : DialogWindow
 {
     private readonly Slider _red = new() { Minimum = 0, Maximum = 255, Width = 220 };
     private readonly Slider _green = new() { Minimum = 0, Maximum = 255, Width = 220 };

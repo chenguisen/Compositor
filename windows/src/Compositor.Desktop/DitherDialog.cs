@@ -10,7 +10,7 @@ namespace Compositor.Desktop;
 /// Filter ▸ Dither's panel: the look and its amounts, and Apply to run it over the selected layer. Avalonia
 /// ships no such dialog, so this is one.
 /// </summary>
-internal sealed class DitherDialog : Window
+internal sealed class DitherDialog : DialogWindow
 {
     private readonly List<(Slider Slider, Action<DitherSettings, double> Set)> _rows = [];
     private readonly List<double> _fallbacks = [];

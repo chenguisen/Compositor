@@ -15,9 +15,9 @@ namespace Compositor.Desktop;
 /// machine. Making the Windows build from this repository is what actually updates it.
 /// </para>
 /// </summary>
-internal sealed class UpdateDialog : Window
+internal sealed class UpdateDialog : DialogWindow
 {
-    private static readonly IBrush Ink = new SolidColorBrush(Color.FromRgb(0xE6, 0xE8, 0xEB));
+    private static readonly IBrush Ink = Skin.LabelBrush;
 
     private UpdateDialog(string title, string message, string? page)
     {

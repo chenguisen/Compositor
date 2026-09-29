@@ -11,7 +11,7 @@ namespace Compositor.Desktop;
 /// The Type tool's settings: the text, the face, and how it is set. Avalonia ships no such dialog, so this
 /// is one — a box for the words, the fields a text layer holds, and OK.
 /// </summary>
-internal sealed class TextDialog : Window
+internal sealed class TextDialog : DialogWindow
 {
     private readonly TextBox _content = new() { AcceptsReturn = true, Height = 120, TextWrapping = TextWrapping.Wrap };
     private readonly TextBox _font = new();
