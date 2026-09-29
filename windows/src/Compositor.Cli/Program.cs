@@ -29,6 +29,7 @@ internal static class Program
                 "save" => Save(args),
                 "import" => Import(args),
                 "crop" => Crop(args),
+                "guide" => Guide(args),
                 "canvas" => Canvas(args),
                 "resize" => Resize(args),
                 "trim" => Trim(args),
@@ -55,6 +56,7 @@ internal static class Program
           save   <project.comp> <out.comp>    read it and write it back
           import <image> <out.comp>           start a project from one image
           crop   <in> <out> x y w h           crop the canvas to a rectangle
+          guide  <in> <out> h|v <position>    add a guide; - means take them all away
           canvas <in> <out> w h [anchor]      resize the canvas, moving content
           resize <in> <out> w h [dpi]         resample the image and every layer
           trim   <in> <out> [tolerance]       crop the canvas to what is drawn on it
@@ -202,6 +204,41 @@ internal static class Program
         if (!ImageEdits.Resize(document, width, height, resolution)) return Fail("That image size leaves the document as it was.");
         ProjectStore.Save(ProjectSnapshot.FromDocument(document), args[2]);
         Console.WriteLine($"wrote {args[2]} ({document.Width}x{document.Height} at {document.Resolution:0} pixels per inch)");
+        return 0;
+    }
+
+    /// <summary>
+    /// Adds one alignment guide, or takes them all away with a dash: the only way to put a guide on a project
+    /// without a pointer, which is what makes the canvas' guide drawing checkable from a command line.
+    /// </summary>
+    private static int Guide(string[] args)
+    {
+        if (args.Length is not (4 or 5)) return Fail("guide needs an input, an output, an axis (h or v) and a position, or - to clear them.");
+        using var snapshot = ProjectStore.Load(args[1]);
+        using var document = snapshot.ToDocument();
+        if (args.Length == 4 && args[3] == "-")
+        {
+            var cleared = GuideEdits.Clear(document);
+            if (cleared == 0) return Fail("That project has no guides to clear.");
+            ProjectStore.Save(ProjectSnapshot.FromDocument(document), args[2]);
+            Console.WriteLine($"wrote {args[2]} ({cleared} guides cleared)");
+            return 0;
+        }
+        if (args.Length == 4) return Fail("A guide needs a position as well as an axis.");
+        var axis = args[3] switch
+        {
+            "h" or "horizontal" => GuideAxis.Horizontal,
+            "v" or "vertical" => GuideAxis.Vertical,
+            _ => (GuideAxis?)null,
+        };
+        if (axis is not { } direction) return Fail("A guide runs h or v.");
+        if (!double.TryParse(args[4], out var position)) return Fail("A guide's position is a number of pixels.");
+        if (GuideEdits.Add(document, direction, position) is null)
+        {
+            return Fail("The guide was refused: that project holds as many as it may, or the position is not one a guide may sit at.");
+        }
+        ProjectStore.Save(ProjectSnapshot.FromDocument(document), args[2]);
+        Console.WriteLine($"wrote {args[2]} ({direction} guide at {position:0.##})");
         return 0;
     }
 
