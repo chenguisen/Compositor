@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
 using Avalonia.Input;
+using Avalonia.Headless;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
@@ -1509,6 +1510,129 @@ public sealed class MainWindow : Window
         if (sheet.Draft[undo].IsBound) throw new InvalidOperationException("Backspace did not clear the row");
         report.Add("Backspace clears the row being recorded");
         return string.Join(Environment.NewLine, report);
+    }
+
+    /// <summary>A drag with the left button down, from one window point to another, in the steps a hand makes.</summary>
+    private void Drag(Point from, Point to, int steps = 8)
+    {
+        this.MouseDown(from, MouseButton.Left, RawInputModifiers.LeftMouseButton);
+        for (var step = 1; step <= steps; step++)
+        {
+            this.MouseMove(new Point(
+                from.X + (to.X - from.X) * step / steps,
+                from.Y + (to.Y - from.Y) * step / steps), RawInputModifiers.LeftMouseButton);
+        }
+        this.MouseUp(to, MouseButton.Left, RawInputModifiers.None);
+    }
+
+    /// <summary>
+    /// A fingerprint of what a layer draws, so a check can tell that it changed. All four channels go in: a
+    /// layer that is already opaque has no alpha left to change, which an alpha-only sum would read as "nothing
+    /// happened" however much was painted on it.
+    /// </summary>
+    private static long InkOf(SKBitmap pixels)
+    {
+        var hash = 17L;
+        for (var y = 0; y < pixels.Height; y++)
+        {
+            for (var x = 0; x < pixels.Width; x++)
+            {
+                var colour = pixels.GetPixel(x, y);
+                var packed = (long)colour.Red << 24 | (long)colour.Green << 16 | (long)colour.Blue << 8 | colour.Alpha;
+                hash = hash * 31 + packed;
+            }
+        }
+        return hash;
+    }
+
+    /// <summary>
+    /// The window driven with a pointer rather than only built: a stroke painted, a marquee dragged, the wand
+    /// clicked and a guide pulled off the ruler, each aimed at a document point through the canvas's own
+    /// mapping and each checked against the document and the history rather than against a picture. The caller
+    /// shows the window on the headless platform first, which is what makes the hit-testing real.
+    /// </summary>
+    internal string PointerSelfCheck(string project)
+    {
+        var report = new List<string>();
+        // Every step reports as it goes and a failure is reported rather than thrown away with the report: a
+        // check that drives a pointer has many ways to fail and only one of them is worth a stack trace.
+        try
+        {
+            Open(project);
+        if (_document is not { } document) throw new InvalidOperationException("the project did not open");
+        _canvas.Fit();
+        report.Add($"open {System.IO.Path.GetFileName(project)}: {document.Width}x{document.Height} "
+            + $"at {_canvas.Zoom * 100:0}%");
+
+        // Where the canvas sits in the window, and how to aim at a document point: through the canvas's own
+        // mapping, so a check cannot aim at one place and have the tool read another.
+        var corner = _canvas.TranslatePoint(new Point(0, 0), this)
+            ?? throw new InvalidOperationException("the canvas is not in the window");
+        Point Aim(SKPoint at)
+        {
+            var placed = _canvas.InView(at);
+            return new Point(corner.X + placed.X, corner.Y + placed.Y);
+        }
+        report.Add($"the canvas sits at {corner.X:0},{corner.Y:0} in the window, "
+            + $"{_canvas.Bounds.Width:0}x{_canvas.Bounds.Height:0} of it");
+        var probe = Aim(new SKPoint(30, 30));
+        report.Add($"aiming at document 30,30 lands on window {probe.X:0.#},{probe.Y:0.#}, "
+            + $"{(corner.X <= probe.X && probe.X <= corner.X + _canvas.Bounds.Width && corner.Y <= probe.Y && probe.Y <= corner.Y + _canvas.Bounds.Height ? "on the canvas" : "off the canvas")}");
+
+        // A brush stroke: a press, a drag and a release, which is the path every tool takes. The layer is chosen
+        // for having pixels of its own and selected through the panel, the way a hand would select it.
+        var target = document.Layers.FirstOrDefault(one => !one.IsGroup && one.Asset?.Image is not null);
+        if (target?.Asset?.Image is not { } pixels) throw new InvalidOperationException("no layer to paint on");
+        Reselect(target.ID);
+        report.Add($"painting on \"{target.Name}\" ({pixels.Width}x{pixels.Height} of its own pixels)");
+        SetTool(Tool.Brush);
+        var before = InkOf(pixels);
+        Drag(Aim(new SKPoint(30, 30)), Aim(new SKPoint(200, 130)));
+        // Read the layer's pixels back: painting may hand the layer a new bitmap, so the one held before the
+        // stroke is not necessarily the one the stroke went on.
+        var after = InkOf(document.Layers.First(one => one.ID == target.ID).Asset!.Image);
+        report.Add($"a brush stroke: {before} → {after} of ink, one \"{_history.UndoName}\" step");
+        if (after == before) throw new InvalidOperationException("the stroke painted nothing");
+        if (!_history.CanUndo) throw new InvalidOperationException("the stroke left nothing to undo");
+
+        // A marquee: the selection it drags is what the document ends up holding.
+        SetTool(Tool.Marquee);
+        Drag(Aim(new SKPoint(20, 20)), Aim(new SKPoint(120, 90)));
+        if (document.Selection.Path is not { } marquee) throw new InvalidOperationException("the marquee selected nothing");
+        var box = marquee.Bounds;
+        report.Add($"a marquee drag: {box.Width:0} x {box.Height:0} at {box.Left:0},{box.Top:0}");
+        if (box.Width < 90 || box.Width > 110) throw new InvalidOperationException($"the marquee is {box.Width:0} wide, not 100");
+
+        // The wand: one click, on a colour the picture actually has.
+        SetTool(Tool.Wand);
+        Click(Aim(new SKPoint(60, 60)));
+        if (document.Selection.Path is not { } wand) throw new InvalidOperationException("the wand selected nothing");
+        report.Add($"a wand click: {wand.Bounds.Width:0} x {wand.Bounds.Height:0} of the picture taken");
+
+        // A guide dragged with the Move tool, which is how the port moves one today. Pulling a *new* guide off a
+        // ruler is not in the port at all — the ruler strips take no pointer — and that gap is said out loud
+        // here rather than left for the next reader to discover from a Mac screenshot.
+        GuideEdits.Add(document, GuideAxis.Horizontal, 100);
+        SetTool(Tool.Move);
+        if (document.Guides.Count != 1) throw new InvalidOperationException("the guide was not added");
+        Drag(Aim(new SKPoint(120, 100)), Aim(new SKPoint(120, 40)));
+        var moved = document.Guides[0].Position;
+        report.Add($"a guide dragged with the Move tool: 100 → {moved:0.#}, and the rulers take no pointer, so a "
+            + "guide cannot yet be pulled off one");
+        if (Math.Abs(moved - 40) > 3) throw new InvalidOperationException($"the guide ended at {moved:0.#}, not 40");
+        }
+        catch (Exception failure)
+        {
+            report.Add($"FAILED: {failure.Message}");
+        }
+        return string.Join(Environment.NewLine, report);
+    }
+
+    /// <summary>A single click with the left button, pressed and let go in the same place.</summary>
+    private void Click(Point at)
+    {
+        this.MouseDown(at, MouseButton.Left, RawInputModifiers.LeftMouseButton);
+        this.MouseUp(at, MouseButton.Left, RawInputModifiers.None);
     }
 
     internal string ToolsSelfCheck(string project)

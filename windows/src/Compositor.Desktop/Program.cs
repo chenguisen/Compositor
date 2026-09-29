@@ -1,5 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Headless;
+using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
@@ -76,6 +78,11 @@ internal static class Program
         // it, a few keys pressed through the window's own routed event, a rebind, and the sheet refusing a
         // clash. It draws the window and the sheet's own list of rows beside the report.
         if (args is ["--shortcuts", var keysOutput]) return Shortcuts(keysOutput);
+        // `--clicks` drives the window with a pointer instead of only building it: a stroke painted, a marquee
+        // dragged, the wand clicked — each aimed at a document point and checked against the document and the
+        // history. It runs on Avalonia's headless platform, which is what makes hit-testing and pointer capture
+        // real without a display.
+        if (args is ["--clicks", var clicksOutput]) return Clicks(clicksOutput);
         // `--updates` reads the app's real update feed and says what it makes of it, which is the whole check
         // short of the dialog: off the network it prints that the feed could not be reached instead.
         if (args is ["--updates"]) return Updates();
@@ -479,6 +486,56 @@ internal static class Program
 
     public static AppBuilder Build() =>
         AppBuilder.Configure<DesktopApp>().UsePlatformDetect().WithInterFont().LogToTrace();
+
+    /// <summary>
+    /// The app on Avalonia's headless platform, for the checks that drive the window with a pointer. Headless
+    /// drawing is off, so the real Skia renderer draws as usual and the window can be photographed as well as
+    /// clicked; what the platform leaves out is only the desktop window itself.
+    /// </summary>
+    private static AppBuilder BuildHeadless() =>
+        AppBuilder.Configure<DesktopApp>()
+            .UseHeadless(new AvaloniaHeadlessPlatformOptions { UseHeadlessDrawing = false })
+            .UseSkia()
+            .WithInterFont()
+            .LogToTrace();
+
+    /// <summary>
+    /// The window driven with a pointer, then photographed. Every aiming point is a document point put through
+    /// the canvas's own mapping, so what the check clicks is where the tool believes it clicked, and every
+    /// assertion is made against the document and the history rather than against the picture.
+    /// </summary>
+    private static int Clicks(string output)
+    {
+        BuildHeadless().SetupWithoutStarting();
+        var folder = Path.Combine(Path.GetTempPath(), "compositor-clicks-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            var project = Path.Combine(folder, "clicks.comp");
+            using (var document = Demo()) ProjectStore.Save(ProjectSnapshot.FromDocument(document), project);
+            var window = new MainWindow();
+            // Showing it is what creates the window the pointer can hit and lays the content out; headless, no
+            // desktop window appears.
+            window.Show();
+            var report = window.PointerSelfCheck(project);
+            Console.WriteLine(report);
+            window.CaptureRenderedFrame()?.Save(output, new PngBitmapEncoderOptions());
+            Console.WriteLine($"wrote {output}: the window after the pointer drove it");
+            // The check reports a failure in its own words rather than throwing, so that what it managed to do
+            // is still on the screen; the exit code is what says it failed.
+            return report.Contains("FAILED:", StringComparison.Ordinal) ? 1 : 0;
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+        }
+    }
 
     private static int Render(string project, string output, bool showGrid, bool preview = false, bool shape = false,
         bool zoomIn = false, bool pixelGrid = false, bool gradient = false)

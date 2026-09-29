@@ -1081,6 +1081,12 @@ public sealed class CanvasView : Control
     private Point ToScreen(SKPoint document) =>
         new((document.X - _origin.X) * _zoom, (document.Y - _origin.Y) * _zoom);
 
+    /// <summary>
+    /// Where a document point is drawn in this control. The checks that drive a pointer at the canvas aim
+    /// through this, so a check cannot aim at one place while the tool reads another.
+    /// </summary>
+    internal Point InView(SKPoint document) => ToScreen(document);
+
     private SKPoint ToDocument(Point screen) =>
         new((float)(_origin.X + screen.X / _zoom), (float)(_origin.Y + screen.Y / _zoom));
 
