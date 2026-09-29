@@ -1840,6 +1840,58 @@ public sealed class MainWindow : Window
         report.Add($"the guide dragged along the canvas: 110 → {moved:0.#}");
         if (Math.Abs(moved - 40) > 3) throw new InvalidOperationException($"the guide ended at {moved:0.#}, not 40");
 
+        // The Type tool's caret: a click where the words go, then the words, and the layer carries them.
+        SetTool(Tool.Type);
+        var layers = document.Layers.Count;
+        this.MouseDown(Aim(new SKPoint(40, 120)), MouseButton.Left, RawInputModifiers.LeftMouseButton);
+        this.MouseUp(Aim(new SKPoint(40, 120)), MouseButton.Left, RawInputModifiers.None);
+        this.KeyTextInput("Compositor");
+        SetTool(Tool.Pan);      // leaving the tool is what commits what was typed
+        var typed = document.Layers.LastOrDefault(one => one.Text is not null);
+        report.Add($"the Type tool: a click and a word made {document.Layers.Count - layers} layer, holding "
+            + $"\"{typed?.Text?.Style.Content}\"");
+        if (typed?.Text is not { } words || words.Style.Content != "Compositor")
+        {
+            throw new InvalidOperationException("the words typed on the canvas did not reach a text layer");
+        }
+
+        // The Layers panel's own opacity slider, dragged: the layer under it dims.
+        if (Selected is not { } dimming) throw new InvalidOperationException("no layer is selected to dim");
+        if (_opacity.TranslatePoint(new Point(0, 0), this) is not { } track)
+        {
+            throw new InvalidOperationException("the opacity slider is not in the window");
+        }
+        var wasOpacity = document.Layers.First(one => one.ID == dimming).Opacity;
+        var down = track.Y + _opacity.Bounds.Height / 2;
+        Drag(new Point(track.X + 110, down), new Point(track.X + 30, down));
+        var nowOpacity = document.Layers.First(one => one.ID == dimming).Opacity;
+        report.Add($"the opacity slider dragged left: {wasOpacity:0.00} → {nowOpacity:0.00}, "
+            + $"one \"{_history.UndoName}\" step");
+        if (nowOpacity >= wasOpacity) throw new InvalidOperationException("the slider did not dim the layer");
+
+        // The Crop tool: picking it with something selected starts its frame at the selection, as the Mac build
+        // does, and a corner handle drags it in from there.
+        var selected = document.Selection.Path!.Bounds;
+        SetTool(Tool.Crop);
+        if (_cropFrame is not { } seeded) throw new InvalidOperationException("the crop did not start at the selection");
+        report.Add($"picking Crop with a selection starts its frame at {seeded.Width} x {seeded.Height}, "
+            + $"against the selection's {selected.Width:0} x {selected.Height:0}");
+        if (Math.Abs(seeded.Width - (int)selected.Width) > 2)
+        {
+            throw new InvalidOperationException("the frame is not the selection it was seeded from");
+        }
+        var canvasWas = (document.Width, document.Height);
+        Drag(Aim(new SKPoint(seeded.Left + 1, seeded.Top + 1)), Aim(new SKPoint(90, 70)));
+        report.Add($"its corner handle dragged in: {_cropFrame?.Width ?? 0} x {_cropFrame?.Height ?? 0}");
+        Press(new ShortcutChord("Enter"));
+        report.Add($"the crop applied by Enter: {canvasWas.Width}x{canvasWas.Height} → "
+            + $"{document.Width}x{document.Height}, one \"{_history.UndoName}\" step");
+        if (document.Width >= canvasWas.Width || document.Height >= canvasWas.Height)
+        {
+            throw new InvalidOperationException($"the canvas is {document.Width}x{document.Height}, not cropped");
+        }
+        if (_history.UndoName != "Crop") throw new InvalidOperationException($"the crop made a \"{_history.UndoName}\" step");
+
         // The eyedropper's Sample Ring: press and drag on the picture and the ring follows the pointer, naming
         // the colour under it across its top half and the colour being replaced across its bottom. This is the
         // last step and the pointer is left down, so the frame the caller photographs has the ring in it — a
@@ -2512,6 +2564,15 @@ public sealed class MainWindow : Window
         _canvas.GradientEnabled = tool == Tool.Gradient;
         // A crop frame belongs to the tool: leaving the tool lets go of it.
         if (tool != Tool.Crop) _cropFrame = null;
+        // Picking the Crop tool with something selected starts its frame at the selection, as the Mac build's
+        // does, rather than at the whole canvas — which is what makes a crop of a selection one gesture.
+        if (tool == Tool.Crop && _cropFrame is null && _document is { } cropping
+            && cropping.Selection.Path is { IsEmpty: false } selected)
+        {
+            var bounds = SKRectI.Round(selected.Bounds);
+            var held = SKRectI.Intersect(bounds, SKRectI.Create(0, 0, cropping.Width, cropping.Height));
+            if (CropEdits.Valid(held)) _cropFrame = held;
+        }
         ShowCropBox();
         _canvas.TransformEnabled = tool == Tool.Move;
         _canvas.ShapePreviewFor = tool == Tool.Shape ? dragged => ShapePlan(dragged) : null;
