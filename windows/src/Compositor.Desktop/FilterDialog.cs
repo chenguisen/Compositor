@@ -13,6 +13,9 @@ namespace Compositor.Desktop;
 /// </summary>
 internal sealed class FilterDialog : Window
 {
+    /// <summary>Asks for the picture to be shown with this filter's amounts as they stand.</summary>
+    public Action<FilterSettings>? Preview { get; set; }
+
     private readonly List<(Slider Slider, Action<FilterSettings, double> Set)> _rows = [];
     private readonly List<double> _fallbacks = [];
     private readonly List<(CheckBox Box, Action<FilterSettings, bool> Set, bool Fallback)> _checks = [];
@@ -113,6 +116,7 @@ internal sealed class FilterDialog : Window
         {
             if (change.Property != Slider.ValueProperty) return;
             Show();
+            Preview?.Invoke(Current());
         };
         Show();
         parent.Children.Add(new StackPanel
@@ -137,19 +141,26 @@ internal sealed class FilterDialog : Window
         foreach (var (box, _, fallback) in _checks) box.IsChecked = fallback;
     }
 
-    private void Accept()
+    /// <summary>The amounts as the panel has them, for a preview of what they would do.</summary>
+    private FilterSettings Current()
     {
         var settings = new FilterSettings();
         foreach (var (slider, set) in _rows) set(settings, slider.Value);
         foreach (var (box, set, _) in _checks) set(settings, box.IsChecked == true);
-        _result = settings;
+        return settings;
+    }
+
+    private void Accept()
+    {
+        _result = Current();
         Close();
     }
 
     /// <summary>The amounts to apply, or null when the panel was dismissed or asks for nothing.</summary>
-    public static async Task<FilterSettings?> Ask(Window owner, FilterKind kind, FilterSettings start)
+    public static async Task<FilterSettings?> Ask(Window owner, FilterKind kind, FilterSettings start,
+        Action<FilterSettings>? preview = null)
     {
-        var dialog = new FilterDialog(kind, start);
+        var dialog = new FilterDialog(kind, start) { Preview = preview };
         await dialog.ShowDialog(owner);
         return dialog._result is { } settings && settings.IsValid(kind) && settings.DoesAnything(kind) ? settings : null;
     }

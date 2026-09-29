@@ -98,6 +98,27 @@ public class FilterPreviewTests
     }
 
     [Fact]
+    public void AnAdjustmentLayerCanBePreviewedWithoutItsPixelsBeingTouchd()
+    {
+        // An adjustment layer holds no pixels: what its panel changes is the adjustment, which the renderer
+        // reads. A preview of that has to work, and must not make the preview think it owns any pixels.
+        var (document, layer) = Warm(12);
+        using var _ = document;
+        var made = LayerPlacement.AddAdjustment(document, Format.AdjustmentKind.Invert, layer.ID)!.Value;
+        using var preview = FilterPreview.Begin(document, made);
+        Assert.NotNull(preview);
+        for (var step = 0; step < 3; step++)
+        {
+            Assert.True(preview.Show((target, id) => LayerAdjustmentEdits.Set(target, id,
+                new Format.LayerAdjustment { Kind = Format.AdjustmentKind.Invert })));
+        }
+        // The layer under it is still whole, and so is the adjustment layer's own record.
+        Assert.Equal(new SKColor(200, 60, 40), layer.Asset!.Image.GetPixel(6, 6));
+        Assert.NotNull(document.Layers.First(entry => entry.ID == made).Adjustment);
+        Assert.Null(document.Layers.First(entry => entry.ID == made).Asset);
+    }
+
+    [Fact]
     public void APreviewNeedsALayerThatIsThere()
     {
         var (document, _) = Warm(20);

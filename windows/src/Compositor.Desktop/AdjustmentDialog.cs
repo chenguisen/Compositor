@@ -20,10 +20,15 @@ internal sealed class AdjustmentDialog : Window
     private readonly ComboBox? _range;
     private CurveEditor? _curve;
     private readonly ComboBox? _levelsChannel;
+    private readonly LayerAdjustment _start;
     private LayerAdjustment? _result;
+
+    /// <summary>Asks for the picture to be shown with these settings as they stand.</summary>
+    public Action<LayerAdjustment>? Preview { get; set; }
 
     private AdjustmentDialog(LayerAdjustment start)
     {
+        _start = start;
         var kind = start.Kind;
         Title = $"{LayerPlacement.Name(kind)} Adjustment";
         Width = 460;
@@ -86,6 +91,7 @@ internal sealed class AdjustmentDialog : Window
                 group.Children.Add(Row("Channel", channel));
                 _curve = new CurveEditor { Curves = Clone(start.Curves), Channel = channel.SelectedIndex, Height = 260 };
                 channel.SelectionChanged += (_, _) => _curve.Channel = Math.Max(0, channel.SelectedIndex);
+                _curve.Changed += () => Preview?.Invoke(Built(_start));
                 group.Children.Add(_curve);
                 break;
             }
@@ -292,6 +298,7 @@ internal sealed class AdjustmentDialog : Window
         {
             if (change.Property != Slider.ValueProperty) return;
             Show();
+            Preview?.Invoke(Built(_start));
         };
         Show();
         parent.Children.Add(new StackPanel
@@ -348,9 +355,9 @@ internal sealed class AdjustmentDialog : Window
         return copy;
     }
 
-    private void Accept(LayerAdjustment start)
+    /// <summary>The settings as the panel has them, for a preview of what they would do.</summary>
+    private LayerAdjustment Built(LayerAdjustment start)
     {
-        // A copy of what the layer holds, so everything this panel does not show is kept as it was.
         var settings = new LayerAdjustment
         {
             Kind = start.Kind,
@@ -382,14 +389,21 @@ internal sealed class AdjustmentDialog : Window
             settings.HsvSettings ??= Hsv(settings);
             settings.HsvSettings.Range = HueBand.Ranges[range.SelectedIndex];
         }
+        return settings;
+    }
+
+    private void Accept(LayerAdjustment start)
+    {
+        var settings = Built(start);
         _result = settings.IsValid ? settings : null;
         Close();
     }
 
     /// <summary>The settings to put back on the layer, or null when the panel was dismissed or asks nothing.</summary>
-    public static async Task<LayerAdjustment?> Ask(Window owner, LayerAdjustment start)
+    public static async Task<LayerAdjustment?> Ask(Window owner, LayerAdjustment start,
+        Action<LayerAdjustment>? preview = null)
     {
-        var dialog = new AdjustmentDialog(start);
+        var dialog = new AdjustmentDialog(start) { Preview = preview };
         await dialog.ShowDialog(owner);
         return dialog._result;
     }

@@ -46,8 +46,8 @@ public sealed class FilterPreview : IDisposable
     }
 
     /// <summary>
-    /// Filters the layer's own pixels — whatever <paramref name="apply"/> does to them — into the preview and
-    /// shows that. False when the filter refused, in which case what is on the canvas stands.
+    /// Runs the layer's own copy of it through whatever <paramref name="apply"/> does, and shows that. False
+    /// when the filter refused, in which case what is on the canvas stands.
     /// </summary>
     public bool Show(Func<CanvasDocument, Guid, bool> apply)
     {
@@ -64,12 +64,18 @@ public sealed class FilterPreview : IDisposable
             layer.Asset = _made ?? _pixels;
             return false;
         }
-        if (ReferenceEquals(layer.Asset, _pixels)) return false;
-        // Only what this preview made is ever disposed; the layer's own pixels are not its to free.
-        _made?.Dispose();
-        _madeMask?.Dispose();
-        _made = layer.Asset;
-        _madeMask = ReferenceEquals(layer.Mask, _mask) ? null : layer.Mask;
+        // What a filter changes may be pixels, a transform, a mask or an adjustment layer's settings, so a
+        // successful apply is a preview even when nothing came out with a new asset.
+        if (!ReferenceEquals(layer.Asset, _pixels))
+        {
+            _made?.Dispose();
+            _made = layer.Asset;
+        }
+        if (!ReferenceEquals(layer.Mask, _mask))
+        {
+            _madeMask?.Dispose();
+            _madeMask = layer.Mask;
+        }
         return true;
     }
 

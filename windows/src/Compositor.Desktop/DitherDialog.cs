@@ -21,6 +21,9 @@ internal sealed class DitherDialog : Window
     private readonly TextBox _characters = new();
     private DitherSettings? _result;
 
+    /// <summary>Asks for the picture to be shown with this look and its amounts as they stand.</summary>
+    public Action<DitherStyle, DitherSettings>? Preview { get; set; }
+
     private static readonly string[] StyleNames =
     [
         "Atkinson (Classic Mac)", "Floyd–Steinberg", "Bayer 2 × 2", "Bayer 4 × 4", "Bayer 8 × 8",
@@ -136,6 +139,7 @@ internal sealed class DitherDialog : Window
         {
             if (change.Property != Slider.ValueProperty) return;
             Show();
+            Preview?.Invoke(Style(), Current());
         };
         Show();
         parent.Children.Add(new StackPanel
@@ -164,6 +168,23 @@ internal sealed class DitherDialog : Window
         _characters.Text = defaults.Characters;
     }
 
+    /// <summary>The look the panel has chosen.</summary>
+    private DitherStyle Style() => (DitherStyle)Math.Max(0, _style.SelectedIndex);
+
+    /// <summary>The amounts as the panel has them, for a preview of what they would do.</summary>
+    private DitherSettings Current()
+    {
+        var settings = new DitherSettings
+        {
+            PixelShape = (DitherPixelShape)Math.Max(0, _shape.SelectedIndex),
+            Colors = (DitherColors)Math.Max(0, _colors.SelectedIndex),
+            LightOnDark = _lightOnDark.IsChecked == true,
+            Characters = _characters.Text ?? DitherSettings.DefaultCharacters,
+        };
+        foreach (var (slider, set) in _rows) set(settings, slider.Value);
+        return settings;
+    }
+
     private void Accept()
     {
         var settings = new DitherSettings
@@ -179,9 +200,10 @@ internal sealed class DitherDialog : Window
     }
 
     /// <summary>The look and its amounts, or null when the panel was dismissed.</summary>
-    public static async Task<(DitherStyle Style, DitherSettings Settings)?> Ask(Window owner, DitherSettings start)
+    public static async Task<(DitherStyle Style, DitherSettings Settings)?> Ask(Window owner, DitherSettings start,
+        Action<DitherStyle, DitherSettings>? preview = null)
     {
-        var dialog = new DitherDialog(start);
+        var dialog = new DitherDialog(start) { Preview = preview };
         await dialog.ShowDialog(owner);
         if (dialog._result is not { } settings) return null;
         var style = (DitherStyle)Math.Max(0, dialog._style.SelectedIndex);

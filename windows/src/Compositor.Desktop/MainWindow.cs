@@ -54,7 +54,7 @@ public sealed class MainWindow : Window
     private ClipboardImage? _clipboard;
     private FilterPreview? _preview;
     private DispatcherTimer? _previewTimer;
-    private CameraRawSettings? _previewSettings;
+    private Func<CanvasDocument, Guid, bool>? _previewApply;
 
     /// <summary>The blend modes in the order the menu lists them, which is the order the enum declares.</summary>
     private static readonly LayerBlendMode[] BlendModes = Enum.GetValues<LayerBlendMode>();
@@ -1186,12 +1186,9 @@ public sealed class MainWindow : Window
         }
         // The panel shows what it is doing: as its sliders move the layer is filtered into a copy of the
         // document and the canvas draws that, while the document itself is not touched until Apply.
-        if (FilterPreview.Begin(document, id) is { } preview)
-        {
-            _preview = preview;
-            _canvas.PreviewDocument = preview.Document;
-        }
-        var asked = await CameraRawDialog.Ask(this, new CameraRawSettings(), RequestPreview);
+        StartPreview(document, id);
+        var asked = await CameraRawDialog.Ask(this, new CameraRawSettings(),
+            settings => RequestPreview((target, layer) => CameraRawEdits.Apply(target, layer, settings)));
         StopPreview();
         if (asked is not { } settings) return;
         if (_document is not { } current) return;
@@ -1213,7 +1210,11 @@ public sealed class MainWindow : Window
             Say($"{kind} needs a layer with pixels of its own");
             return;
         }
-        if (await FilterDialog.Ask(this, kind, new FilterSettings()) is not { } settings) return;
+        StartPreview(document, id);
+        var asked = await FilterDialog.Ask(this, kind, new FilterSettings(),
+            settings => RequestPreview((target, layer) => FilterEdits.Apply(target, layer, kind, settings)));
+        StopPreview();
+        if (asked is not { } settings) return;
         if (_document is not { } current) return;
         Edit($"{kind} Filter", () => FilterEdits.Apply(current, id, kind, settings));
         Reselect(id);
@@ -1232,7 +1233,11 @@ public sealed class MainWindow : Window
             Say("Dither needs a layer with pixels of its own");
             return;
         }
-        if (await DitherDialog.Ask(this, new DitherSettings()) is not { } chosen) return;
+        StartPreview(document, id);
+        var asked = await DitherDialog.Ask(this, new DitherSettings(),
+            (style, settings) => RequestPreview((target, layer) => DitherEdits.Apply(target, layer, style, settings)));
+        StopPreview();
+        if (asked is not { } chosen) return;
         if (_document is not { } current) return;
         Edit("Dither", () => DitherEdits.Apply(current, id, chosen.Style, chosen.Settings));
         Reselect(id);
@@ -1355,7 +1360,11 @@ public sealed class MainWindow : Window
     {
         if (_document is not { } document || Selected is not { } id) return;
         if (LayerAdjustmentEdits.Settings(document, id) is not { } settings) return;
-        if (await AdjustmentDialog.Ask(this, settings) is not { } changed) return;
+        StartPreview(document, id);
+        var asked = await AdjustmentDialog.Ask(this, settings,
+            changed => RequestPreview((target, layer) => LayerAdjustmentEdits.Set(target, layer, changed)));
+        StopPreview();
+        if (asked is not { } changed) return;
         if (_document is not { } current) return;
         Edit($"{LayerPlacement.Name(changed.Kind)} Adjustment", () => LayerAdjustmentEdits.Set(current, id, changed));
         Reselect(id);
@@ -1375,7 +1384,11 @@ public sealed class MainWindow : Window
             Say($"{LayerPlacement.Name(kind)} needs a layer with pixels of its own");
             return;
         }
-        if (await AdjustmentDialog.Ask(this, new LayerAdjustment { Kind = kind }) is not { } settings) return;
+        StartPreview(document, id);
+        var asked = await AdjustmentDialog.Ask(this, new LayerAdjustment { Kind = kind },
+            settings => RequestPreview((target, layer) => FilterEdits.ApplyAdjustment(target, layer, settings)));
+        StopPreview();
+        if (asked is not { } settings) return;
         if (_document is not { } current) return;
         Edit(LayerPlacement.Name(kind), () => FilterEdits.ApplyAdjustment(current, id, settings));
         Reselect(id);
@@ -1655,13 +1668,24 @@ public sealed class MainWindow : Window
     }
 
     /// <summary>
-    /// The panel's sliders have moved: the amounts are remembered and the filter runs once they have been
-    /// still for a moment, rather than on every tick of a drag.
+    /// Starts showing what a panel would do to a layer, before anything is committed. Nothing happens when
+    /// the layer cannot be previewed, and the panel still works.
     /// </summary>
-    private void RequestPreview(CameraRawSettings settings)
+    private void StartPreview(CanvasDocument document, Guid layerID)
+    {
+        if (FilterPreview.Begin(document, layerID) is not { } preview) return;
+        _preview = preview;
+        _canvas.PreviewDocument = preview.Document;
+    }
+
+    /// <summary>
+    /// An amount has moved: the edit is remembered and runs once the amounts have been still for a moment,
+    /// rather than on every tick of a drag.
+    /// </summary>
+    private void RequestPreview(Func<CanvasDocument, Guid, bool> apply)
     {
         if (_preview is null) return;
-        _previewSettings = settings;
+        _previewApply = apply;
         _previewTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(140) };
         _previewTimer.Stop();
         _previewTimer.Tick -= ShowPreviewOnce;
@@ -1669,12 +1693,12 @@ public sealed class MainWindow : Window
         _previewTimer.Start();
     }
 
-    /// <summary>Filters the preview once the amounts have settled, and draws it.</summary>
+    /// <summary>Runs the edit on the preview once the amounts have settled, and draws it.</summary>
     private void ShowPreviewOnce(object? sender, EventArgs e)
     {
         _previewTimer?.Stop();
-        if (_preview is not { } preview || _previewSettings is not { } settings) return;
-        if (preview.Show((target, id) => CameraRawEdits.Apply(target, id, settings))) _canvas.InvalidateVisual();
+        if (_preview is not { } preview || _previewApply is not { } apply) return;
+        if (preview.Show(apply)) _canvas.InvalidateVisual();
     }
 
     /// <summary>
@@ -1684,7 +1708,7 @@ public sealed class MainWindow : Window
     private void StopPreview()
     {
         _previewTimer?.Stop();
-        _previewSettings = null;
+        _previewApply = null;
         _canvas.PreviewDocument = null;
         _preview?.Dispose();
         _preview = null;
