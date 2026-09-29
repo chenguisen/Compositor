@@ -407,6 +407,86 @@ public static class CameraRawEdits
     /// layer cannot take it, or when the pixels would not fit in memory — in which case the layer is left
     /// exactly as it was.
     /// </summary>
+    /// <summary>
+    /// What the Camera Raw panel paints over the picture as it is being worked on, never written into the
+    /// layer: clipped shadows in blue, clipped highlights in red, and the sharpening mask in gray. The Mac
+    /// build's panel shows these while the amounts are being moved — the clipping ones from the histogram
+    /// buttons and while a Light slider is dragged with Option held, the mask while Sharpening Masking is.
+    /// <para>
+    /// It is applied on top of the grade, so what is shown is the picture as the panel has it with the overlay
+    /// over it. False when there is nothing to paint with, or when the layer holds nothing.
+    /// </para>
+    /// </summary>
+    public static bool Overlay(CanvasDocument document, Guid layerID, CameraRawSettings settings,
+        bool shadows, bool highlights, bool sharpenMask)
+    {
+        if (!shadows && !highlights && !sharpenMask) return false;
+        if (!settings.IsValid) return false;
+        if (document.Layers.FirstOrDefault(layer => layer.ID == layerID) is not { } layer) return false;
+        if (!FilterSurface.Begin(layer, 0, out var work, out var placement)) return false;
+        using var _ = work;
+        var pixels = work.GetPixelSpan();
+        var width = work.Width;
+        var height = work.Height;
+        var stride = work.RowBytes;
+        // The grade is painted first, so the overlay is over what the panel is showing rather than over the
+        // picture as it was before any of the amounts were moved.
+        Grade(pixels, width, height, stride, settings);
+        AdjustPixels.CameraRawClipOverlay(pixels, width, height, stride, shadows, highlights);
+        if (sharpenMask)
+        {
+            AdjustPixels.CameraRawSharpenMaskOverlay(pixels, width, height, stride,
+                settings.SharpenRadius, settings.SharpenDetail, settings.SharpenMasking, 1);
+        }
+        // An overlay is a look, not an edit: the selection does not mix it, since nothing here is kept.
+        FilterSurface.Finish(layer, work, placement);
+        return true;
+    }
+
+    /// <summary>The grading stages, in the order the panel's groups are applied — geometry aside, which moves
+    /// the picture rather than grading it and so is done before any of this.</summary>
+    private static void Grade(Span<byte> pixels, int width, int height, int stride, CameraRawSettings settings)
+    {
+        if (settings.AdjustsCalibration)
+        {
+            AdjustPixels.CameraRawCalibration(pixels, width, height, stride,
+                settings.ShadowTint, settings.RedHue, settings.RedSaturation,
+                settings.GreenHue, settings.GreenSaturation, settings.BlueHue, settings.BlueSaturation,
+                settings.ProcessVersion);
+        }
+        if (settings.AdjustsLight || settings.AdjustsColor)
+        {
+            var (red, green, blue) = settings.Gains;
+            AdjustPixels.CameraRaw(pixels, width, height, stride, red, green, blue,
+                settings.Exposure, settings.Contrast, settings.Highlights, settings.Shadows,
+                settings.Whites, settings.Blacks, settings.Vibrance, settings.Saturation, 0);
+        }
+        if (settings.AdjustsCurve || settings.AdjustsGrading)
+        {
+            var (luma, red, green, blue) = settings.Curves();
+            AdjustPixels.CameraRawCurveColor(pixels, width, height, stride, luma, red, green, blue,
+                settings.RefineSaturation / 100, settings.MixerFloats(), settings.Points.Count, settings.PointFloats(),
+                settings.Grade, settings.GradeBlending / 100, settings.GradeBalance / 100, -1);
+        }
+        if (settings.AdjustsEffects)
+        {
+            AdjustPixels.CameraRawEffects(pixels, width, height, stride,
+                settings.Texture, settings.Clarity, settings.Dehaze,
+                settings.Glow, settings.GlowStyle, settings.GlowRange, settings.GlowSpread, settings.GlowWarmth,
+                settings.VignetteAmount, settings.VignetteMidpoint, settings.VignetteRoundness,
+                settings.VignetteFeather, settings.VignetteHighlights, settings.VignetteStyle, 1);
+        }
+        if (settings.AdjustsOptics)
+        {
+            AdjustPixels.CameraRawOptics(pixels, width, height, stride,
+                settings.RemoveChromaticAberration, settings.EnableLensProfile ? 1 : 0,
+                settings.ProfileDistortion, settings.ProfileVignetting, settings.DistortionK,
+                settings.PurpleAmount, settings.PurpleHueLow, settings.PurpleHueHigh,
+                settings.GreenAmount, settings.GreenHueLow, settings.GreenHueHigh,
+                settings.OpticsVignetteAmount, settings.OpticsVignetteMidpoint, 1);
+        }
+    }
+
     public static bool Apply(CanvasDocument document, Guid layerID, CameraRawSettings settings, uint seed = 0)
     {
         if (settings.IsIdentity || !settings.IsValid) return false;

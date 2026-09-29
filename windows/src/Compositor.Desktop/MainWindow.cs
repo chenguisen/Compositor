@@ -1366,8 +1366,13 @@ public sealed class MainWindow : Window
         // The panel shows what it is doing: as its sliders move the layer is filtered into a copy of the
         // document and the canvas draws that, while the document itself is not touched until Apply.
         StartPreview(document, id);
+        // The preview carries the panel's overlay switches: clipped shadows and highlights and the sharpening
+        // mask are shown over the grade while the amounts are moved, and the overlay is what is shown when one
+        // is on. The edit that is finally made is the grade alone, never the overlay.
         var asked = await CameraRawDialog.Ask(this, new CameraRawSettings(), BrushColour(),
-            settings => RequestPreview((target, layer) => CameraRawEdits.Apply(target, layer, settings)));
+            (settings, shadows, highlights, mask) => RequestPreview(document =>
+                CameraRawEdits.Overlay(document, id, settings, shadows, highlights, mask)
+                || CameraRawEdits.Apply(document, id, settings)));
         StopPreview();
         if (asked is not { } settings) return;
         if (_document is not { } current) return;

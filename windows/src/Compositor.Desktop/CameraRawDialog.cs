@@ -29,7 +29,17 @@ internal sealed class CameraRawDialog : Window
     /// Asks for the picture to be shown with the amounts as they stand, which is called on every change. The
     /// panel does not wait for it: a slider being dragged should not stop moving while a filter runs.
     /// </summary>
-    public Action<CameraRawSettings>? Preview { get; set; }
+    public Action<CameraRawSettings, bool, bool, bool>? Preview { get; set; }
+
+    /// <summary>What is shown over the picture while the amounts are moved: clipped shadows in blue, clipped
+    /// highlights in red, and the sharpening mask. None of it is ever applied on OK.</summary>
+    private readonly CheckBox _shadowClip = new() { Content = "Clipped shadows" };
+    private readonly CheckBox _highlightClip = new() { Content = "Clipped highlights" };
+    private readonly CheckBox _sharpenMaskView = new() { Content = "Sharpening mask" };
+
+    /// <summary>Shows what is being asked for now, overlays and all.</summary>
+    private void RefreshPreview() => Preview?.Invoke(Current(), _shadowClip.IsChecked == true,
+        _highlightClip.IsChecked == true, _sharpenMaskView.IsChecked == true);
 
     private CameraRawDialog(CameraRawSettings start, SKColor brush)
     {
@@ -42,6 +52,16 @@ internal sealed class CameraRawDialog : Window
         CanResize = true;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         var groups = new StackPanel { Margin = new Thickness(16), Spacing = 4 };
+
+        // The overlays come first: they are shown over whatever the groups below are doing, and none of them
+        // is written into the layer when OK is pressed.
+        var overlays = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12 };
+        foreach (var box in new[] { _shadowClip, _highlightClip, _sharpenMaskView })
+        {
+            box.Click += (_, _) => RefreshPreview();
+            overlays.Children.Add(box);
+        }
+        groups.Children.Add(overlays);
 
         groups.Children.Add(Heading("Light"));
         Add(groups, "Exposure, stops", -5, 5, start.Exposure, (s, v) => s.Exposure = v, "0.00");
@@ -132,7 +152,7 @@ internal sealed class CameraRawDialog : Window
         _curveChannel.Width = 160;
         _curve = new CurveEditor { Curves = Clone(start.Curve), Height = 220 };
         _curveChannel.SelectionChanged += (_, _) => _curve.Channel = Math.Max(0, _curveChannel.SelectedIndex);
-        _curve.Changed += () => Preview?.Invoke(Current());
+        _curve.Changed += RefreshPreview;
         groups.Children.Add(_curveChannel);
         groups.Children.Add(_curve);
         Add(groups, "Refine saturation", -100, 100, start.RefineSaturation, (s, v) => s.RefineSaturation = v);
@@ -263,7 +283,7 @@ internal sealed class CameraRawDialog : Window
         }
         _point = _pointList[^1];
         Labelled();
-        Preview?.Invoke(Current());
+        RefreshPreview();
     }
 
     /// <summary>Takes the colour being edited out of the list.</summary>
@@ -282,7 +302,7 @@ internal sealed class CameraRawDialog : Window
         }
         _point = _points.SelectedIndex >= 0 ? _pointList[_points.SelectedIndex] : null;
         Labelled();
-        Preview?.Invoke(Current());
+        RefreshPreview();
     }
 
     /// <summary>The list has moved to another colour: what was being edited is kept and the other loaded.</summary>
@@ -294,7 +314,7 @@ internal sealed class CameraRawDialog : Window
             ? _pointList[_points.SelectedIndex]
             : null;
         LoadPoint();
-        Preview?.Invoke(Current());
+        RefreshPreview();
     }
 
     private void StorePoint()
@@ -361,14 +381,14 @@ internal sealed class CameraRawDialog : Window
     {
         var slider = new Slider { Minimum = least, Maximum = most, Value = value, Width = 260 };
         var readout = new TextBlock { Text = "", Width = 44, VerticalAlignment = VerticalAlignment.Center };
-        void Show() => readout.Text = slider.Value.ToString(format);
+        void UpdateReadout() => readout.Text = slider.Value.ToString(format);
         slider.PropertyChanged += (_, change) =>
         {
             if (change.Property != Slider.ValueProperty) return;
-            Show();
-            Preview?.Invoke(Current());
+            UpdateReadout();
+            RefreshPreview();
         };
-        Show();
+        UpdateReadout();
         parent.Children.Add(new StackPanel
         {
             Orientation = Orientation.Horizontal,
@@ -445,7 +465,7 @@ internal sealed class CameraRawDialog : Window
 
     /// <summary>The settings to apply, or null when the panel was dismissed or asks for nothing.</summary>
     public static async Task<CameraRawSettings?> Ask(Window owner, CameraRawSettings start, SKColor brush,
-        Action<CameraRawSettings>? preview = null)
+        Action<CameraRawSettings, bool, bool, bool>? preview = null)
     {
         var dialog = new CameraRawDialog(start, brush) { Preview = preview };
         await dialog.ShowDialog(owner);
