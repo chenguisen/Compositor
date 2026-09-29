@@ -257,6 +257,7 @@ public sealed class MainWindow : Window
                         new Separator(),
                         Command("_Gaussian Blur…", () => _ = ApplyFilter(FilterKind.GaussianBlur)),
                         Command("Add _Noise…", () => _ = ApplyFilter(FilterKind.AddNoise)),
+                        Command("_Dither…", () => _ = DitherFilter()),
                         new Separator(),
                         Command("_Vignette…", () => _ = ApplyFilter(FilterKind.Vignette)),
                         Command("_Tonal Contrast…", () => _ = ApplyFilter(FilterKind.TonalContrast)),
@@ -1006,6 +1007,25 @@ public sealed class MainWindow : Window
         Edit($"{kind} Filter", () => FilterEdits.Apply(current, id, kind, settings));
         Reselect(id);
         Say($"{kind} applied");
+    }
+
+    /// <summary>
+    /// Dither: its look and amounts are asked for, then the layer's own pixels are reduced to ink, held to the
+    /// selection, as one undo step.
+    /// </summary>
+    private async Task DitherFilter()
+    {
+        if (_document is not { } document || Selected is not { } id) return;
+        if (document.Layers.FirstOrDefault(layer => layer.ID == id) is not { Asset: not null, IsGroup: false })
+        {
+            Say("Dither needs a layer with pixels of its own");
+            return;
+        }
+        if (await DitherDialog.Ask(this, new DitherSettings()) is not { } chosen) return;
+        if (_document is not { } current) return;
+        Edit("Dither", () => DitherEdits.Apply(current, id, chosen.Style, chosen.Settings));
+        Reselect(id);
+        Say($"Dither: {chosen.Style}, {chosen.Settings.Levels:0} tones");
     }
 
     /// <summary>The ratios the Crop tool offers, as the Mac build's ratio menu does.</summary>
