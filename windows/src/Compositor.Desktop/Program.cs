@@ -17,6 +17,11 @@ internal static class Program
         // `--grid` turns the layout grid on for the render, which is how that drawing is checked.
         if (args is ["--render", var project, var output]) return Render(project, output, showGrid: false);
         if (args is ["--render", var gridProject, var gridOutput, "--grid"]) return Render(gridProject, gridOutput, showGrid: true);
+        // `--shape` draws the shape tool's drag preview, which needs a pointer to make.
+        if (args is ["--render", var shapeProject, var shapeOutput, "--shape"])
+        {
+            return Render(shapeProject, shapeOutput, showGrid: false, shape: true);
+        }
         // `--preview` opens a preview of the top layer inverted, so the canvas drawing one can be checked.
         if (args is ["--render", var previewProject, var previewOutput, "--preview"])
         {
@@ -29,7 +34,7 @@ internal static class Program
     public static AppBuilder Build() =>
         AppBuilder.Configure<DesktopApp>().UsePlatformDetect().WithInterFont().LogToTrace();
 
-    private static int Render(string project, string output, bool showGrid, bool preview = false)
+    private static int Render(string project, string output, bool showGrid, bool preview = false, bool shape = false)
     {
         Build().SetupWithoutStarting();
         using var document = project == "--demo" ? Demo() : ProjectStore.Load(project).ToDocument();
@@ -65,6 +70,18 @@ internal static class Program
         view.Arrange(new Rect(0, 0, 640, 480));
         view.Document = document;
         if (showGrid) view.Grid = new LayoutGrid();
+        if (shape)
+        {
+            // The shape tool's drag preview: an ellipse in a colour of its own, over a box of the canvas.
+            var box = SKRectI.Create(80, 60, 240, 160);
+            view.ShapeKind = Compositor.Core.Format.ShapeKind.Ellipse;
+            view.ShapePreviewFor = dragged => (new Compositor.Core.Format.LayerShapeStyle
+            {
+                Kind = Compositor.Core.Format.ShapeKind.Ellipse, Red = 1, Green = 0.2, Blue = 0.1,
+            }, dragged);
+            view.PreviewShape(box);
+            Console.WriteLine($"showing a shape preview over {box}");
+        }
         // A preview of the top layer, as a filter panel would show one: the canvas draws it in the document's
         // place while the document is left as it was.
         FilterPreview? shown = null;

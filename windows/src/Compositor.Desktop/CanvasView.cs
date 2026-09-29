@@ -10,6 +10,7 @@ using Compositor.Core.Document;
 using Compositor.Core.Model;
 using Format = Compositor.Core.Format;
 using Compositor.Core.Rendering;
+using LayerShapeStyle = Compositor.Core.Format.LayerShapeStyle;
 using SkiaSharp;
 using LayerTransform = Compositor.Core.Model.LayerTransform;
 using SelectionMode = Compositor.Core.Document.SelectionMode;
@@ -145,6 +146,10 @@ public sealed class CanvasView : Control
     private SKPoint _gradientEnd;
 
     private bool _shaping;
+    private ShapePreviewPlan? _shapePlan;
+    private SKBitmap? _shapePreview;
+    private SKRectI _shapePreviewBox;
+    private SKRectI _shapePreviewAt;
     private SKPoint _shapeAnchor;
     private SKRectI _shapeBox;
     private SKPoint _shapeEnd;
@@ -499,20 +504,83 @@ public sealed class CanvasView : Control
         }
     }
 
-    /// <summary>The shape being dragged right now, drawn as an outline until the drag ends.</summary>
+    /// <summary>
+    /// The shape being dragged, shown as the shape it will be — the app hands over the style, so what is drawn
+    /// while the drag is under way is the pixels the shape will be made of — with its outline over the top, so
+    /// the bounds can be seen against what is under them.
+    /// </summary>
     private void DrawShape(DrawingContext context)
     {
         if (!_shaping) return;
         var pen = new Pen { Brush = Brushes.White, Thickness = 1, DashStyle = new DashStyle([4.0, 4.0], 0) };
-        if (ShapeKind == Format.ShapeKind.Line)
-        {
-            context.DrawLine(pen, ToScreen(_shapeAnchor), ToScreen(_shapeEnd));
-            return;
-        }
+        if (ShapeKind == Format.ShapeKind.Line) context.DrawLine(pen, ToScreen(_shapeAnchor), ToScreen(_shapeEnd));
+        DrawShapePreview(context);
+        if (ShapeKind == Format.ShapeKind.Line) return;
         var corner = ToScreen(new SKPoint(_shapeBox.Left, _shapeBox.Top));
         var box = new Rect(corner.X, corner.Y, _shapeBox.Width * _zoom, _shapeBox.Height * _zoom);
         if (ShapeKind == Format.ShapeKind.Ellipse) context.DrawEllipse(null, pen, box.Center, box.Width / 2, box.Height / 2);
         else context.DrawRectangle(null, pen, box);
+    }
+
+    /// <summary>
+    /// The pixels the shape being dragged is going to be made of, drawn where they will land. The app is asked
+    /// what the shape is — its style and the box that will hold it — since only the app knows the colour, the
+    /// corner radius and where a line's ends are. Without it, a drag shows its outline alone.
+    /// </summary>
+    private void DrawShapePreview(DrawingContext context)
+    {
+        if (ShapePreviewFor is not { } ask || _shapeBox.Width <= 0 || _shapeBox.Height <= 0) return;
+        if (_shapePreviewBox != _shapeBox)
+        {
+            // Only when the box has changed: a redraw that moves nothing should not build it again.
+            var (style, at) = ask(_shapeBox);
+            _shapePreview?.Dispose();
+            _shapePreview = ShapeEdits.Image(style, Math.Max(1, at.Width), Math.Max(1, at.Height));
+            _shapePreviewBox = _shapeBox;
+            _shapePreviewAt = at;
+        }
+        if (_shapePreview is not { } preview) return;
+        var corner = ToScreen(new SKPoint(_shapePreviewAt.Left, _shapePreviewAt.Top));
+        using var image = ToImage(preview);
+        context.DrawImage(image, new Rect(corner.X, corner.Y,
+            _shapePreviewAt.Width * _zoom, _shapePreviewAt.Height * _zoom));
+    }
+
+    /// <summary>What a shape being dragged will be made of: the style, and the box its pixels will cover.</summary>
+    public delegate (LayerShapeStyle Style, SKRectI Box) ShapePreviewPlan(SKRectI dragged);
+
+    /// <summary>The app's answer to what the shape being dragged will be made of, or null when the tool that
+    /// is not the shape tool is in use.</summary>
+    public ShapePreviewPlan? ShapePreviewFor
+    {
+        get => _shapePlan;
+        set
+        {
+            _shapePlan = value;
+            ForgetShapePreview();
+        }
+    }
+
+    /// <summary>Drops the shape preview's own pixels, which are the canvas' to free.</summary>
+    private void ForgetShapePreview()
+    {
+        _shapePreview?.Dispose();
+        _shapePreview = null;
+        _shapePreviewBox = default;
+        _shapePreviewAt = default;
+    }
+
+    /// <summary>
+    /// Draws a shape as if it were being dragged, so the self check can look at a preview that needs a pointer
+    /// to make. The box is in document pixels.
+    /// </summary>
+    public void PreviewShape(SKRectI box)
+    {
+        _shapeBox = box;
+        _shapeAnchor = new SKPoint(box.Left, box.Top);
+        _shapeEnd = new SKPoint(box.Right, box.Bottom);
+        _shaping = true;
+        InvalidateVisual();
     }
 
     /// <summary>Whether a crop drag is under way, so the tool is not reset under it.</summary>

@@ -944,6 +944,7 @@ public sealed class MainWindow : Window
         if (tool != Tool.Crop) _cropFrame = null;
         ShowCropBox();
         _canvas.TransformEnabled = tool == Tool.Move;
+        _canvas.ShapePreviewFor = tool == Tool.Shape ? dragged => ShapePlan(dragged) : null;
         _canvas.GuidesDraggable = tool == Tool.Move;
         ShowTransformBox();
         _canvas.PaintEnabled = tool is Tool.Brush or Tool.Clone or Tool.Blur or Tool.Heal;
@@ -1682,6 +1683,32 @@ public sealed class MainWindow : Window
     /// An amount has moved: the edit is remembered and runs once the amounts have been still for a moment,
     /// rather than on every tick of a drag.
     /// </summary>
+    /// <summary>
+    /// What the shape tool would make of a drag from <paramref name="box"/> outward: the style it will be
+    /// drawn with and the box its pixels will cover. The same answer serves the drag's preview and the layer
+    /// the drag ends up making, so what is seen while dragging is what arrives.
+    /// </summary>
+    private (LayerShapeStyle Style, SKRectI Box) ShapePlan(SKRectI box, SKPoint? anchor = null, SKPoint? lineEnd = null)
+    {
+        var style = new LayerShapeStyle
+        {
+            Kind = _shapeKind,
+            Red = _brush.Red,
+            Green = _brush.Green,
+            Blue = _brush.Blue,
+            CornerRadius = _shapeCornerRadius,
+        };
+        if (_shapeKind != ShapeKind.Line) return (style, box);
+        // A line's layer is the box around it with room for the stroke's own thickness and its round ends.
+        var half = (float)(_shapeLineWidth / 2);
+        var target = CropEdits.Snapped(SKRect.Create(box.Left - half, box.Top - half,
+            box.Width + half * 2, box.Height + half * 2));
+        style.LineWidth = _shapeLineWidth;
+        style.Start = Unit(target, anchor ?? new SKPoint(box.Left, box.Top));
+        style.End = Unit(target, lineEnd ?? new SKPoint(box.Right, box.Bottom));
+        return (style, target);
+    }
+
     private void RequestPreview(Func<CanvasDocument, Guid, bool> apply)
     {
         if (_preview is null) return;
