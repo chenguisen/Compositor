@@ -52,28 +52,28 @@ public static class SelectionEdits
     /// selection that holds every later edit back — the one place this port reads an empty shape as no
     /// selection, where the Mac build would keep an empty outline.
     /// </summary>
-    public static bool Select(CanvasDocument document, SKRectI rect)
+    public static bool Select(CanvasDocument document, SKRectI rect, bool antialiased = true)
     {
         var shape = Rectangular(document, rect);
-        return shape.IsEmpty ? Deselect(document) : Adopt(document, shape);
+        return shape.IsEmpty ? Deselect(document) : Adopt(document, shape, antialiased);
     }
 
     /// <summary>Selects the ellipse inside a box, which is what the elliptical marquee drags out.</summary>
-    public static bool SelectEllipse(CanvasDocument document, SKRectI box)
+    public static bool SelectEllipse(CanvasDocument document, SKRectI box, bool antialiased = true)
     {
         var held = SKRectI.Intersect(box, SKRectI.Create(0, 0, document.Width, document.Height));
-        if (held.Width <= 0 || held.Height <= 0) return Adopt(document, new SKPath());
+        if (held.Width <= 0 || held.Height <= 0) return Adopt(document, new SKPath(), antialiased);
         using var builder = new SKPathBuilder();
         builder.AddOval(SKRect.Create(held.Left, held.Top, held.Width, held.Height), SKPathDirection.Clockwise);
-        return Adopt(document, builder.Detach());
+        return Adopt(document, builder.Detach(), antialiased);
     }
 
     /// <summary>
     /// A freehand or polygonal lasso: the outline through the points, closed. Fewer than three points
     /// enclose nothing, so the selection is let go, as clicking the lasso on its own does in Photoshop.
     /// </summary>
-    public static bool SelectLasso(CanvasDocument document, IReadOnlyList<SKPoint> points) =>
-        points.Count < 3 ? Deselect(document) : Adopt(document, Lasso(points));
+    public static bool SelectLasso(CanvasDocument document, IReadOnlyList<SKPoint> points, bool antialiased = true) =>
+        points.Count < 3 ? Deselect(document) : Adopt(document, Lasso(points), antialiased);
 
     /// <summary>The outline a lasso would close, for the tool to draw while it is still being dragged.</summary>
     public static SKPath Lasso(IReadOnlyList<SKPoint> points)
@@ -97,7 +97,7 @@ public static class SelectionEdits
     /// edges. Nothing matching leaves an empty selection in Replace mode, as the Mac build does.
     /// </summary>
     public static bool SelectWand(CanvasDocument document, SKBitmap sample, int x, int y, WandOptions options,
-        SelectionMode mode)
+        SelectionMode mode, bool antialiased = true)
     {
         if (sample.Width <= 0 || sample.Height <= 0 || x < 0 || y < 0 || x >= sample.Width || y >= sample.Height)
         {
@@ -126,7 +126,7 @@ public static class SelectionEdits
             builder.AddPoly(corners, close: true);
             index += length;
         }
-        return Apply(document, builder.Detach(), mode);
+        return Apply(document, builder.Detach(), mode, antialiased);
     }
 
     /// <summary>
@@ -302,21 +302,25 @@ public static class SelectionEdits
     /// A shape met against what is selected already: replacing it, adding to it, or taking out of it.
     /// Subtracting from nothing changes nothing, as in the Mac build.
     /// </summary>
-    public static bool Apply(CanvasDocument document, SKPath shape, SelectionMode mode)
+    public static bool Apply(CanvasDocument document, SKPath shape, SelectionMode mode, bool antialiased = true)
     {
         var canvas = WholeCanvas(document);
         var clipped = Combine(shape, canvas, SKPathOp.Intersect);
+        // Adding to a selection or taking out of one keeps the edge it already had: what is being changed is the
+        // shape, not how its edge is drawn. That is the Mac build's own rule — it carries the selection's own
+        // antialiased flag through an add and a subtract, and takes the tool's only when the shape replaces one.
+        var kept = document.Selection.Antialiased;
         switch (mode)
         {
             case SelectionMode.Replace:
-                return Adopt(document, clipped ?? new SKPath());
+                return Adopt(document, clipped ?? new SKPath(), antialiased);
             case SelectionMode.Add:
                 if (clipped is null) return false;
-                if (document.Selection.Path is not { } current) return Adopt(document, clipped);
-                return Adopt(document, Combine(current, clipped, SKPathOp.Union) ?? new SKPath());
+                if (document.Selection.Path is not { } current) return Adopt(document, clipped, antialiased);
+                return Adopt(document, Combine(current, clipped, SKPathOp.Union) ?? new SKPath(), kept);
             default:
                 if (document.Selection.Path is not { } held || clipped is null) return false;
-                return Adopt(document, Combine(held, clipped, SKPathOp.Difference) ?? new SKPath());
+                return Adopt(document, Combine(held, clipped, SKPathOp.Difference) ?? new SKPath(), kept);
         }
     }
 
@@ -409,9 +413,14 @@ public static class SelectionEdits
     private static SKPath? Combine(SKPath left, SKPath right, SKPathOp operation) => left.Op(right, operation);
 
     /// <summary>Adopts a shape as the whole selection, unless it is the selection already.</summary>
-    private static bool Adopt(CanvasDocument document, SKPath shape)
+    /// <summary>
+    /// Puts a new outline in place of whatever was selected. <paramref name="antialiased"/> is how the shape's
+    /// edge is drawn when it is turned into coverage: a marquee dragged with it off has hard edges, which is
+    /// what the Mac build's Anti-alias tick in the lasso's own controls is for.
+    /// </summary>
+    private static bool Adopt(CanvasDocument document, SKPath shape, bool antialiased = true)
     {
-        var replaced = DocumentSelection.FromPath(shape);
+        var replaced = DocumentSelection.FromPath(shape, antialiased);
         if (replaced.Matches(document.Selection)) return false;
         document.Selection = replaced;
         return true;

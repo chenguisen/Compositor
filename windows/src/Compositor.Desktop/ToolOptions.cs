@@ -23,6 +23,13 @@ internal sealed class ToolOptions
     public WandOptions Wand = new();
     public bool WandAllLayers;
 
+    /// <summary>
+    /// Whether a new selection's outline is soft-edged, as the Mac build's Anti-alias tick in the lasso's own
+    /// controls has it. It is one switch for every selection tool, which is also how the Mac keeps it: the tick
+    /// is shown with the lasso and read by the marquee, the wand and the lasso alike.
+    /// </summary>
+    public bool SelectionAntialiased = true;
+
     /// <summary>How the Gradient tool paints.</summary>
     public GradientShape Gradient = GradientShape.Linear;
     public bool GradientToBackground;

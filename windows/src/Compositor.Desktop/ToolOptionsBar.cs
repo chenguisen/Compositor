@@ -129,6 +129,12 @@ internal sealed class ToolOptionsBar : Border
     /// <summary>Whether a row is on show, which is what the self check reads to see the gating works.</summary>
     internal bool Shows(string name) => _named.TryGetValue(name, out var cells) && cells[0].IsVisible;
 
+    /// <summary>
+    /// The Anti-alias tick as a press on it would leave it, for the check: a tick's own write goes through the
+    /// same Set every other control's does, so this drives the whole path rather than reaching past it.
+    /// </summary>
+    internal void PressAntialias(bool on) => _antialias.IsChecked = on;
+
     /// <summary>The names of the rows on show, in the order they were built.</summary>
     internal IEnumerable<string> Showing => _named.Where(entry => entry.Value[0].IsVisible).Select(entry => entry.Key);
 
@@ -151,6 +157,7 @@ internal sealed class ToolOptionsBar : Border
         _aligned.IsChecked = _options.Brush.CloneAligned;
         _cloneAll.SelectedIndex = _options.Brush.CloneAllLayers ? 1 : 0;
         _contiguous.IsChecked = _options.Wand.Contiguous;
+        _antialias.IsChecked = _options.SelectionAntialiased;
         _wandAll.SelectedIndex = _options.WandAllLayers ? 1 : 0;
         _shapeKind.SelectedIndex = (int)_options.Shape;
         _gradientKind.SelectedIndex = (int)_options.Gradient;
@@ -200,6 +207,7 @@ internal sealed class ToolOptionsBar : Border
     private readonly ComboBox _marqueeShape = new();
     private readonly ComboBox _lassoKind = new();
     private readonly CheckBox _contiguous = new() { Content = "Contiguous" };
+    private readonly CheckBox _antialias = new() { Content = "Anti-alias" };
     private readonly ComboBox _wandAll = new();
     private readonly ComboBox _shapeKind = new();
     private readonly ComboBox _gradientKind = new();
@@ -277,6 +285,9 @@ internal sealed class ToolOptionsBar : Border
             var brush = _options.Brush with { CloneAligned = _aligned.IsChecked == true };
             Set(ref _options.Brush, brush);
         };
+        _antialias.IsChecked = _options.SelectionAntialiased;
+        _antialias.IsCheckedChanged += (_, _) =>
+            Set(ref _options.SelectionAntialiased, _antialias.IsChecked == true);
         _cloneAll.ItemsSource = new[] { "Sample: This Layer", "Sample: All Layers" };
         _cloneAll.SelectedIndex = 0;
         _cloneAll.SelectionChanged += (_, _) =>
@@ -346,6 +357,7 @@ internal sealed class ToolOptionsBar : Border
         Cell("clone", _cloneAll);
         Cell("marqueeShape", _marqueeShape);
         Cell("lasso", _lassoKind);
+        Cell("lasso", _antialias);
         Cell("wand", _tolerance);
         Cell("wand", _sampleSize);
         Cell("wand", _contiguous);

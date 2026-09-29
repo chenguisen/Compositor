@@ -1552,6 +1552,25 @@ public sealed class MainWindow : Window
         return string.Join(Environment.NewLine, report);
     }
 
+    /// <summary>
+    /// How many pixels of the selection's own coverage come out part-way. An antialiased edge has them and a hard
+    /// edge has none, which is the difference the Anti-alias tick makes and the only way to see it from outside.
+    /// </summary>
+    private static int PartCovered(CanvasDocument document)
+    {
+        using var coverage = document.Selection.Coverage(SKRectI.Create(0, 0, document.Width, document.Height));
+        if (coverage is null) return 0;
+        var partial = 0;
+        for (var y = 0; y < coverage.Height; y++)
+        {
+            for (var x = 0; x < coverage.Width; x++)
+            {
+                if (coverage.GetPixel(x, y).Red is > 0 and < 255) partial++;
+            }
+        }
+        return partial;
+    }
+
     /// <summary>A drag with the left button down, from one window point to another, in the steps a hand makes.</summary>
     private void Drag(Point from, Point to, int steps = 8)
     {
@@ -1642,6 +1661,21 @@ public sealed class MainWindow : Window
         var box = marquee.Bounds;
         report.Add($"a marquee drag: {box.Width:0} x {box.Height:0} at {box.Left:0},{box.Top:0}");
         if (box.Width < 90 || box.Width > 110) throw new InvalidOperationException($"the marquee is {box.Width:0} wide, not 100");
+
+        // The selection's own Anti-alias tick, from the options bar to the selection it makes. It is the ellipse
+        // that shows it: a rectangle dragged out is whole pixels and comes out hard either way, where an oval's
+        // edge always crosses pixels — which is why the Mac build's own tick is drawn with the lasso.
+        SetTool(Tool.Ellipse);
+        _optionsBar.PressAntialias(false);
+        Drag(Aim(new SKPoint(20, 20)), Aim(new SKPoint(120, 90)));
+        if (document.Selection.Antialiased) throw new InvalidOperationException("the tick did not reach the selection");
+        report.Add($"the Anti-alias tick off: {PartCovered(document)} part-covered pixels round the ellipse");
+        if (PartCovered(document) != 0) throw new InvalidOperationException("the edge came out soft with the tick off");
+        _optionsBar.PressAntialias(true);
+        Drag(Aim(new SKPoint(20, 20)), Aim(new SKPoint(120, 90)));
+        report.Add($"the tick back on: {PartCovered(document)} part-covered pixels");
+        if (!document.Selection.Antialiased) throw new InvalidOperationException("the tick back on did not take");
+        if (PartCovered(document) < 20) throw new InvalidOperationException("the edge did not come out soft again");
 
         // The wand: one click, on a colour the picture actually has.
         SetTool(Tool.Wand);
@@ -4283,14 +4317,17 @@ public sealed class MainWindow : Window
     /// </summary>
     private void MarqueeFinished(SKRectI box, SelectionMode mode, bool ellipse) =>
         Change(ellipse ? "Elliptical Marquee" : "Rectangular Marquee", document => mode == SelectionMode.Replace
-            ? ellipse ? SelectionEdits.SelectEllipse(document, box) : SelectionEdits.Select(document, box)
-            : SelectionEdits.Apply(document, SelectionEdits.Shape(box, ellipse), mode));
+            ? ellipse
+                ? SelectionEdits.SelectEllipse(document, box, _options.SelectionAntialiased)
+                : SelectionEdits.Select(document, box, _options.SelectionAntialiased)
+            : SelectionEdits.Apply(document, SelectionEdits.Shape(box, ellipse), mode,
+                _options.SelectionAntialiased));
 
     /// <summary>A lasso or polygonal lasso drag: the outline through the points it gathered.</summary>
     private void LassoFinished(IReadOnlyList<SKPoint> points, SelectionMode mode, bool polygonal) =>
         Change(polygonal ? "Polygonal Lasso" : "Lasso", document => mode == SelectionMode.Replace
-            ? SelectionEdits.SelectLasso(document, points)
-            : SelectionEdits.Apply(document, SelectionEdits.Lasso(points), mode));
+            ? SelectionEdits.SelectLasso(document, points, _options.SelectionAntialiased)
+            : SelectionEdits.Apply(document, SelectionEdits.Lasso(points), mode, _options.SelectionAntialiased));
 
     /// <summary>A click of the wand: everything like the pixel under it, read from the canvas as shown. The
     /// amounts are the options bar's: how far off the colour counts, how wide a sample is read, whether the
@@ -4300,7 +4337,8 @@ public sealed class MainWindow : Window
         {
             using var sample = SelectionEdits.Sample(document, _options.WandAllLayers ? null : Selected);
             return sample is not null && SelectionEdits.SelectWand(document, sample,
-                (int)Math.Floor(point.X), (int)Math.Floor(point.Y), _options.Wand, mode);
+                (int)Math.Floor(point.X), (int)Math.Floor(point.Y), _options.Wand, mode,
+                _options.SelectionAntialiased);
         });
 
     /// <summary>Asks for an amount and modifies the selection by it, as Select ▸ Modify does.</summary>
