@@ -67,6 +67,21 @@ struct BrushControls: View {
                             change: { session.brushSettings.opacity = CGFloat(min(100, max(1, $0)) / 100) })
                 .help("Press 1–9 for 10–90%, 0 for 100%")
                 .unitSuffix("%")
+            // Blur softens by a radius of its own, apart from how strongly it lays the softening down.
+            if session.tool == .blur, session.blurMode == .blur {
+                Text("Radius").scrubbable(sensitivity: 0.1, value: $session.brushSettings.blurRadius, range: 0.5...50)
+                // The slider covers everyday radii; typing or scrubbing reaches up to 50.
+                Slider(value: Binding(get: { min(20, session.brushSettings.blurRadius) },
+                                      set: { session.brushSettings.blurRadius = $0 }), in: 0.5...20).frame(width: 100)
+                TextField("Radius", value: Binding<Double>(get: { Double(session.brushSettings.blurRadius) },
+                    set: { session.brushSettings.blurRadius = $0.isFinite ? CGFloat(min(50, max(0.5, $0))) : 5 }),
+                    format: .number.precision(.fractionLength(0...1)))
+                    .frame(width: 42).textFieldStyle(.roundedBorder)
+                    .arrowSteps(value: { Double(session.brushSettings.blurRadius) },
+                                change: { session.brushSettings.blurRadius = CGFloat(min(50, max(0.5, $0))) })
+                    .help("How far the blur softens, in pixels")
+                    .unitSuffix("px")
+            }
             // Paint and Erase only: healing, cloning and smearing have their own feel.
             if session.tool == .brush {
                 Text("Smoothing")

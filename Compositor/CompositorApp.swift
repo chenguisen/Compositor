@@ -309,6 +309,8 @@ struct CompositorApp: App {
                     Divider()
                     Button("Group Selected Layers") { session.groupSelectedLayers() }
                         .configuredKeyboardShortcut("g").disabled(!session.canEditLayers)
+                    Button("Ungroup Layers") { session.ungroupLayers() }
+                        .configuredKeyboardShortcut("g", modifiers: [.command, .shift]).disabled(!session.canUngroupLayers)
                     Button("Move Out of Folder") { session.moveActiveLayerOutOfGroup() }
                         .disabled(!session.canEditLayers || session.activeLayer?.parentID == nil)
                     Button("New Blank Layer") { session.addBlankLayer() }
