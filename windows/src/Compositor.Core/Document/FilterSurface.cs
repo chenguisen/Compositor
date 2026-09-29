@@ -13,47 +13,66 @@ internal static class FilterSurface
 {
     /// <summary>
     /// The layer's pixels drawn into a premultiplied buffer a kernel can work on, with
-    /// <paramref name="margin"/> transparent pixels of room around them for a filter that spreads — a blur
-    /// fades at the layer's edge instead of stopping at it. <paramref name="placement"/> is the transform
-    /// that puts that wider grid over exactly the document area the layer already covered, so nothing moves.
-    /// False when the layer holds nothing, or when the buffer would be larger than one surface.
+    /// <paramref name="margin"/> transparent pixels of room on every side for a filter that spreads — a blur
+    /// fades at the layer's edge instead of stopping at it. False when the layer holds nothing, or when the
+    /// buffer would be larger than one surface.
     /// </summary>
     public static bool Begin(ImageLayer layer, int margin, out SKBitmap work, out LayerTransform placement)
+    {
+        if (layer.Asset is not { } asset || margin < 0)
+        {
+            work = null!;
+            placement = default;
+            return false;
+        }
+        return Begin(layer, SKRectI.Create(-margin, -margin, asset.Width + 2 * margin, asset.Height + 2 * margin),
+            out work, out placement);
+    }
+
+    /// <summary>
+    /// The layer's pixels drawn into a premultiplied buffer covering <paramref name="grid"/> — a rectangle of
+    /// the layer's own pixel space, which may lie outside its pixels, as a fill reaching past the layer's edge
+    /// does. <paramref name="placement"/> is the transform that puts that grid over the same document area the
+    /// pixels it holds came from, so nothing moves. False when the layer holds nothing, or when the buffer
+    /// would be larger than one surface.
+    /// </summary>
+    public static bool Begin(ImageLayer layer, SKRectI grid, out SKBitmap work, out LayerTransform placement)
     {
         work = null!;
         placement = default;
         if (layer.Asset is not { } asset || layer.IsGroup) return false;
         var width = asset.Width;
         var height = asset.Height;
-        if (width <= 0 || height <= 0 || margin < 0) return false;
-        long grownWidth = width + 2L * margin, grownHeight = height + 2L * margin;
-        if (grownWidth > DocumentLimits.MaxSide || grownHeight > DocumentLimits.MaxSide
-            || grownWidth * grownHeight > DocumentLimits.MaxSurfacePixels)
+        if (width <= 0 || height <= 0 || grid.Width <= 0 || grid.Height <= 0) return false;
+        if (grid.Width > DocumentLimits.MaxSide || grid.Height > DocumentLimits.MaxSide
+            || (long)grid.Width * grid.Height > DocumentLimits.MaxSurfacePixels)
         {
             return false;
         }
-        work = Allocate((int)grownWidth, (int)grownHeight);
+        work = Allocate(grid.Width, grid.Height);
         using (var canvas = new SKCanvas(work))
         {
             using var paint = new SKPaint { BlendMode = SKBlendMode.Src };
             using var source = SKImage.FromBitmap(asset.Image);
-            canvas.DrawImage(source, SKRect.Create(margin, margin, width, height),
+            canvas.DrawImage(source, SKRect.Create(-grid.Left, -grid.Top, width, height),
                 new SKSamplingOptions(SKFilterMode.Nearest), paint);
         }
-        placement = margin == 0 ? layer.Transform : Grown(layer.Transform, width, height, (int)grownWidth, (int)grownHeight);
+        var same = grid.Left == 0 && grid.Top == 0 && grid.Width == width && grid.Height == height;
+        placement = same ? layer.Transform : Grown(layer.Transform, width, height, grid);
         return true;
     }
 
     /// <summary>
     /// The transform that puts a wider grid over the same document area, at the same pixels per document
-    /// unit, with its middle where the layer's middle was: the picture does not move as it is given room.
-    /// The layer's own middle is the one that is placed, since the room is added on every side of it.
+    /// unit, with the middle of what it covers where that middle was: the picture does not move as it is given
+    /// room. The middle is worked out in the layer's own pixel space, which is the space the grid is given in.
     /// </summary>
-    private static LayerTransform Grown(LayerTransform transform, int width, int height, int grownWidth, int grownHeight)
+    private static LayerTransform Grown(LayerTransform transform, int width, int height, SKRectI grid)
     {
-        var placedWidth = grownWidth * transform.Width / width;
-        var placedHeight = grownHeight * transform.Height / height;
-        var middle = BrushEdits.PixelToDocument(transform, width, height).MapPoint(width / 2f, height / 2f);
+        var placedWidth = grid.Width * transform.Width / width;
+        var placedHeight = grid.Height * transform.Height / height;
+        var middle = BrushEdits.PixelToDocument(transform, width, height)
+            .MapPoint(grid.Left + grid.Width / 2f, grid.Top + grid.Height / 2f);
         return transform with
         {
             X = middle.X - placedWidth / 2,

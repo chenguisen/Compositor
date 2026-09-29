@@ -259,6 +259,8 @@ public sealed class MainWindow : Window
                         Command("Add _Noise…", () => _ = ApplyFilter(FilterKind.AddNoise)),
                         Command("_Dither…", () => _ = DitherFilter()),
                         new Separator(),
+                        Command("_Content-Aware Fill", ContentAwareFill),
+                        new Separator(),
                         Command("_Vignette…", () => _ = ApplyFilter(FilterKind.Vignette)),
                         Command("_Tonal Contrast…", () => _ = ApplyFilter(FilterKind.TonalContrast)),
                         Command("Lens _Correction…", () => _ = ApplyFilter(FilterKind.LensCorrection)),
@@ -454,14 +456,15 @@ public sealed class MainWindow : Window
         }
     }
 
-    /// <summary>One edit, wrapped in the history so it undoes in a single step.</summary>
-    private void Edit(string name, Func<bool> change)
+    /// <summary>One edit, wrapped in the history so it undoes in a single step. False when it changed nothing.</summary>
+    private bool Edit(string name, Func<bool> change)
     {
-        if (_document is not { } document) return;
+        if (_document is not { } document) return false;
         _history.Begin(name, document, Selected);
-        change();
+        var changed = change();
         _history.End(document, Selected);
         Refresh();
+        return changed;
     }
 
     private void Undo()
@@ -1026,6 +1029,32 @@ public sealed class MainWindow : Window
         Edit("Dither", () => DitherEdits.Apply(current, id, chosen.Style, chosen.Settings));
         Reselect(id);
         Say($"Dither: {chosen.Style}, {chosen.Settings.Levels:0} tones");
+    }
+
+    /// <summary>
+    /// Content-Aware Fill: the selected part of the layer is made up out of the pixels around it, as one undo
+    /// step. It needs a selection, and something outside it to take the fill from.
+    /// </summary>
+    private void ContentAwareFill()
+    {
+        if (_document is not { } document || Selected is not { } id) return;
+        if (document.Selection.Path is null)
+        {
+            Say("Content-Aware Fill needs a selection to fill");
+            return;
+        }
+        if (document.Layers.FirstOrDefault(layer => layer.ID == id) is not { Asset: not null, IsGroup: false })
+        {
+            Say("Content-Aware Fill needs a layer with pixels of its own");
+            return;
+        }
+        if (!Edit("Content-Aware Fill", () => ContentFillEdits.Apply(document, id)))
+        {
+            Say("Content-Aware Fill found nothing to fill from: make the selection smaller");
+            return;
+        }
+        Reselect(id);
+        Say("Content-Aware Fill applied");
     }
 
     /// <summary>The ratios the Crop tool offers, as the Mac build's ratio menu does.</summary>
