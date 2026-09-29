@@ -1268,6 +1268,21 @@ public sealed class CanvasView : Control
         base.OnPointerExited(e);
     }
 
+    /// <summary>
+    /// Where the stroke is drawn to: the pointer's own place when nothing is asked for, and short of it by the
+    /// smoothing in hand, so the tip trails the pointer. Each sample covers a share of what is left to it, which
+    /// is what makes a high smoothing trail a long way behind without ever falling further than that behind.
+    /// </summary>
+    private SKPoint Smoothed(SKPoint point)
+    {
+        var smoothing = Math.Clamp(Brush.Smoothing, 0, 1);
+        if (smoothing <= 0 || _stroke.Count == 0) return point;
+        var last = _stroke[^1];
+        var share = 1 - smoothing * 0.9;
+        return new SKPoint((float)(last.X + (point.X - last.X) * share),
+            (float)(last.Y + (point.Y - last.Y) * share));
+    }
+
     protected override void OnPointerMoved(PointerEventArgs e)
     {
         var now = e.GetPosition(this);
@@ -1299,7 +1314,7 @@ public sealed class CanvasView : Control
         }
         if (_painting)
         {
-            var point = ToDocument(now);
+            var point = Smoothed(ToDocument(now));
             // Samples arrive thick and fast; only a real move is worth another dab.
             if (_stroke.Count == 0 || Math.Abs(point.X - _stroke[^1].X) + Math.Abs(point.Y - _stroke[^1].Y) >= 0.5f)
             {

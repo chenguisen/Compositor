@@ -25,3 +25,12 @@ internal enum Tool
     Shape,
     Gradient,
 }
+
+/// <summary>Which of the brush's amounts was asked for, by the Tools menu or the options bar.</summary>
+internal enum BrushSetting
+{
+    Size,
+    Hardness,
+    Opacity,
+    Colour,
+}

@@ -47,6 +47,9 @@ public sealed class MainWindow : Window
         FontSize = 11,
     };
 
+    /// <summary>The tool options above the canvas, which is a face on the same settings the Tools menu moves.</summary>
+    private readonly ToolOptionsBar _optionsBar;
+
     /// <summary>The rail of tools down the left of the canvas, as the Mac keeps its own.</summary>
     private readonly ToolRail _rail = new();
 
@@ -132,23 +135,11 @@ public sealed class MainWindow : Window
     /// </summary>
     private TextSession? _text;
 
-    /// <summary>How the Gradient tool paints: its shape, whether it fades to the background colour or to
-    /// nothing, which way round, and the colour it fades to.</summary>
+    /// <summary>The Gradient tool's own rows in the Tools menu, which the options bar also shows.</summary>
     private readonly MenuItem _gradientMenu = new() { Header = "Gradient _options" };
 
-    private GradientShape _gradientShape = GradientShape.Linear;
-    private bool _gradientToBackground;
-    private bool _gradientReversed;
-    private (double Red, double Green, double Blue) _gradientBackground = (1, 1, 1);
-
-    /// <summary>Which shape the Shape tool draws.</summary>
+    /// <summary>The Shape tool's own rows in the Tools menu, which the options bar also shows.</summary>
     private readonly MenuItem _shapeKinds = new() { Header = "Shape _kind" };
-
-    private ShapeKind _shapeKind = ShapeKind.Rectangle;
-
-    /// <summary>A rectangle's corner radius, and a line's thickness, in document pixels.</summary>
-    private double _shapeCornerRadius;
-    private double _shapeLineWidth = 4;
 
     /// <summary>The crop frame's shape: the canvas's own, or one of the fixed ratios.</summary>
     private readonly MenuItem _cropRatios = new() { Header = "Crop _ratio" };
@@ -170,8 +161,6 @@ public sealed class MainWindow : Window
         ToggleType = MenuItemToggleType.CheckBox,
     };
 
-    private bool _paintingMask;
-    private bool _erasing;
     private readonly List<(MenuItem Item, Func<CanvasDocument, ImageLayer, bool> Ready)> _layerRows = [];
 
     /// <summary>
@@ -241,8 +230,11 @@ public sealed class MainWindow : Window
     private LayerTransform? _transformBox;
     private Dictionary<Guid, LayerTransform> _transformOriginals = [];
 
-    /// <summary>The brush's settings, as the options bar would hold them, and where Clone Stamp copies from.</summary>
-    private BrushSettings _brush = new();
+    /// <summary>What the tool in hand reads, which the options bar is a face on: the brush's settings, the
+    /// selection's and the rest. One object holds them all so the bar can be built once.</summary>
+    private readonly ToolOptions _options = new();
+
+    /// <summary>Where the Clone Stamp copies from, and the offset a stroke is copying through.</summary>
     private SKPoint? _cloneSource;
     private SKPointI? _cloneOffset;
 
@@ -288,14 +280,31 @@ public sealed class MainWindow : Window
         _canvas.TransformStarted = TransformStarted;
         _canvas.TransformChanged = TransformChanged;
         _canvas.TransformFinished = TransformFinished;
-        _paintOnMask.Click += (_, _) => SetPaintingMask(!_paintingMask);
-        _eraseToggle.Click += (_, _) => SetErasing(!_erasing);
+        _paintOnMask.Click += (_, _) => SetPaintingMask(!_options.PaintOnMask);
+        _eraseToggle.Click += (_, _) => SetErasing(!_options.Erase);
         // The rail is the same set of tools the Tools menu has: picking either marks both.
         _rail.Chosen += SetTool;
         _rail.ColoursSwapped += SwapColours;
         _rail.ColoursReset += ResetColours;
         _rail.ColourChosen += which => _ = ChooseColour(which);
         _rail.ShowColours(BrushColour(), BackgroundColour());
+        // The options bar is a face on the same settings the Tools menu moves, so either one marks the other.
+        _optionsBar = new ToolOptionsBar(_options);
+        _optionsBar.Changed += OptionsChanged;
+        _optionsBar.BrushSettingAsked += which => _ = SetBrush(which);
+        _optionsBar.WandSettingAsked += which => _ = SetWand(which);
+        _optionsBar.ShapeSettingAsked += which => _ = SetShape(which);
+        _optionsBar.ColourAsked += which => _ = ChooseColour(which);
+        _optionsBar.FlipAsked += horizontally => Flip(horizontally, canvas: false);
+        _optionsBar.CropRatioChosen += index => SetCropRatio(CropRatios[index].Ratio);
+        _optionsBar.CropApplied += ApplyCrop;
+        _optionsBar.CropCancelled += CancelCrop;
+        _optionsBar.TextAsked += () => _ = EditText();
+        // Picking the marquee's shape or the lasso's kind is picking the tool that draws it, so the bar goes
+        // through SetTool and the menu, the rail and the canvas all follow.
+        _optionsBar.MarqueeShapeChosen += ellipse => SetTool(ellipse ? Tool.Ellipse : Tool.Marquee);
+        _optionsBar.LassoKindChosen += polygonal => SetTool(polygonal ? Tool.Polygon : Tool.Lasso);
+        _optionsBar.ShowCropRatios([.. CropRatios.Select(entry => entry.Label)]);
         _merge.Click += (_, _) => MergeLayers();
         _visibility.Click += (_, _) => ToggleVisibility();
         // The View switches open where they were left last time, as the Mac build's tool defaults keep them.
@@ -620,6 +629,8 @@ public sealed class MainWindow : Window
         };
         DockPanel.SetDock(menu, Dock.Top);
         DockPanel.SetDock(tabs, Dock.Top);
+        // The options bar sits under the toolbar and over the canvas, as the Mac's tool header does.
+        DockPanel.SetDock(_optionsBar, Dock.Top);
         // Docking order is what decides which panel is outermost: the Camera Raw panel takes the window's own
         // right edge and the Layers panel steps aside while it is up, as the Mac's docked panel covers it.
         DockPanel.SetDock(_cameraRawHost, Dock.Right);
@@ -627,6 +638,7 @@ public sealed class MainWindow : Window
         DockPanel.SetDock(statusBar, Dock.Bottom);
         root.Children.Add(menu);
         root.Children.Add(tabs);
+        root.Children.Add(_optionsBar);
         root.Children.Add(_cameraRawHost);
         root.Children.Add(_layersSide);
         root.Children.Add(statusBar);
@@ -1016,6 +1028,7 @@ public sealed class MainWindow : Window
         report.Add($"open {System.IO.Path.GetFileName(project)}: {document.Width}x{document.Height}");
 
         var marks = new List<string>();
+        var bars = new List<string>();
         foreach (var tool in Enum.GetValues<Tool>())
         {
             SetTool(tool);
@@ -1028,10 +1041,23 @@ public sealed class MainWindow : Window
                     $"the Tools menu marked {string.Join(", ", lit)} rather than {tool}");
             }
             if (_message.Length == 0) throw new InvalidOperationException($"{tool} left the status line empty");
+            // The options bar shows the rows this tool can be told about, and nothing else.
+            if (_optionsBar.Shows("brush") != (tool is Tool.Brush or Tool.Clone or Tool.Blur or Tool.Liquify
+                or Tool.Smudge or Tool.Heal))
+            {
+                throw new InvalidOperationException($"{tool} got the brush rows wrong");
+            }
+            if (_optionsBar.Shows("crop") != (tool == Tool.Crop))
+            {
+                throw new InvalidOperationException($"{tool} got the crop rows wrong");
+            }
             marks.Add($"  {tool}: {_message}");
+            bars.Add($"  {tool}: {string.Join(", ", _optionsBar.Showing)}");
         }
         report.Add($"{marks.Count} tools picked; the rail and the Tools menu marked the same one each time");
         report.AddRange(marks);
+        report.Add("the options bar's rows, per tool:");
+        report.AddRange(bars);
         report.Add($"the picture: {_statusInfo.Text}");
 
         // The swatches show the brush's colour and the background's, and swap and reset move both.
@@ -1658,21 +1684,22 @@ public sealed class MainWindow : Window
         _canvas.CancelDraft();
         foreach (var (which, item) in _toolItems) item.IsChecked = which == tool;
         _rail.Mark(tool);
+        RefreshOptionsBar();
         Say(tool switch
         {
-            Tool.Brush => $"Brush: {_brush.Diameter:0} pixels, {Spell(_brush)} — drag on the canvas",
+            Tool.Brush => $"Brush: {_options.Brush.Diameter:0} pixels, {Spell(_options.Brush)} — drag on the canvas",
             Tool.Clone => _cloneSource is null
                 ? "Clone stamp — Alt-click where it should copy from first"
                 : $"Clone stamp copying from {_cloneSource.Value.X:0},{_cloneSource.Value.Y:0} — drag on the canvas",
-            Tool.Blur => $"Blur brush: {_brush.Diameter:0} pixels — drag over what should soften",
-            Tool.Liquify => $"Liquify brush: {_brush.Diameter:0} pixels — drag the pixels where they should go",
-            Tool.Smudge => $"Smudge brush: {_brush.Diameter:0} pixels — drag the colour along",
-            Tool.Heal => $"Spot healing ({_brush.Healing}): {_brush.Diameter:0} pixels — drag over what should go",
+            Tool.Blur => $"Blur brush: {_options.Brush.Diameter:0} pixels — drag over what should soften",
+            Tool.Liquify => $"Liquify brush: {_options.Brush.Diameter:0} pixels — drag the pixels where they should go",
+            Tool.Smudge => $"Smudge brush: {_options.Brush.Diameter:0} pixels — drag the colour along",
+            Tool.Heal => $"Spot healing ({_options.Brush.Healing}): {_options.Brush.Diameter:0} pixels — drag over what should go",
             Tool.Eyedropper => "Eyedropper — click the canvas to take its colour",
             Tool.Type => "Type — click where the text goes, then type it",
             Tool.Crop => "Crop — drag a frame, Alt to grow it from the middle, then Crop ▸ Apply",
-            Tool.Shape => $"Shape ({_shapeKind}) — drag it out; Shift squares it, Alt grows it from the middle",
-            Tool.Gradient => $"Gradient ({_gradientShape}, {(_gradientToBackground ? "to the background colour" : "to nothing")}) — drag the line it runs along",
+            Tool.Shape => $"Shape ({_options.Shape}) — drag it out; Shift squares it, Alt grows it from the middle",
+            Tool.Gradient => $"Gradient ({_options.Gradient}, {(_options.GradientToBackground ? "to the background colour" : "to nothing")}) — drag the line it runs along",
             Tool.Move => "Move — drag the layer, or a handle to scale and turn it",
             Tool.Marquee => "Marquee — drag a rectangle; Shift adds, Alt subtracts",
             Tool.Ellipse => "Elliptical marquee — drag an oval; Shift adds, Alt subtracts",
@@ -1689,13 +1716,89 @@ public sealed class MainWindow : Window
         (brush.Opacity < 1 ? $", {brush.Opacity * 100:0}%" : "") +
         $", colour {brush.Red * 255:0},{brush.Green * 255:0},{brush.Blue * 255:0}";
 
+    /// <summary>Asks for one of the magic wand's amounts, as the options bar's own buttons do.</summary>
+    private async Task SetWand(WandSetting which)
+    {
+        if (which == WandSetting.Tolerance)
+        {
+            if (await Ask("Wand tolerance", "How far off the colour still counts, 0 to 255",
+                    $"{_options.Wand.Tolerance}", 0, 255) is not { } tolerance)
+            {
+                return;
+            }
+            _options.Wand = _options.Wand with { Tolerance = (int)Math.Round(tolerance) };
+        }
+        else
+        {
+            if (await Ask("Wand sample size", "How wide a patch is read around the click, 0 to 100",
+                    $"{_options.Wand.Radius}", 0, 100) is not { } radius)
+            {
+                return;
+            }
+            _options.Wand = _options.Wand with { Radius = (int)Math.Round(radius) };
+        }
+        OptionsChanged();
+        Say($"Magic wand: tolerance {_options.Wand.Tolerance}, sampling {_options.Wand.Radius} pixels");
+    }
+
+    /// <summary>Asks for one of the Shape tool's amounts, as the options bar's own buttons do.</summary>
+    private async Task SetShape(ShapeSetting which)
+    {
+        if (which == ShapeSetting.CornerRadius)
+        {
+            if (await Ask("Corner radius", "Pixels, 0 for square corners", $"{_options.ShapeCornerRadius:0}", 0, 1000)
+                is { } radius)
+            {
+                _options.ShapeCornerRadius = radius;
+            }
+        }
+        else
+        {
+            if (await Ask("Line width", "Pixels, 1 to 200", $"{_options.ShapeLineWidth:0}", 1, 200) is { } width)
+            {
+                _options.ShapeLineWidth = width;
+            }
+        }
+        OptionsChanged();
+        Say($"Shape: {_options.Shape}, radius {_options.ShapeCornerRadius:0}, width {_options.ShapeLineWidth:0}");
+    }
+
+    /// <summary>
+    /// An option was changed at the bar. What a change from the Tools menu does is done here too — the canvas is
+    /// given the brush, the menu rows that stand for the same setting are ticked, and the status line is
+    /// refreshed — so the two faces on one setting can never disagree.
+    /// </summary>
+    private void OptionsChanged()
+    {
+        PushBrush();
+        _eraseToggle.IsChecked = _options.Erase;
+        _paintOnMask.IsChecked = _options.PaintOnMask;
+        ShowColours();
+        RefreshOptionsBar();
+        Say();
+    }
+
+    /// <summary>
+    /// The options bar told which tool is in hand and what the panel holds, so it shows that tool's rows. Called
+    /// when the tool or the panel selection changes, never on a repaint: a row rebuilt under a drag would drop
+    /// the drag.
+    /// </summary>
+    private void RefreshOptionsBar()
+    {
+        var layer = Selected is { } id && _document is { } document
+            ? document.Layers.FirstOrDefault(one => one.ID == id)
+            : null;
+        _optionsBar.Show(_tool, _document is not null, layer?.Mask is not null);
+        _optionsBar.ShowZoom(_canvas.Zoom * 100);
+    }
+
     /// <summary>Puts the current brush, with the mode the tool in hand calls for, on the canvas. The rail's
     /// foreground swatch is the same colour, so it is shown whenever the brush moves.</summary>
     private void PushBrush()
     {
-        _canvas.Brush = _brush with
+        _canvas.Brush = _options.Brush with
         {
-            Erasing = _erasing,
+            Erasing = _options.Erase,
             Mode = _tool switch
             {
                 Tool.Clone => BrushMode.Clone,
@@ -1713,9 +1816,9 @@ public sealed class MainWindow : Window
     /// <summary>Swaps the foreground and background colours, as the Mac's palette does with X.</summary>
     private void SwapColours()
     {
-        var (red, green, blue) = _gradientBackground;
-        _gradientBackground = (_brush.Red, _brush.Green, _brush.Blue);
-        _brush = _brush with { Red = red, Green = green, Blue = blue };
+        var (red, green, blue) = _options.GradientBackground;
+        _options.GradientBackground = (_options.Brush.Red, _options.Brush.Green, _options.Brush.Blue);
+        _options.Brush = _options.Brush with { Red = red, Green = green, Blue = blue };
         PushBrush();
         Say("Swapped the foreground and background colours");
     }
@@ -1723,8 +1826,8 @@ public sealed class MainWindow : Window
     /// <summary>Puts the colours back to black and white, as the Mac's palette does with D.</summary>
     private void ResetColours()
     {
-        _brush = _brush with { Red = 0, Green = 0, Blue = 0 };
-        _gradientBackground = (1, 1, 1);
+        _options.Brush = _options.Brush with { Red = 0, Green = 0, Blue = 0 };
+        _options.GradientBackground = (1, 1, 1);
         PushBrush();
         Say("Foreground black and background white");
     }
@@ -1748,23 +1851,23 @@ public sealed class MainWindow : Window
         _gradientMenu.Items.Add(Command("_To the background colour", () => SetGradient(null, true, null)));
         _gradientMenu.Items.Add(Command("To _nothing", () => SetGradient(null, false, null)));
         _gradientMenu.Items.Add(new Separator());
-        _gradientMenu.Items.Add(Command("_Reversed", () => SetGradient(null, null, !_gradientReversed)));
+        _gradientMenu.Items.Add(Command("_Reversed", () => SetGradient(null, null, !_options.GradientReversed)));
         _gradientMenu.Items.Add(Command("_Background colour…", () => _ = SetGradientBackground()));
     }
 
     private void SetGradient(GradientShape? shape, bool? toBackground, bool? reversed)
     {
-        if (shape is { } wanted) _gradientShape = wanted;
-        if (toBackground is { } fade) _gradientToBackground = fade;
-        if (reversed is { } turn) _gradientReversed = turn;
-        Say($"Gradient: {_gradientShape}, {(_gradientToBackground ? "to the background colour" : "to nothing")}" +
-            (_gradientReversed ? ", reversed" : "") + ", opacity as the brush's");
+        if (shape is { } wanted) _options.Gradient = wanted;
+        if (toBackground is { } fade) _options.GradientToBackground = fade;
+        if (reversed is { } turn) _options.GradientReversed = turn;
+        Say($"Gradient: {_options.Gradient}, {(_options.GradientToBackground ? "to the background colour" : "to nothing")}" +
+            (_options.GradientReversed ? ", reversed" : "") + ", opacity as the brush's");
         SetTool(_tool);
     }
 
     private async Task SetGradientBackground()
     {
-        var current = $"{_gradientBackground.Red * 255:0},{_gradientBackground.Green * 255:0},{_gradientBackground.Blue * 255:0}";
+        var current = $"{_options.GradientBackground.Red * 255:0},{_options.GradientBackground.Green * 255:0},{_options.GradientBackground.Blue * 255:0}";
         if (await TextPrompt.Ask(this, "Gradient background colour", "Red, green and blue, 0 to 255", current)
             is not { } typed)
         {
@@ -1775,8 +1878,8 @@ public sealed class MainWindow : Window
             Say("The colour has to be three numbers from 0 to 255, as in 255,0,0");
             return;
         }
-        _gradientBackground = colour;
-        _gradientToBackground = true;
+        _options.GradientBackground = colour;
+        _options.GradientToBackground = true;
         Say($"Gradient background {colour.Red * 255:0},{colour.Green * 255:0},{colour.Blue * 255:0}");
         SetTool(_tool);
     }
@@ -1812,19 +1915,19 @@ public sealed class MainWindow : Window
     private (bool Mask, SKColor From, SKColor To, double Opacity, GradientShape Shape) GradientPlan(
         CanvasDocument document, Guid layerID)
     {
-        var mask = _paintingMask && document.Layers.FirstOrDefault(layer => layer.ID == layerID)?.Mask is not null;
+        var mask = _options.PaintOnMask && document.Layers.FirstOrDefault(layer => layer.ID == layerID)?.Mask is not null;
         var from = new SKColor(
-            (byte)Math.Clamp(Math.Round(_brush.Red * 255), 0, 255),
-            (byte)Math.Clamp(Math.Round(_brush.Green * 255), 0, 255),
-            (byte)Math.Clamp(Math.Round(_brush.Blue * 255), 0, 255));
-        var to = _gradientToBackground
+            (byte)Math.Clamp(Math.Round(_options.Brush.Red * 255), 0, 255),
+            (byte)Math.Clamp(Math.Round(_options.Brush.Green * 255), 0, 255),
+            (byte)Math.Clamp(Math.Round(_options.Brush.Blue * 255), 0, 255));
+        var to = _options.GradientToBackground
             ? new SKColor(
-                (byte)Math.Clamp(Math.Round(_gradientBackground.Red * 255), 0, 255),
-                (byte)Math.Clamp(Math.Round(_gradientBackground.Green * 255), 0, 255),
-                (byte)Math.Clamp(Math.Round(_gradientBackground.Blue * 255), 0, 255))
+                (byte)Math.Clamp(Math.Round(_options.GradientBackground.Red * 255), 0, 255),
+                (byte)Math.Clamp(Math.Round(_options.GradientBackground.Green * 255), 0, 255),
+                (byte)Math.Clamp(Math.Round(_options.GradientBackground.Blue * 255), 0, 255))
             : new SKColor(from.Red, from.Green, from.Blue, 0);
-        if (_gradientReversed) (from, to) = (to, from);
-        return (mask, from, to, _brush.Opacity, _gradientShape);
+        if (_options.GradientReversed) (from, to) = (to, from);
+        return (mask, from, to, _options.Brush.Opacity, _options.Gradient);
     }
 
     /// <summary>The gradient's line has been let go: the fill is made, as one undo step.</summary>
@@ -1863,7 +1966,7 @@ public sealed class MainWindow : Window
 
     private void SetShapeKind(ShapeKind kind)
     {
-        _shapeKind = kind;
+        _options.Shape = kind;
         foreach (var (which, item) in _shapeKindItems) item.IsChecked = which == kind;
     }
 
@@ -1871,15 +1974,15 @@ public sealed class MainWindow : Window
     private async Task SetShapeNumber(ShapeNumber which)
     {
         var corner = which == ShapeNumber.CornerRadius;
-        var current = corner ? _shapeCornerRadius : _shapeLineWidth;
+        var current = corner ? _options.ShapeCornerRadius : _options.ShapeLineWidth;
         if (await Ask(corner ? "Corner radius" : "Line width", "Document pixels, 0 to 1000",
                 $"{current:0.##}", 0, 1000) is not { } value)
         {
             return;
         }
-        if (corner) _shapeCornerRadius = value;
-        else _shapeLineWidth = Math.Max(1, value);
-        Say($"Shape: {_shapeKind}, {(corner ? "corner radius" : "line width")} {value:0.##} pixels");
+        if (corner) _options.ShapeCornerRadius = value;
+        else _options.ShapeLineWidth = Math.Max(1, value);
+        Say($"Shape: {_options.Shape}, {(corner ? "corner radius" : "line width")} {value:0.##} pixels");
     }
 
     private enum ShapeNumber
@@ -1897,20 +2000,20 @@ public sealed class MainWindow : Window
         if (_document is not { } document) return;
         var style = new LayerShapeStyle
         {
-            Kind = _shapeKind,
-            Red = _brush.Red,
-            Green = _brush.Green,
-            Blue = _brush.Blue,
-            CornerRadius = _shapeCornerRadius,
+            Kind = _options.Shape,
+            Red = _options.Brush.Red,
+            Green = _options.Brush.Green,
+            Blue = _options.Brush.Blue,
+            CornerRadius = _options.ShapeCornerRadius,
         };
         var target = box;
-        if (_shapeKind == ShapeKind.Line)
+        if (_options.Shape == ShapeKind.Line)
         {
             // The layer is the box around the line with room for the stroke's own thickness and its round ends.
-            var half = (float)(_shapeLineWidth / 2);
+            var half = (float)(_options.ShapeLineWidth / 2);
             target = CropEdits.Snapped(SKRect.Create(box.Left - half, box.Top - half,
                 box.Width + half * 2, box.Height + half * 2));
-            style.LineWidth = _shapeLineWidth;
+            style.LineWidth = _options.ShapeLineWidth;
             style.Start = Unit(target, anchor);
             style.End = Unit(target, lineEnd);
         }
@@ -1919,7 +2022,7 @@ public sealed class MainWindow : Window
             Say("That shape is too large to draw as one layer");
             return;
         }
-        _history.Begin(_shapeKind.ToString(), document, Selected);
+        _history.Begin(_options.Shape.ToString(), document, Selected);
         var made = ShapeEdits.Add(document, style, target, Selected);
         _history.End(document, Selected);
         if (made is null)
@@ -1928,7 +2031,7 @@ public sealed class MainWindow : Window
             return;
         }
         Reselect(made);
-        Say($"{_shapeKind}: {target.Width}x{target.Height} at {target.Left},{target.Top}");
+        Say($"{_options.Shape}: {target.Width}x{target.Height} at {target.Left},{target.Top}");
     }
 
     /// <summary>Where a document point sits in a box, as a fraction of its sides.</summary>
@@ -2769,9 +2872,9 @@ public sealed class MainWindow : Window
     /// </summary>
     /// <summary>The brush's colour, which the panels that think in colours start from.</summary>
     private SKColor BrushColour() => new(
-        (byte)Math.Clamp(Math.Round(_brush.Red * 255), 0, 255),
-        (byte)Math.Clamp(Math.Round(_brush.Green * 255), 0, 255),
-        (byte)Math.Clamp(Math.Round(_brush.Blue * 255), 0, 255));
+        (byte)Math.Clamp(Math.Round(_options.Brush.Red * 255), 0, 255),
+        (byte)Math.Clamp(Math.Round(_options.Brush.Green * 255), 0, 255),
+        (byte)Math.Clamp(Math.Round(_options.Brush.Blue * 255), 0, 255));
 
     /// <summary>Starts showing what a panel would do to a layer, before anything is committed.
     private void StartPreview(CanvasDocument document, Guid layerID) =>
@@ -2802,18 +2905,18 @@ public sealed class MainWindow : Window
     {
         var style = new LayerShapeStyle
         {
-            Kind = _shapeKind,
-            Red = _brush.Red,
-            Green = _brush.Green,
-            Blue = _brush.Blue,
-            CornerRadius = _shapeCornerRadius,
+            Kind = _options.Shape,
+            Red = _options.Brush.Red,
+            Green = _options.Brush.Green,
+            Blue = _options.Brush.Blue,
+            CornerRadius = _options.ShapeCornerRadius,
         };
-        if (_shapeKind != ShapeKind.Line) return (style, box);
+        if (_options.Shape != ShapeKind.Line) return (style, box);
         // A line's layer is the box around it with room for the stroke's own thickness and its round ends.
-        var half = (float)(_shapeLineWidth / 2);
+        var half = (float)(_options.ShapeLineWidth / 2);
         var target = CropEdits.Snapped(SKRect.Create(box.Left - half, box.Top - half,
             box.Width + half * 2, box.Height + half * 2));
-        style.LineWidth = _shapeLineWidth;
+        style.LineWidth = _options.ShapeLineWidth;
         style.Start = Unit(target, anchor ?? new SKPoint(box.Left, box.Top));
         style.End = Unit(target, lineEnd ?? new SKPoint(box.Right, box.Bottom));
         return (style, target);
@@ -2870,8 +2973,8 @@ public sealed class MainWindow : Window
     {
         if (_document is not { } document) return;
         if (document.Width <= 0 || document.Height <= 0) return;
-        var start = new SKColor((byte)Math.Round(_brush.Red * 255), (byte)Math.Round(_brush.Green * 255),
-            (byte)Math.Round(_brush.Blue * 255));
+        var start = new SKColor((byte)Math.Round(_options.Brush.Red * 255), (byte)Math.Round(_options.Brush.Green * 255),
+            (byte)Math.Round(_options.Brush.Blue * 255));
         if (await ColorRangeDialog.Ask(this, start) is not { } asked) return;
         using var sample = DocumentRenderer.Render(document);
         Edit($"Colour Range {asked.Fuzziness}", () => SelectionEdits.SelectColorRange(
@@ -2947,16 +3050,22 @@ public sealed class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// The ratios the Crop tool offers, in one list because both the Tools menu and the options bar offer them.
+    /// The menu marks a letter of each as its key; the bar is a pop-up, which shows the text as written.
+    /// </summary>
+    private static readonly (string Label, double? Ratio)[] CropRatios =
+    [
+        ("Free", null), ("Original", -1), ("1:1", 1), ("4:3", 4.0 / 3), ("3:4", 3.0 / 4),
+        ("16:9", 16.0 / 9), ("9:16", 9.0 / 16),
+    ];
+
     /// <summary>The ratios the Crop tool offers, as the Mac build's ratio menu does.</summary>
     private void BuildCropRatios()
     {
-        foreach (var (label, ratio) in new (string Label, double? Ratio)[]
-                 {
-                     ("_Free", null), ("_Original", -1), ("1:_1", 1), ("4:_3", 4.0 / 3), ("3:_4", 3.0 / 4),
-                     ("16:_9", 16.0 / 9), ("9:1_6", 9.0 / 16),
-                 })
+        foreach (var (label, ratio) in CropRatios)
         {
-            _cropRatios.Items.Add(Command(label, () => SetCropRatio(ratio)));
+            _cropRatios.Items.Add(Command(label.Replace(":", ":_", StringComparison.Ordinal), () => SetCropRatio(ratio)));
         }
         _cropRatios.Items.Add(new Separator());
         _cropRatios.Items.Add(Command("_Apply", ApplyCrop, "Ctrl+Return"));
@@ -3070,9 +3179,9 @@ public sealed class MainWindow : Window
                 Content = "",
                 FontName = "Arial",
                 FontSize = 72,
-                Red = _brush.Red,
-                Green = _brush.Green,
-                Blue = _brush.Blue,
+                Red = _options.Brush.Red,
+                Green = _options.Brush.Green,
+                Blue = _options.Brush.Blue,
             }, origin);
             _history.Begin("Type", document, Selected);
         }
@@ -3187,7 +3296,7 @@ public sealed class MainWindow : Window
     /// <summary>Where a brush stroke goes: the layer's pixels, or its mask.</summary>
     private void SetPaintingMask(bool mask)
     {
-        _paintingMask = mask;
+        _options.PaintOnMask = mask;
         _paintOnMask.IsChecked = mask;
         Say(mask
             ? "The brush paints on the layer's mask — white reveals, and Erase paints black"
@@ -3197,7 +3306,7 @@ public sealed class MainWindow : Window
     /// <summary>The brush erases rather than paints: on a mask, that is black rather than white.</summary>
     private void SetErasing(bool erasing)
     {
-        _erasing = erasing;
+        _options.Erase = erasing;
         _eraseToggle.IsChecked = erasing;
         PushBrush();
         Say(erasing ? "The brush erases" : "The brush paints");
@@ -3223,7 +3332,7 @@ public sealed class MainWindow : Window
             return;
         }
         // A transparent pixel has no colour to take; a part-transparent one is read as it looks on white.
-        _brush = _brush with
+        _options.Brush = _options.Brush with
         {
             Red = colour.Red / 255.0,
             Green = colour.Green / 255.0,
@@ -3236,7 +3345,7 @@ public sealed class MainWindow : Window
     /// <summary>How Spot Healing works out what to put in the painted area.</summary>
     private void Heal(HealingMode mode)
     {
-        _brush = _brush with { Healing = mode };
+        _options.Brush = _options.Brush with { Healing = mode };
         PushBrush();
         Say($"Spot healing: {mode}");
     }
@@ -3248,27 +3357,27 @@ public sealed class MainWindow : Window
         {
             case BrushSetting.Size:
                 if (await Ask("Brush size", "Diameter in pixels, 1 to 2000",
-                        $"{_brush.Diameter:0}", 1, 2000) is { } size)
+                        $"{_options.Brush.Diameter:0}", 1, 2000) is { } size)
                 {
-                    _brush = _brush with { Diameter = size };
+                    _options.Brush = _options.Brush with { Diameter = size };
                 }
                 break;
             case BrushSetting.Hardness:
                 if (await Ask("Brush hardness", "Percent, 0 for a soft tip and 100 for a hard one",
-                        $"{_brush.Hardness * 100:0}", 0, 100) is { } hardness)
+                        $"{_options.Brush.Hardness * 100:0}", 0, 100) is { } hardness)
                 {
-                    _brush = _brush with { Hardness = hardness / 100.0 };
+                    _options.Brush = _options.Brush with { Hardness = hardness / 100.0 };
                 }
                 break;
             case BrushSetting.Opacity:
-                if (await Ask("Brush opacity", "Percent, 1 to 100", $"{_brush.Opacity * 100:0}", 1, 100) is { } opacity)
+                if (await Ask("Brush opacity", "Percent, 1 to 100", $"{_options.Brush.Opacity * 100:0}", 1, 100) is { } opacity)
                 {
-                    _brush = _brush with { Opacity = opacity / 100.0 };
+                    _options.Brush = _options.Brush with { Opacity = opacity / 100.0 };
                 }
                 break;
             default:
                 if (await TextPrompt.Ask(this, "Brush colour", "Red, green and blue, 0 to 255",
-                        $"{_brush.Red * 255:0},{_brush.Green * 255:0},{_brush.Blue * 255:0}") is not { } typed)
+                        $"{_options.Brush.Red * 255:0},{_options.Brush.Green * 255:0},{_options.Brush.Blue * 255:0}") is not { } typed)
                 {
                     return;
                 }
@@ -3277,11 +3386,11 @@ public sealed class MainWindow : Window
                     Say("The colour has to be three numbers from 0 to 255, as in 255,0,0");
                     return;
                 }
-                _brush = _brush with { Red = colour.Red, Green = colour.Green, Blue = colour.Blue };
+                _options.Brush = _options.Brush with { Red = colour.Red, Green = colour.Green, Blue = colour.Blue };
                 break;
         }
         PushBrush();
-        Say($"Brush: {_brush.Diameter:0} pixels, {Spell(_brush)}");
+        Say($"Brush: {_options.Brush.Diameter:0} pixels, {Spell(_options.Brush)}");
     }
 
     private async Task<double?> Ask(string title, string label, string initial, double least, double most)
@@ -3310,14 +3419,6 @@ public sealed class MainWindow : Window
     }
 
     /// <summary>One of the brush settings the options bar would show.</summary>
-    private enum BrushSetting
-    {
-        Size,
-        Hardness,
-        Opacity,
-        Colour,
-    }
-
     /// <summary>One change to the selection, as one undo step.</summary>
     private bool Change(string name, Func<CanvasDocument, bool> change)
     {
@@ -3398,9 +3499,9 @@ public sealed class MainWindow : Window
 
     /// <summary>The background colour, which the gradient tool draws towards and a fill can use.</summary>
     private SKColor BackgroundColour() => new(
-        (byte)Math.Clamp(Math.Round(_gradientBackground.Red * 255), 0, 255),
-        (byte)Math.Clamp(Math.Round(_gradientBackground.Green * 255), 0, 255),
-        (byte)Math.Clamp(Math.Round(_gradientBackground.Blue * 255), 0, 255));
+        (byte)Math.Clamp(Math.Round(_options.GradientBackground.Red * 255), 0, 255),
+        (byte)Math.Clamp(Math.Round(_options.GradientBackground.Green * 255), 0, 255),
+        (byte)Math.Clamp(Math.Round(_options.GradientBackground.Blue * 255), 0, 255));
 
     /// <summary>
     /// Edit ▸ Fill: what the selection covers takes the colour. A mask is the exception — filling it sets how
@@ -3409,7 +3510,7 @@ public sealed class MainWindow : Window
     private void FillPixels(SKColor colour, string name)
     {
         if (_document is not { } document || Selected is not { } id) return;
-        var filled = Edit(_paintingMask ? "Fill Mask" : name, () => _paintingMask
+        var filled = Edit(_options.PaintOnMask ? "Fill Mask" : name, () => _options.PaintOnMask
             ? FillEdits.FillMask(document, id,
                 (byte)Math.Clamp(Math.Round((colour.Red + colour.Green + colour.Blue) / 3.0), 0, 255))
             : FillEdits.Fill(document, id, colour));
@@ -3426,7 +3527,7 @@ public sealed class MainWindow : Window
     private void ClearPixels()
     {
         if (_document is not { } document || Selected is not { } id) return;
-        if (_paintingMask)
+        if (_options.PaintOnMask)
         {
             if (!Edit("Clear Mask", () => FillEdits.FillMask(document, id, 0)))
             {
@@ -3455,13 +3556,15 @@ public sealed class MainWindow : Window
             ? SelectionEdits.SelectLasso(document, points)
             : SelectionEdits.Apply(document, SelectionEdits.Lasso(points), mode));
 
-    /// <summary>A click of the wand: everything like the pixel under it, read from the canvas as shown.</summary>
+    /// <summary>A click of the wand: everything like the pixel under it, read from the canvas as shown. The
+    /// amounts are the options bar's: how far off the colour counts, how wide a sample is read, whether the
+    /// outline has to stay joined, and whether every visible layer is read or only the one in hand.</summary>
     private void WandClicked(SKPoint point, SelectionMode mode) =>
         Change("Magic Wand", document =>
         {
-            using var sample = SelectionEdits.Sample(document, null);
+            using var sample = SelectionEdits.Sample(document, _options.WandAllLayers ? null : Selected);
             return sample is not null && SelectionEdits.SelectWand(document, sample,
-                (int)Math.Floor(point.X), (int)Math.Floor(point.Y), new WandOptions(), mode);
+                (int)Math.Floor(point.X), (int)Math.Floor(point.Y), _options.Wand, mode);
         });
 
     /// <summary>Asks for an amount and modifies the selection by it, as Select ▸ Modify does.</summary>
@@ -3510,13 +3613,13 @@ public sealed class MainWindow : Window
             Tool.Heal => "Spot Healing",
             _ => "Brush",
         };
-        Edit(_paintingMask ? $"{name} on the mask" : name, () =>
+        Edit(_options.PaintOnMask ? $"{name} on the mask" : name, () =>
         {
-            if (_paintingMask)
+            if (_options.PaintOnMask)
             {
                 // White reveals and black hides; the brush's Erase is what paints black, as the Mac build's
                 // paint-white switch does.
-                var value = _erasing ? 0 : 1;
+                var value = _options.Erase ? 0 : 1;
                 return BrushEdits.PaintMask(document, id,
                     stroke, settings with { Red = value, Green = value, Blue = value, Erasing = false });
             }
@@ -3547,8 +3650,10 @@ public sealed class MainWindow : Window
             Say("Alt-click where the Clone Stamp should copy from first");
             return null;
         }
-        _cloneOffset ??= new SKPointI(
-            (int)Math.Round(source.X - stroke[0].X), (int)Math.Round(source.Y - stroke[0].Y));
+        // A clone stroke that is not aligned takes the place it starts from as the new source, so the offset is
+        // worked out again each time; an aligned one keeps copying from where the last stroke did.
+        var offset = new SKPointI((int)Math.Round(source.X - stroke[0].X), (int)Math.Round(source.Y - stroke[0].Y));
+        _cloneOffset = _options.Brush.CloneAligned ? _cloneOffset ?? offset : offset;
         return _canvas.Brush with { CloneFrom = _cloneOffset };
     }
 

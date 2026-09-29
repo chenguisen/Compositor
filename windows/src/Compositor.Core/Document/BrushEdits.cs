@@ -54,7 +54,13 @@ public sealed record BrushSettings(
     /// <summary>How a Spot Healing stroke rebuilds the area.</summary>
     HealingMode Healing = HealingMode.ContentAware,
     /// <summary>The grain Spot Healing adds when it fills smoothly. Zero picks a new pattern each stroke.</summary>
-    uint Seed = 0);
+    uint Seed = 0,
+    /// <summary>How far the tip lags the pointer, as a fraction of the way to it: nothing at zero, and the
+    /// stroke trails the pointer more the higher it goes. The Mac build's own smoothing is the same idea.</summary>
+    double Smoothing = 0,
+    /// <summary>Whether a Clone Stamp stroke keeps copying from where the last one did, or takes the place it
+    /// starts from as the new source each time.</summary>
+    bool CloneAligned = true);
 
 /// <summary>
 /// Painting a stroke into a layer's own pixels. Mouse samples arrive in document coordinates, so they are
