@@ -296,6 +296,11 @@ public sealed class MainWindow : Window
         _rulerDown.Grabbed = (axis, at) => GuideGrabbed(_rulerDown, axis, at);
         _rulerDown.Dragged = at => GuidePulled(_rulerDown, at);
         _rulerDown.LetGo = GuidePulledOff;
+        // The pixels inside a selection can be taken hold of and dragged, which is the Mac build's other way of
+        // moving them besides Command with an arrow key.
+        _canvas.PixelsGrabbed = PixelsTaken;
+        _canvas.PixelsMoved = PixelsDragged;
+        _canvas.PixelsDropped = PixelsLetGo;
         _canvas.CropChanged = CropChanged;
         _canvas.CropCommitted = ApplyCrop;
         BuildCropRatios();
@@ -1078,6 +1083,68 @@ public sealed class MainWindow : Window
         return Edit("Move Layer", () => LayerEdits.Move(document, id, dx, dy));
     }
 
+    /// <summary>The pixels a drag is carrying, and how far it has taken them.</summary>
+    private FloatingPixels? _moving;
+    private (int Dx, int Dy) _movedBy;
+
+    /// <summary>
+    /// A press inside the selection with Control held: the pixels under it come away from the layer and are
+    /// carried by the drag. False — and nothing taken — when the press is outside the selection, so the drag goes
+    /// on to draw a new outline as it would have.
+    /// </summary>
+    private bool PixelsTaken(SKPoint at)
+    {
+        if (_document is not { } document || Selected is not { } id) return false;
+        if (document.Selection.Path is not { } path || !path.Contains(at.X, at.Y)) return false;
+        if (SelectionEdits.LiftPixels(document, id) is not { } floating)
+        {
+            Say("There is nothing inside the selection to move");
+            return false;
+        }
+        _moving = floating;
+        _movedBy = (0, 0);
+        _history.Begin("Move Pixels", document, id);
+        _canvas.Floating = (floating, 0, 0);
+        Say("Dragging the pixels inside the selection");
+        return true;
+    }
+
+    /// <summary>The pixels follow the pointer: where they are now is where they would land.</summary>
+    private void PixelsDragged(int dx, int dy)
+    {
+        if (_document is not { } document || _moving is not { } moving) return;
+        _movedBy = (dx, dy);
+        _canvas.Floating = (moving, dx, dy);
+        // The outline goes with them, so what is selected is what is being carried.
+        document.Selection = moving.Origin.Translated(dx, dy);
+        _canvas.InvalidateVisual();
+        Say($"Moving the pixels {dx}, {dy}");
+    }
+
+    /// <summary>
+    /// The drag has let the pixels go: they are put down where they are, or back where they came from when the
+    /// drag went nowhere. Either way it is one undo step, begun when they were taken hold of.
+    /// </summary>
+    private void PixelsLetGo()
+    {
+        if (_document is not { } document || _moving is not { } moving) return;
+        _moving = null;
+        _canvas.Floating = null;
+        if (_movedBy is (0, 0))
+        {
+            SelectionEdits.DropPixels(document, moving);
+        }
+        else
+        {
+            SelectionEdits.SettlePixels(document, moving, _movedBy.Dx, _movedBy.Dy);
+        }
+        var moved = _movedBy;
+        _movedBy = (0, 0);
+        _history.End(document, Selected);
+        Refresh();
+        if (moved is not (0, 0)) Say($"Pixels moved {moved.Dx}, {moved.Dy}");
+    }
+
     /// <summary>
     /// The pixels inside the selection move by whole document pixels, one undo step a press, which is the Mac
     /// build's own Command-with-an-arrow: what the plain arrows do to a layer, this does to what is selected.
@@ -1704,6 +1771,32 @@ public sealed class MainWindow : Window
         report.Add($"the filter preview: shown {previewing}, and with the Preview tick off {hidden}");
         if (!previewing || !hidden) throw new InvalidOperationException("the Preview tick's two states did not take");
         StopPreview();
+
+        // Control-dragging inside the selection carries its pixels: Photoshop's temporary Move tool, and the Mac
+        // build's other way of moving them besides Command with an arrow key. The selection here is the ellipse
+        // the tick was just driven with, so the press is at its middle.
+        var outlineWas = document.Selection.Path!.Bounds;
+        var control = RawInputModifiers.LeftMouseButton | RawInputModifiers.Control;
+        this.MouseDown(Aim(new SKPoint(70, 55)), MouseButton.Left, control);
+        this.MouseMove(Aim(new SKPoint(90, 65)), control);
+        if (_canvas.Floating is not { } floating)
+        {
+            throw new InvalidOperationException("the Control-drag did not take hold of the pixels");
+        }
+        report.Add($"a Control-drag inside the selection carries {floating.Pixels.Cut.Width}x"
+            + $"{floating.Pixels.Cut.Height} of its pixels, {floating.Dx},{floating.Dy} so far"
+            + $"{(_canvas.FloatingShowing ? ", drawn where the pointer is" : " and NOT drawn!")}");
+        if (!_canvas.FloatingShowing) throw new InvalidOperationException("the pixels are carried but not drawn");
+        this.MouseUp(Aim(new SKPoint(90, 65)), MouseButton.Left, RawInputModifiers.None);
+        var outlineNow = document.Selection.Path!.Bounds;
+        report.Add($"the outline went with them: {outlineWas.Left:0},{outlineWas.Top:0} → "
+            + $"{outlineNow.Left:0},{outlineNow.Top:0}, one \"{_history.UndoName}\" step");
+        if (_canvas.Floating is not null) throw new InvalidOperationException("the pixels were not put down");
+        if (outlineNow.Left == outlineWas.Left) throw new InvalidOperationException("the outline stayed put");
+        if (_history.UndoName != "Move Pixels")
+        {
+            throw new InvalidOperationException($"the drag made a \"{_history.UndoName}\" step");
+        }
 
         // The wand: one click, on a colour the picture actually has.
         SetTool(Tool.Wand);

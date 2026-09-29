@@ -11,7 +11,11 @@ namespace Compositor.Core.Tests;
 /// </summary>
 public class SelectionPixelsTests
 {
-    /// <summary>A layer of one flat colour with a 10 x 10 patch of another in the middle, and the patch selected.</summary>
+    /// <summary>
+    /// A layer with a 10 x 10 red patch in the middle, a 3 x 3 blue mark well away from it, and the patch
+    /// selected. The mark is what proves a move carries the selection and nothing else: a whole layer put down
+    /// again shifted — which is what an unguarded copy does — shows that mark twice.
+    /// </summary>
     private static (CanvasDocument Document, ImageLayer Layer) Patch()
     {
         var document = LayerPlacement.NewDocument(40, 30)
@@ -21,8 +25,11 @@ public class SelectionPixelsTests
         using (var canvas = new SKCanvas(pixels))
         {
             canvas.Clear(new SKColor(20, 20, 20));
-            using var paint = new SKPaint { Color = new SKColor(240, 0, 0), IsAntialias = false };
+            using var paint = new SKPaint { IsAntialias = false };
+            paint.Color = new SKColor(240, 0, 0);
             canvas.DrawRect(SKRect.Create(15, 10, 10, 10), paint);
+            paint.Color = new SKColor(0, 0, 240);
+            canvas.DrawRect(SKRect.Create(32, 24, 3, 3), paint);
         }
         layer.Asset = ImportedImage.Create(pixels, "pixels");
         // The patch selected, hard-edged so a pixel is either in it or out of it.
@@ -37,14 +44,19 @@ public class SelectionPixelsTests
     {
         var (document, layer) = Patch();
         using var _ = document;
-        var before = Image(document).GetPixel(20, 15);
-        Assert.Equal(240, before.Red);
+        Assert.Equal(240, Image(document).GetPixel(20, 15).Red);
 
-        Assert.True(SelectionEdits.MovePixels(document, layer.ID, 12, 0));
+        // Moved left, so that a whole layer put down again shifted would land inside the picture where it can be
+        // seen: that is what the mark away from the selection is for.
+        Assert.True(SelectionEdits.MovePixels(document, layer.ID, -12, 0));
 
-        // Where the patch was is now the background, and where it went is the patch.
-        Assert.Equal(20, Image(document).GetPixel(20, 15).Red);
-        Assert.Equal(240, Image(document).GetPixel(32, 15).Red);
+        // Where the patch was is a hole — the layer's own pixels there are gone, not the colour around them.
+        Assert.Equal(0, Image(document).GetPixel(20, 15).Alpha);
+        Assert.Equal(240, Image(document).GetPixel(8, 15).Red);
+        // The mark away from the selection is where it was, and the place a shifted whole-layer copy would have
+        // put it is still the background.
+        Assert.Equal(240, Image(document).GetPixel(33, 25).Blue);
+        Assert.Equal(20, Image(document).GetPixel(21, 25).Blue);
     }
 
     [Fact]
@@ -88,5 +100,71 @@ public class SelectionPixelsTests
         Assert.False(SelectionEdits.MovePixels(document, layer.ID, 0, 0));
         Assert.True(SelectionEdits.Deselect(document));
         Assert.False(SelectionEdits.MovePixels(document, layer.ID, 3, 3));
+    }
+
+    [Fact]
+    public void LiftingLeavesTheHoleAndHoldsThePixels()
+    {
+        var (document, layer) = Patch();
+        using var _ = document;
+        using var floating = SelectionEdits.LiftPixels(document, layer.ID);
+        Assert.NotNull(floating);
+
+        // The hole is in the layer straight away, so a drag shows it while it goes.
+        Assert.Equal(0, Image(document).GetPixel(20, 15).Alpha);
+        // And the pixels being carried are the patch: the cut is the size of the region the selection covers and
+        // is aligned with the document, so its own pixel for document 20,15 holds the patch's colour.
+        var cutX = 20 - (int)floating.CutAt.X;
+        var cutY = 15 - (int)floating.CutAt.Y;
+        Assert.Equal(240, floating.Cut.GetPixel(cutX, cutY).Red);
+        // Its corner is on the selection's, give or take the pixel a coverage region may be rounded out by.
+        Assert.True(Math.Abs(floating.CutAt.X - 15) <= 1 && Math.Abs(floating.CutAt.Y - 10) <= 1,
+            $"the cut starts at {floating.CutAt.X},{floating.CutAt.Y}, not on the selection");
+    }
+
+    [Fact]
+    public void WhatWasLiftedIsPutDownWhereTheDragEnds()
+    {
+        var (document, layer) = Patch();
+        using var _ = document;
+        var floating = SelectionEdits.LiftPixels(document, layer.ID);
+        Assert.NotNull(floating);
+        Assert.True(SelectionEdits.SettlePixels(document, floating, 12, 4));
+
+        Assert.Equal(0, Image(document).GetPixel(20, 15).Alpha);
+        Assert.Equal(240, Image(document).GetPixel(32, 19).Red);
+        // The outline came with them.
+        Assert.Equal(27, document.Selection.Path!.Bounds.Left);
+    }
+
+    [Fact]
+    public void ADragThatComesToNothingPutsTheLayerBackExactly()
+    {
+        // A cancel must leave no trace at all: the pixels, the outline and the layer's own picture.
+        var (document, layer) = Patch();
+        using var _ = document;
+        var before = Image(document);
+        var was = System.Security.Cryptography.SHA256.HashData(Pixels(before));
+        var outline = document.Selection.Path!.Bounds;
+
+        var floating = SelectionEdits.LiftPixels(document, layer.ID);
+        Assert.NotNull(floating);
+        SelectionEdits.DropPixels(document, floating);
+
+        var after = System.Security.Cryptography.SHA256.HashData(Pixels(Image(document)));
+        Assert.Equal(was, after);
+        Assert.Equal(outline, document.Selection.Path!.Bounds);
+    }
+
+    /// <summary>A layer's pixels as bytes, whatever the row padding is.</summary>
+    private static byte[] Pixels(SKBitmap bitmap)
+    {
+        var tight = new byte[bitmap.Width * bitmap.Height * 4];
+        var source = bitmap.GetPixelSpan();
+        for (var y = 0; y < bitmap.Height; y++)
+        {
+            source.Slice(y * bitmap.RowBytes, bitmap.Width * 4).CopyTo(tight.AsSpan(y * bitmap.Width * 4));
+        }
+        return tight;
     }
 }

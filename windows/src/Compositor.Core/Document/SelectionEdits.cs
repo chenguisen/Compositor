@@ -23,6 +23,50 @@ public enum SelectionMode
 public sealed record WandOptions(int Radius = 4, int Tolerance = 32, bool Contiguous = true);
 
 /// <summary>
+/// The pixels a selection has lifted, while a drag is carrying them. The layer is left holding the hole they came
+/// out of, and what it held before is kept so a drag that comes to nothing can put it back. The cut pixels are
+/// held twice over: at the size a canvas draws them in document space while the pointer moves, and at the layer's
+/// own size, which is what commits them where they land.
+/// </summary>
+public sealed class FloatingPixels : IDisposable
+{
+    internal FloatingPixels(Guid layerID, ImportedImage? before, SKBitmap cut, SKPoint cutAt, SKBitmap inLayer,
+        DocumentSelection origin)
+    {
+        LayerID = layerID;
+        Before = before;
+        Cut = cut;
+        CutAt = cutAt;
+        InLayer = inLayer;
+        Origin = origin;
+    }
+
+    /// <summary>The layer whose pixels these are.</summary>
+    public Guid LayerID { get; }
+
+    /// <summary>What that layer held before the lift, which is what a cancelled drag puts back.</summary>
+    internal ImportedImage? Before { get; set; }
+
+    /// <summary>The pixels being carried, over the region the selection covers, at document size.</summary>
+    public SKBitmap Cut { get; }
+
+    /// <summary>Where the cut's top-left corner sits in the document, so a canvas can draw it where it belongs.</summary>
+    public SKPoint CutAt { get; }
+
+    /// <summary>The same pixels at the layer's own size, which is what is put down where they land.</summary>
+    internal SKBitmap InLayer { get; }
+
+    /// <summary>The outline as it was, which is what a drag shifts to show where they would land.</summary>
+    public DocumentSelection Origin { get; }
+
+    public void Dispose()
+    {
+        Cut.Dispose();
+        InLayer.Dispose();
+    }
+}
+
+/// <summary>
 /// Choosing what later edits act on. A selection is part of the document, so undo and redo cover changing
 /// it, though it is not saved to disk.
 /// </summary>
@@ -74,6 +118,155 @@ public static class SelectionEdits
     /// </summary>
     public static bool SelectLasso(CanvasDocument document, IReadOnlyList<SKPoint> points, bool antialiased = true) =>
         points.Count < 3 ? Deselect(document) : Adopt(document, Lasso(points), antialiased);
+
+    /// <summary>
+    /// Lifts the pixels inside the selection off the layer, leaving the hole they came out of, and hands them back
+    /// for a drag to carry — which is what Command-dragging inside a selection does on the Mac. Null when there is
+    /// nothing to lift.
+    /// <para>
+    /// The layer is holed here and now, so the drag shows the hole rather than pretending; what it held is kept
+    /// for <see cref="DropPixels"/> to put back, and the pixels themselves for <see cref="SettlePixels"/> to put
+    /// down where the drag ends.
+    /// </para>
+    /// </summary>
+    public static FloatingPixels? LiftPixels(CanvasDocument document, Guid layerID)
+    {
+        if (document.Selection.Path is not { IsEmpty: false }) return null;
+        if (document.Layers.FirstOrDefault(layer => layer.ID == layerID) is not { IsGroup: false, Asset: { } asset } layer)
+        {
+            return null;
+        }
+        var width = asset.Width;
+        var height = asset.Height;
+        if (width <= 0 || height <= 0) return null;
+        var toDocument = BrushEdits.PixelToDocument(layer.Transform, width, height);
+        using var coverage = FillEdits.Coverage(document, out var region);
+        if (region.Width <= 0 || region.Height <= 0) return null;
+
+        // The layer's own pixels, and the copy that will keep the part taken out of them.
+        var hole = Bitmaps.Allocate(Bitmaps.ColorInfo(width, height));
+        var inLayer = Bitmaps.Allocate(Bitmaps.ColorInfo(width, height));
+        foreach (var into in new[] { hole, inLayer })
+        {
+            using var canvas = new SKCanvas(into);
+            using var paint = new SKPaint { BlendMode = SKBlendMode.Src };
+            canvas.DrawBitmap(asset.Image, SKRect.Create(0, 0, width, height),
+                new SKSamplingOptions(SKFilterMode.Nearest), paint);
+        }
+        // The same part as a canvas draws it, over the region the selection covers and no more. Drawn from the
+        // layer's own pixels through its own transform rather than through the renderer: the renderer's colour
+        // handling moves a level or two, and a preview that names one colour while carrying another is a lie.
+        var cut = Bitmaps.Allocate(Bitmaps.ColorInfo(region.Width, region.Height));
+        using (var canvas = new SKCanvas(cut))
+        {
+            // The shift into the region's own corner first, then the layer's transform into the document: built
+            // as one matrix rather than two calls, because a canvas concatenates the other way round from the way
+            // it reads and two calls in the order they look right are the wrong way round.
+            canvas.SetMatrix(SKMatrix.CreateTranslation(-region.Left, -region.Top).PostConcat(toDocument));
+            using var paint = new SKPaint { BlendMode = SKBlendMode.Src };
+            canvas.DrawBitmap(asset.Image, new SKPoint(0, 0), new SKSamplingOptions(SKFilterMode.Nearest), paint);
+        }
+
+        var kept = inLayer.GetPixelSpan();
+        var left = hole.GetPixelSpan();
+        var carried = cut.GetPixelSpan();
+        var lifted = 0;
+        for (var y = 0; y < height; y++)
+        {
+            for (var x = 0; x < width; x++)
+            {
+                var at = y * hole.RowBytes + x * 4;
+                var amount = FillEdits.Amount(coverage, region, toDocument.MapPoint(x + 0.5f, y + 0.5f));
+                var solid = left[at + 3];
+                for (var channel = 0; channel < 4; channel++)
+                {
+                    // Nothing outside the selection is carried: what is left there would otherwise be put down
+                    // again shifted, smearing the layer over itself.
+                    kept[at + channel] = amount <= 0
+                        ? (byte)0
+                        : (byte)Math.Clamp(Math.Round(kept[at + channel] * amount, MidpointRounding.AwayFromZero),
+                            0, 255);
+                    left[at + channel] = (byte)Math.Clamp(
+                        Math.Round(left[at + channel] * (1 - amount), MidpointRounding.AwayFromZero), 0, 255);
+                }
+                if (amount > 0 && solid > 0) lifted++;
+            }
+        }
+        if (lifted == 0)
+        {
+            hole.Dispose();
+            inLayer.Dispose();
+            cut.Dispose();
+            return null;
+        }
+        // The cut is at document size over the region, so the canvas's own pixel for it is the document's.
+        for (var y = 0; y < region.Height; y++)
+        {
+            for (var x = 0; x < region.Width; x++)
+            {
+                var at = y * cut.RowBytes + x * 4;
+                var amount = FillEdits.Amount(coverage, region, new SKPoint(region.Left + x + 0.5f, region.Top + y + 0.5f));
+                for (var channel = 0; channel < 4; channel++)
+                {
+                    carried[at + channel] = amount <= 0
+                        ? (byte)0
+                        : (byte)Math.Clamp(Math.Round(carried[at + channel] * amount, MidpointRounding.AwayFromZero),
+                            0, 255);
+                }
+            }
+        }
+        layer.Asset = ImportedImage.Create(hole, asset.Name);
+        return new FloatingPixels(layerID, asset, cut, new SKPoint(region.Left, region.Top), inLayer,
+            document.Selection);
+    }
+
+    /// <summary>
+    /// Puts the lifted pixels down where the drag ended, writes them into the layer and takes the outline with
+    /// them. The hole is already in the layer, so this only draws what was carried onto it.
+    /// </summary>
+    public static bool SettlePixels(CanvasDocument document, FloatingPixels floating, int dx, int dy)
+    {
+        if (document.Layers.FirstOrDefault(layer => layer.ID == floating.LayerID)
+            is not { IsGroup: false, Asset: { } asset } layer)
+        {
+            return false;
+        }
+        var width = asset.Width;
+        var height = asset.Height;
+        var toDocument = BrushEdits.PixelToDocument(layer.Transform, width, height);
+        if (!toDocument.TryInvert(out var toPixel)) return false;
+        var carried = toPixel.MapVector(new SKPoint(dx, dy));
+        var across = (int)Math.Round(carried.X);
+        var down = (int)Math.Round(carried.Y);
+
+        var painted = Bitmaps.Allocate(Bitmaps.ColorInfo(width, height));
+        using (var canvas = new SKCanvas(painted))
+        {
+            using var paint = new SKPaint { BlendMode = SKBlendMode.Src };
+            canvas.DrawBitmap(asset.Image, SKRect.Create(0, 0, width, height),
+                new SKSamplingOptions(SKFilterMode.Nearest), paint);
+            using var over = new SKPaint { BlendMode = SKBlendMode.SrcOver };
+            canvas.DrawBitmap(floating.InLayer, new SKPoint(across, down),
+                new SKSamplingOptions(SKFilterMode.Nearest), over);
+        }
+        layer.Asset = ImportedImage.Create(painted, asset.Name);
+        document.Selection = floating.Origin.Translated(dx, dy);
+        floating.Dispose();
+        return true;
+    }
+
+    /// <summary>Puts back what the layer held before the lift, for a drag that came to nothing.</summary>
+    public static void DropPixels(CanvasDocument document, FloatingPixels floating)
+    {
+        if (document.Layers.FirstOrDefault(layer => layer.ID == floating.LayerID) is { } layer
+            && floating.Before is { } before)
+        {
+            // Put back rather than dropped, so it is not disposed with the floating pixels below.
+            layer.Asset = before;
+            floating.Before = null;
+        }
+        floating.Dispose();
+    }
 
     /// <summary>
     /// Moves the pixels inside the selection by whole document pixels, leaving the hole they came out of, and
@@ -131,15 +324,19 @@ public static class SelectionEdits
             {
                 var at = y * painted.RowBytes + x * 4;
                 var amount = FillEdits.Amount(coverage, region, toDocument.MapPoint(x + 0.5f, y + 0.5f));
-                if (amount <= 0 || left[at + 3] == 0) continue;
-                moved++;
+                var solid = left[at + 3];
                 for (var channel = 0; channel < 4; channel++)
                 {
-                    kept[at + channel] = (byte)Math.Clamp(
-                        Math.Round(kept[at + channel] * amount, MidpointRounding.AwayFromZero), 0, 255);
+                    // Nothing is carried from outside the selection. Scaling the copy there would leave it as it
+                    // stands, and putting it down again would smear the whole layer over itself shifted.
+                    kept[at + channel] = amount <= 0
+                        ? (byte)0
+                        : (byte)Math.Clamp(Math.Round(kept[at + channel] * amount, MidpointRounding.AwayFromZero),
+                            0, 255);
                     left[at + channel] = (byte)Math.Clamp(
                         Math.Round(left[at + channel] * (1 - amount), MidpointRounding.AwayFromZero), 0, 255);
                 }
+                if (amount > 0 && solid > 0) moved++;
             }
         }
         if (moved == 0)

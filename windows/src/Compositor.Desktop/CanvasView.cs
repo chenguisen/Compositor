@@ -145,6 +145,44 @@ public sealed class CanvasView : Control
     private SKColor _sampleOriginal;
     private bool _sampling;
 
+    /// <summary>The document point a selection's pixels were taken hold of at, while the drag carries them.</summary>
+    private SKPoint? _pixelsFrom;
+
+    private (FloatingPixels Pixels, int Dx, int Dy)? _floating;
+    private WriteableBitmap? _floatingImage;
+
+    /// <summary>Whether a press inside the selection takes hold of the pixels under it, which is the window's call.</summary>
+    public Func<SKPoint, bool>? PixelsGrabbed { get; set; }
+
+    /// <summary>How far the pixels being carried have come, in whole document pixels.</summary>
+    public Action<int, int>? PixelsMoved { get; set; }
+
+    /// <summary>The drag has let the pixels go, wherever they are.</summary>
+    public Action? PixelsDropped { get; set; }
+
+    /// <summary>
+    /// The pixels a drag is carrying and how far they have come, which the canvas draws where the pointer has them
+    /// so a selection's contents follow it — the Mac build's floating selection. The cut is turned into an image
+    /// once, when the pixels are taken hold of, because the offset changes on every move and the pixels do not.
+    /// </summary>
+    public (FloatingPixels Pixels, int Dx, int Dy)? Floating
+    {
+        get => _floating;
+        set
+        {
+            if (!ReferenceEquals(_floating?.Pixels, value?.Pixels))
+            {
+                _floatingImage?.Dispose();
+                _floatingImage = value is { } carrying ? ToImage(carrying.Pixels.Cut) : null;
+            }
+            _floating = value;
+            InvalidateVisual();
+        }
+    }
+
+    /// <summary>Whether there are pixels to draw where the pointer is carrying them, for the checks to read.</summary>
+    internal bool FloatingShowing => _floatingImage is not null;
+
     /// <summary>When set, the crop frame below is drawn and can be dragged about.</summary>
     public bool CropEnabled { get; set; }
 
@@ -557,6 +595,16 @@ public sealed class CanvasView : Control
         DrawUprightGuides(context);
         DrawStroke(context);
         DrawSampleRing(context);
+        DrawFloating(context);
+    }
+
+    /// <summary>The pixels a drag is carrying, drawn where the pointer has put them.</summary>
+    private void DrawFloating(DrawingContext context)
+    {
+        if (_floating is not { } carrying || _floatingImage is not { } image) return;
+        var at = ToScreen(new SKPoint(carrying.Pixels.CutAt.X + carrying.Dx, carrying.Pixels.CutAt.Y + carrying.Dy));
+        context.DrawImage(image,
+            new Rect(at.X, at.Y, carrying.Pixels.Cut.Width * _zoom, carrying.Pixels.Cut.Height * _zoom));
     }
 
     /// <summary>
@@ -1309,6 +1357,15 @@ public sealed class CanvasView : Control
         if (Selection != SelectionTool.None && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
         {
             var point = ToDocument(e.GetPosition(this));
+            // Control with the pointer down inside the selection takes hold of its pixels instead of drawing a
+            // new outline: Photoshop's temporary Move tool, and the Mac build's own Command-drag.
+            if (e.KeyModifiers.HasFlag(KeyModifiers.Control) && PixelsGrabbed?.Invoke(point) == true)
+            {
+                _pixelsFrom = point;
+                e.Pointer.Capture(this);
+                e.Handled = true;
+                return;
+            }
             if (Selection == SelectionTool.Wand)
             {
                 e.Handled = true;
@@ -1371,6 +1428,14 @@ public sealed class CanvasView : Control
         // Every move is reported, whatever the drag in hand is, so a readout that follows the pointer does not
         // stop while a stroke is being painted.
         PointerMovedAt?.Invoke(ToDocument(now));
+        // Carrying a selection's pixels: how far they have come is all the window needs to know.
+        if (_pixelsFrom is { } cut)
+        {
+            var at = ToDocument(now);
+            PixelsMoved?.Invoke((int)Math.Round(at.X - cut.X), (int)Math.Round(at.Y - cut.Y));
+            e.Handled = true;
+            return;
+        }
         // Sampling with the eyedropper is its own drag: the ring follows the pointer and names what is under it.
         if (_sampling)
         {
@@ -1502,6 +1567,14 @@ public sealed class CanvasView : Control
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
+        if (_pixelsFrom is not null)
+        {
+            _pixelsFrom = null;
+            e.Pointer.Capture(null);
+            PixelsDropped?.Invoke();
+            e.Handled = true;
+            return;
+        }
         if (_sampling)
         {
             _sampling = false;
