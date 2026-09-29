@@ -66,6 +66,12 @@ public sealed class CanvasView : Control
     /// <summary>Handed a click of the wand, in document pixels.</summary>
     public Action<SKPoint, SelectionMode>? WandClicked { get; set; }
 
+    /// <summary>When set, Alt-clicking reports where a Clone Stamp stroke should copy from.</summary>
+    public bool SampleSourceOnClick { get; set; }
+
+    /// <summary>Handed the point an Alt-click landed on, in document pixels.</summary>
+    public Action<SKPoint>? CloneSourceClicked { get; set; }
+
     private bool _selecting;
     private SKPoint _selectionAnchor;
     private SKRectI? _selectionBox;
@@ -373,6 +379,13 @@ public sealed class CanvasView : Control
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
+        if (SampleSourceOnClick && e.KeyModifiers.HasFlag(KeyModifiers.Alt)
+            && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+        {
+            e.Handled = true;
+            CloneSourceClicked?.Invoke(ToDocument(e.GetPosition(this)));
+            return;
+        }
         if (PaintEnabled && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
         {
             _painting = true;

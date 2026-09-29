@@ -116,72 +116,10 @@ public sealed class DocumentSelection
             // A feathered edge fades either side of the outline, as Photoshop's does. The fade is worked out
             // here, in gray levels, rather than by a paint filter, so a feathered edge always fades the way a
             // mask's coverage has to.
-            Blur(coverage.GetPixelSpan(), coverage.Width, coverage.Height, Feather / 2);
+            Pixels.GaussianBlur.Clamped(coverage.GetPixelSpan(), coverage.Width, coverage.Height, 1,
+                coverage.RowBytes, Feather / 2);
         }
         return coverage;
-    }
-
-    /// <summary>
-    /// A Gaussian blur of a gray coverage, with the pixels off the edge read as the ones at the edge — Core
-    /// Image's <c>clampedToExtent</c> — so a selection that reaches the canvas edge stays solid there. A
-    /// float plane holds a pass between the two.
-    /// </summary>
-    private static void Blur(Span<byte> coverage, int width, int height, double sigma)
-    {
-        if (sigma <= 0 || width <= 0 || height <= 0) return;
-        var weights = Weights((float)sigma, out var half);
-        float[] row;
-        float[] pass;
-        try
-        {
-            row = new float[width * height];
-            pass = new float[width * height];
-        }
-        catch (OutOfMemoryException)
-        {
-            return;
-        }
-        for (var index = 0; index < row.Length; index++) row[index] = coverage[index];
-        for (var y = 0; y < height; y++)
-        {
-            for (var x = 0; x < width; x++)
-            {
-                float total = 0;
-                for (var tap = -half; tap <= half; tap++)
-                {
-                    total += weights[tap + half] * row[y * width + Math.Clamp(x + tap, 0, width - 1)];
-                }
-                pass[y * width + x] = total;
-            }
-        }
-        for (var y = 0; y < height; y++)
-        {
-            for (var x = 0; x < width; x++)
-            {
-                float total = 0;
-                for (var tap = -half; tap <= half; tap++)
-                {
-                    total += weights[tap + half] * pass[Math.Clamp(y + tap, 0, height - 1) * width + x];
-                }
-                coverage[y * width + x] = (byte)Math.Clamp(Math.Round(total), 0, 255);
-            }
-        }
-    }
-
-    /// <summary>A normalized Gaussian, three standard deviations wide, one tap per pixel.</summary>
-    private static float[] Weights(float sigma, out int half)
-    {
-        half = Math.Max(1, (int)Math.Ceiling(sigma * 3));
-        var weights = new float[half * 2 + 1];
-        float total = 0;
-        for (var tap = -half; tap <= half; tap++)
-        {
-            var weight = MathF.Exp(-(float)(tap * tap) / (2 * sigma * sigma));
-            weights[tap + half] = weight;
-            total += weight;
-        }
-        for (var index = 0; index < weights.Length; index++) weights[index] /= total;
-        return weights;
     }
 
     /// <summary>Whether two selections would let an edit touch the same pixels, compared by outline.</summary>

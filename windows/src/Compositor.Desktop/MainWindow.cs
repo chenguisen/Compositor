@@ -62,6 +62,8 @@ public sealed class MainWindow : Window
         Polygon,
         Wand,
         Brush,
+        Clone,
+        Blur,
     }
 
     private readonly Dictionary<Tool, MenuItem> _toolItems = [];
@@ -69,6 +71,11 @@ public sealed class MainWindow : Window
 
     /// <summary>The layer a move gesture is moving, while the pointer is down.</summary>
     private Guid? _moving;
+
+    /// <summary>The brush's settings, as the options bar would hold them, and where Clone Stamp copies from.</summary>
+    private BrushSettings _brush = new();
+    private SKPoint? _cloneSource;
+    private SKPointI? _cloneOffset;
 
     public MainWindow()
     {
@@ -83,6 +90,7 @@ public sealed class MainWindow : Window
         _canvas.MarqueeFinished = (box, mode) => MarqueeFinished(box, mode, _tool == Tool.Ellipse);
         _canvas.LassoFinished = (points, mode) => LassoFinished(points, mode, _tool == Tool.Polygon);
         _canvas.WandClicked = WandClicked;
+        _canvas.CloneSourceClicked = CloneSourceChosen;
         _merge.Click += (_, _) => MergeLayers();
         _visibility.Click += (_, _) => ToggleVisibility();
         _clipping.Click += (_, _) => ToggleClipping();
@@ -176,6 +184,20 @@ public sealed class MainWindow : Window
                         ToolItem("_Polygonal lasso (click each corner)", Tool.Polygon),
                         ToolItem("Magic _wand (click a colour)", Tool.Wand),
                         ToolItem("_Brush", Tool.Brush),
+                        ToolItem("_Clone stamp (Alt-click a source first)", Tool.Clone),
+                        ToolItem("Blur brush", Tool.Blur),
+                        new Separator(),
+                        new MenuItem
+                        {
+                            Header = "_Brush settings",
+                            Items =
+                            {
+                                Command("_Size…", () => _ = SetBrush(BrushSetting.Size)),
+                                Command("_Hardness…", () => _ = SetBrush(BrushSetting.Hardness)),
+                                Command("_Opacity…", () => _ = SetBrush(BrushSetting.Opacity)),
+                                Command("_Colour…", () => _ = SetBrush(BrushSetting.Colour)),
+                            },
+                        },
                     },
                 },
                 new MenuItem
@@ -571,7 +593,9 @@ public sealed class MainWindow : Window
     private void SetTool(Tool tool)
     {
         _tool = tool;
-        _canvas.PaintEnabled = tool == Tool.Brush;
+        _canvas.SampleSourceOnClick = tool == Tool.Clone;
+        _canvas.PaintEnabled = tool is Tool.Brush or Tool.Clone or Tool.Blur;
+        PushBrush();
         _canvas.MoveEnabled = tool == Tool.Move;
         _canvas.Selection = tool switch
         {
@@ -584,11 +608,14 @@ public sealed class MainWindow : Window
         };
         // An outline that is half drawn is let go when the tool changes, rather than left hanging.
         _canvas.CancelDraft();
-        _canvas.Brush = new BrushSettings(Diameter: 40, Hardness: 1, Red: 0, Green: 0, Blue: 0, Opacity: 1);
         foreach (var (which, item) in _toolItems) item.IsChecked = which == tool;
         Say(tool switch
         {
-            Tool.Brush => "Brush: 40 pixels, hard, black — drag on the canvas",
+            Tool.Brush => $"Brush: {_brush.Diameter:0} pixels, {Spell(_brush)} — drag on the canvas",
+            Tool.Clone => _cloneSource is null
+                ? "Clone stamp — Alt-click where it should copy from first"
+                : $"Clone stamp copying from {_cloneSource.Value.X:0},{_cloneSource.Value.Y:0} — drag on the canvas",
+            Tool.Blur => $"Blur brush: {_brush.Diameter:0} pixels — drag over what should soften",
             Tool.Move => "Move — drag the selected layer",
             Tool.Marquee => "Marquee — drag a rectangle; Shift adds, Alt subtracts",
             Tool.Ellipse => "Elliptical marquee — drag an oval; Shift adds, Alt subtracts",
@@ -597,6 +624,101 @@ public sealed class MainWindow : Window
             Tool.Wand => "Magic wand — click a colour to take everything like it",
             _ => "Pan — drag to scroll",
         });
+    }
+
+    /// <summary>What the brush is set to, in words, for the status line.</summary>
+    private static string Spell(BrushSettings brush) =>
+        (brush.Hardness >= 1 ? "hard" : $"{brush.Hardness * 100:0}% hard") +
+        (brush.Opacity < 1 ? $", {brush.Opacity * 100:0}%" : "") +
+        $", colour {brush.Red * 255:0},{brush.Green * 255:0},{brush.Blue * 255:0}";
+
+    /// <summary>Puts the current brush, with the mode the tool in hand calls for, on the canvas.</summary>
+    private void PushBrush() =>
+        _canvas.Brush = _brush with
+        {
+            Mode = _tool switch
+            {
+                Tool.Clone => BrushMode.Clone,
+                Tool.Blur => BrushMode.Blur,
+                _ => BrushMode.Paint,
+            },
+        };
+
+    /// <summary>Asks for one of the brush's settings and takes it, as an options bar would.</summary>
+    private async Task SetBrush(BrushSetting which)
+    {
+        switch (which)
+        {
+            case BrushSetting.Size:
+                if (await Ask("Brush size", "Diameter in pixels, 1 to 2000",
+                        $"{_brush.Diameter:0}", 1, 2000) is { } size)
+                {
+                    _brush = _brush with { Diameter = size };
+                }
+                break;
+            case BrushSetting.Hardness:
+                if (await Ask("Brush hardness", "Percent, 0 for a soft tip and 100 for a hard one",
+                        $"{_brush.Hardness * 100:0}", 0, 100) is { } hardness)
+                {
+                    _brush = _brush with { Hardness = hardness / 100.0 };
+                }
+                break;
+            case BrushSetting.Opacity:
+                if (await Ask("Brush opacity", "Percent, 1 to 100", $"{_brush.Opacity * 100:0}", 1, 100) is { } opacity)
+                {
+                    _brush = _brush with { Opacity = opacity / 100.0 };
+                }
+                break;
+            default:
+                if (await TextPrompt.Ask(this, "Brush colour", "Red, green and blue, 0 to 255",
+                        $"{_brush.Red * 255:0},{_brush.Green * 255:0},{_brush.Blue * 255:0}") is not { } typed)
+                {
+                    return;
+                }
+                if (Colour(typed) is not { } colour)
+                {
+                    Say("The colour has to be three numbers from 0 to 255, as in 255,0,0");
+                    return;
+                }
+                _brush = _brush with { Red = colour.Red, Green = colour.Green, Blue = colour.Blue };
+                break;
+        }
+        PushBrush();
+        Say($"Brush: {_brush.Diameter:0} pixels, {Spell(_brush)}");
+    }
+
+    private async Task<double?> Ask(string title, string label, string initial, double least, double most)
+    {
+        if (await TextPrompt.Ask(this, title, label, initial) is not { } typed) return null;
+        if (!double.TryParse(typed.Trim(), out var value) || value < least || value > most)
+        {
+            Say($"That has to be a number from {least:0} to {most:0}");
+            return null;
+        }
+        return value;
+    }
+
+    /// <summary>A colour typed as three numbers from 0 to 255.</summary>
+    private static (double Red, double Green, double Blue)? Colour(string typed)
+    {
+        var parts = typed.Split([',', ' '], StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 3) return null;
+        var values = new double[3];
+        for (var index = 0; index < 3; index++)
+        {
+            if (!double.TryParse(parts[index], out values[index]) || values[index] < 0 || values[index] > 255) return null;
+            values[index] /= 255;
+        }
+        return (values[0], values[1], values[2]);
+    }
+
+    /// <summary>One of the brush settings the options bar would show.</summary>
+    private enum BrushSetting
+    {
+        Size,
+        Hardness,
+        Opacity,
+        Colour,
     }
 
     /// <summary>One change to the selection, as one undo step.</summary>
@@ -673,12 +795,46 @@ public sealed class MainWindow : Window
     private void Painted(IReadOnlyList<SKPoint> stroke)
     {
         if (_document is not { } document || Selected is not { } id) return;
-        Edit("Brush", () =>
+        if (BrushFor(stroke) is not { } settings) return;
+        var name = _tool switch
+        {
+            Tool.Clone => "Clone Stamp",
+            Tool.Blur => "Blur",
+            _ => "Brush",
+        };
+        Edit(name, () =>
         {
             // A blank layer gets its pixels on the first paint, as the Mac build does.
             BrushEdits.EnsurePixels(document, id);
-            return BrushEdits.Paint(document, id, stroke, _canvas.Brush);
+            return BrushEdits.Paint(document, id, stroke, settings);
         });
+    }
+
+    /// <summary>
+    /// The brush a stroke should be painted with. A Clone Stamp stroke needs a source, and its offset is
+    /// fixed by the stroke that follows the click: later strokes keep it, so the source travels with the
+    /// brush as the Mac build's alignment does.
+    /// </summary>
+    private BrushSettings? BrushFor(IReadOnlyList<SKPoint> stroke)
+    {
+        if (_tool != Tool.Clone) return _canvas.Brush;
+        if (_cloneSource is not { } source)
+        {
+            Say("Alt-click where the Clone Stamp should copy from first");
+            return null;
+        }
+        _cloneOffset ??= new SKPointI(
+            (int)Math.Round(source.X - stroke[0].X), (int)Math.Round(source.Y - stroke[0].Y));
+        return _canvas.Brush with { CloneFrom = _cloneOffset };
+    }
+
+    /// <summary>Alt-clicking with the Clone Stamp: where the next stroke copies from.</summary>
+    private void CloneSourceChosen(SKPoint point)
+    {
+        _cloneSource = point;
+        // A new source starts a new alignment, as the Mac build's does.
+        _cloneOffset = null;
+        Say($"Clone stamp copying from {point.X:0},{point.Y:0} — drag on the canvas");
     }
 
     /// <summary>

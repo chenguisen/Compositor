@@ -1,10 +1,43 @@
 using Compositor.Core.Model;
+using Compositor.Core.Pixels;
+using Compositor.Core.Rendering;
 using SkiaSharp;
 
 namespace Compositor.Core.Document;
 
-/// <summary>The brush as the tool header sets it. The diameter is in document pixels.</summary>
-public readonly record struct BrushSettings(
+/// <summary>What the brush does to the pixels under it.</summary>
+public enum BrushMode
+{
+    /// <summary>Paints the foreground colour.</summary>
+    Paint,
+
+    /// <summary>Paints what the layer shows elsewhere, offset from the brush: the Clone Stamp.</summary>
+    Clone,
+
+    /// <summary>Paints a softened copy of the layer, so going over an area again softens it further.</summary>
+    Blur,
+
+    /// <summary>Rebuilds the area from its surroundings: Spot Healing.</summary>
+    Heal,
+}
+
+/// <summary>How Spot Healing works out what to put in the painted area.</summary>
+public enum HealingMode
+{
+    ContentAware,
+    CreateTexture,
+    ProximityMatch,
+}
+
+/// <summary>
+/// The brush as the tool header sets it. The diameter is in document pixels.
+/// <para>
+/// A class rather than a struct on purpose: <c>new BrushSettings()</c> on a record struct zero-initializes
+/// it instead of applying the parameter defaults, which would quietly turn the brush into a zero-diameter
+/// one that paints nothing.
+/// </para>
+/// </summary>
+public sealed record BrushSettings(
     double Diameter = 40,
     double Hardness = 1,
     double Red = 0,
@@ -12,7 +45,14 @@ public readonly record struct BrushSettings(
     double Blue = 0,
     /// <summary>Caps the whole stroke, as in Photoshop: overlapping dabs never exceed it.</summary>
     double Opacity = 1,
-    bool Erasing = false);
+    bool Erasing = false,
+    BrushMode Mode = BrushMode.Paint,
+    /// <summary>What the Clone Stamp copies from, as a whole-pixel offset in document pixels.</summary>
+    SKPointI? CloneFrom = null,
+    /// <summary>The Clone Stamp reads every visible layer as shown, rather than the active layer alone.</summary>
+    bool CloneAllLayers = false,
+    /// <summary>How a Spot Healing stroke rebuilds the area.</summary>
+    HealingMode Healing = HealingMode.ContentAware);
 
 /// <summary>
 /// Painting a stroke into a layer's own pixels. Mouse samples arrive in document coordinates, so they are
@@ -75,12 +115,24 @@ public static class BrushEdits
         if (points.Count == 0 || settings.Diameter <= 0 || settings.Opacity <= 0) return false;
         if (document.Layers.FirstOrDefault(layer => layer.ID == layerID) is not { Asset: { } asset } layer) return false;
         if (layer.IsGroup) return false;
+        if (settings.Mode == BrushMode.Clone && settings.CloneFrom is null) return false;
         var width = asset.Width;
         var height = asset.Height;
         if (width <= 0 || height <= 0) return false;
 
         var toDocument = PixelToDocument(layer.Transform, width, height);
         if (!toDocument.TryInvert(out var toPixel)) return false;
+
+        // What the stroke paints from, taken now: the Clone Stamp's sample of the layer or the canvas, or
+        // the layer as it is before the stroke, softened. Taken once, so going over an area again within a
+        // stroke does not blur what it has just painted.
+        SKBitmap? sample = null;
+        if (settings.Mode is BrushMode.Clone or BrushMode.Blur)
+        {
+            sample = Sampled(document, layer, settings);
+            if (sample is null) return false;
+        }
+        using var _sample = sample;
 
         var coverage = new float[width * height];
         var radius = settings.Diameter / 2;
@@ -131,9 +183,109 @@ public static class BrushEdits
             using var source = SKImage.FromBitmap(asset.Image);
             canvas.DrawImage(source, SKRect.Create(0, 0, width, height), new SKSamplingOptions(SKFilterMode.Nearest), paint);
         }
-        Apply(painted, coverage, settings);
+        if (sample is null) Apply(painted, coverage, settings);
+        else ApplySampled(painted, coverage, settings, sample, toDocument);
         layer.Asset = ImportedImage.Create(painted, asset.Name);
         return true;
+    }
+
+    /// <summary>
+    /// What a Clone Stamp or Blur stroke paints from, at document size: the layer's own pixels, or every
+    /// visible layer as the canvas shows them, softened by an amount that follows the brush size when the
+    /// brush is the Blur tool. Null when the layer holds nothing to copy.
+    /// </summary>
+    private static SKBitmap? Sampled(CanvasDocument document, ImageLayer layer, BrushSettings settings)
+    {
+        SKBitmap? sample = null;
+        try
+        {
+            sample = DocumentRenderer.Allocate(document.Width, document.Height);
+            using (var canvas = new SKCanvas(sample))
+            {
+                if (settings.Mode == BrushMode.Clone && settings.CloneAllLayers) return Composite(document);
+                DocumentRenderer.DrawLayerPixels(canvas, layer);
+            }
+            if (settings.Mode == BrushMode.Blur)
+            {
+                // A blur softens by an amount that follows the brush, as Photoshop's does.
+                var sigma = Math.Clamp(settings.Diameter / 10, 1.5, 30);
+                GaussianBlur.Clamped(sample.GetPixelSpan(), sample.Width, sample.Height, 4, sample.RowBytes, sigma);
+            }
+            return sample;
+        }
+        catch (InvalidOperationException)
+        {
+            sample?.Dispose();
+            return null;
+        }
+    }
+
+    /// <summary>The whole canvas as it is shown, in a buffer the sample can be read from.</summary>
+    private static SKBitmap Composite(CanvasDocument document)
+    {
+        using var rendered = DocumentRenderer.Render(document);
+        var copy = DocumentRenderer.Allocate(rendered.Width, rendered.Height);
+        using (var canvas = new SKCanvas(copy))
+        {
+            using var paint = new SKPaint { BlendMode = SKBlendMode.Src };
+            canvas.DrawBitmap(rendered, SKRect.Create(0, 0, rendered.Width, rendered.Height),
+                new SKSamplingOptions(SKFilterMode.Nearest), paint);
+        }
+        return copy;
+    }
+
+    /// <summary>
+    /// Paints what the sample holds, through the coverage: the Clone Stamp's copy, or the softened copy the
+    /// Blur brush paints. A layer pixel is carried to the document, the sample read a whole-pixel offset
+    /// from there, and the sample's own alpha scales the dab — so a transparent part of the sample leaves
+    /// the layer as it was, as drawing it would.
+    /// </summary>
+    private static void ApplySampled(SKBitmap painted, float[] coverage, BrushSettings settings, SKBitmap sample,
+        SKMatrix toDocument)
+    {
+        var offset = settings.CloneFrom ?? default;
+        var destination = painted.GetPixelSpan();
+        var source = sample.GetPixelSpan();
+        var sourceStride = sample.RowBytes;
+        for (var y = 0; y < painted.Height; y++)
+        {
+            for (var x = 0; x < painted.Width; x++)
+            {
+                var index = y * painted.Width + x;
+                if (coverage[index] <= 0) continue;
+                var at = toDocument.MapPoint(x + 0.5f, y + 0.5f);
+                var sx = (int)Math.Floor(at.X) + offset.X;
+                var sy = (int)Math.Floor(at.Y) + offset.Y;
+                if (sx < 0 || sy < 0 || sx >= sample.Width || sy >= sample.Height) continue;
+                var from = sy * sourceStride + sx * 4;
+                var sourceAlpha = source[from + 3];
+                var alpha = Math.Clamp(coverage[index] * settings.Opacity * (sourceAlpha / 255.0), 0, 1);
+                if (alpha <= 0) continue;
+                // The sample is premultiplied, as every render is; the layer's pixels are straight.
+                var red = sourceAlpha == 0 ? 0 : Math.Min(255.0, source[from] * 255.0 / sourceAlpha) / 255.0;
+                var green = sourceAlpha == 0 ? 0 : Math.Min(255.0, source[from + 1] * 255.0 / sourceAlpha) / 255.0;
+                var blue = sourceAlpha == 0 ? 0 : Math.Min(255.0, source[from + 2] * 255.0 / sourceAlpha) / 255.0;
+                Blend(destination, index * 4, alpha, red, green, blue);
+            }
+        }
+    }
+
+    /// <summary>Straight (unpremultiplied) source-over, which is the form a layer's pixels are held in.</summary>
+    private static void Blend(Span<byte> pixels, int at, double alpha, double red, double green, double blue)
+    {
+        var under = pixels[at + 3] / 255.0;
+        var outAlpha = alpha + under * (1 - alpha);
+        if (outAlpha <= 0) return;
+        Span<double> colour = stackalloc double[3];
+        colour[0] = red;
+        colour[1] = green;
+        colour[2] = blue;
+        for (var channel = 0; channel < 3; channel++)
+        {
+            var behind = pixels[at + channel] / 255.0 * under * (1 - alpha);
+            pixels[at + channel] = (byte)Math.Clamp(Math.Round((colour[channel] * alpha + behind) / outAlpha * 255), 0, 255);
+        }
+        pixels[at + 3] = (byte)Math.Round(outAlpha * 255);
     }
 
     /// <summary>The transform that places a layer's pixels on the document.</summary>
@@ -235,21 +387,12 @@ public static class BrushEdits
             var alpha = Math.Clamp(coverage[index] * settings.Opacity, 0, 1);
             if (alpha <= 0) continue;
             var at = index * 4;
-            var destination = span[at + 3] / 255.0;
             if (settings.Erasing)
             {
-                span[at + 3] = (byte)Math.Round(destination * (1 - alpha) * 255);
+                span[at + 3] = (byte)Math.Round(span[at + 3] / 255.0 * (1 - alpha) * 255);
                 continue;
             }
-            // Straight (unpremultiplied) source-over, which is the form a layer's pixels are held in.
-            var outAlpha = alpha + destination * (1 - alpha);
-            if (outAlpha <= 0) continue;
-            foreach (var (channel, value) in new[] { (0, settings.Red), (1, settings.Green), (2, settings.Blue) })
-            {
-                var under = span[at + channel] / 255.0 * destination * (1 - alpha);
-                span[at + channel] = (byte)Math.Clamp(Math.Round((value * alpha + under) / outAlpha * 255), 0, 255);
-            }
-            span[at + 3] = (byte)Math.Round(outAlpha * 255);
+            Blend(span, at, alpha, settings.Red, settings.Green, settings.Blue);
         }
     }
 }
