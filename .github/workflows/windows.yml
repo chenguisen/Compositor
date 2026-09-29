@@ -1,0 +1,42 @@
+name: Windows port
+
+# The port in windows/ is .NET and Avalonia and cannot be built by this repository's own verify.yml, which is
+# Xcode's. This is the half that keeps it compiling and passing on its own, and it only runs when something
+# under windows/ has changed — a change to the Mac app cannot make it red.
+on:
+  push:
+    paths:
+      - "windows/**"
+      - ".github/workflows/windows.yml"
+  pull_request:
+    paths:
+      - "windows/**"
+      - ".github/workflows/windows.yml"
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: windows
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      # Warnings are errors here: this port has been held at zero and a warning is what catches a name that
+      # resolved to the wrong member.
+      - name: Build
+        run: dotnet build Compositor.slnx -warnaserror --nologo
+
+      - name: Test
+        run: dotnet test tests/Compositor.Core.Tests/Compositor.Core.Tests.csproj --nologo
+
+      # The window, driven with a pointer. It runs on Avalonia's headless platform, so it needs no display and
+      # nothing has to be shown: it builds the real window, clicks it, and fails with a non-zero exit code if
+      # anything it asserts does not hold.
+      - name: Drive the window with a pointer
+        run: dotnet run --project src/Compositor.Desktop/Compositor.Desktop.csproj -- --clicks clicks.png

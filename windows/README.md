@@ -135,9 +135,12 @@ than promised elsewhere.
 touches it again it does not rot into something broken — it stays what it is, and this README says which version
 of the Mac it was made against. That is a deliverable, not a failure.
 
-**If you can only do one thing to keep it honest:** add a CI workflow at `.github/workflows/windows.yml` that
-runs `dotnet build` and `dotnet test` with `paths: windows/**`. It is one new file, so it cannot conflict with
-upstream's own `verify.yml`, and it is the only mechanism that keeps the port green without anyone watching.
+**If you can only do one thing to keep it honest:** there is now a CI workflow at
+`.github/workflows/windows.yml` — `dotnet build -warnaserror`, `dotnet test`, and the window driven with a
+pointer through the headless platform — scoped to `paths: windows/**` so a change to the Mac app cannot make
+it red, and one new file so it cannot conflict with upstream's own `verify.yml`. That is the only mechanism
+that keeps the port green without anyone watching; if it ever goes red and nobody has time, delete the
+workflow rather than leave a red badge that means nothing.
 
 **Publishing it as a repository of its own.** The port's history is separable from the macOS app's, because
 almost every commit that made it touches only `windows/`:
