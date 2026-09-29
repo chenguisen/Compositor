@@ -276,6 +276,7 @@ public sealed class MainWindow : Window
                         Command("_Invert", () => _ = ImageAdjustment(AdjustmentKind.Invert)),
                         new Separator(),
                         Command("_Canvas Size…", () => _ = CanvasSize()),
+                        Command("_Image Size…", () => _ = ImageSize()),
                         Command("_Trim…", () => _ = Trim()),
                     },
                 },
@@ -1274,6 +1275,27 @@ public sealed class MainWindow : Window
     {
         _clipboard?.Dispose();
         _clipboard = copied;
+    }
+
+    /// <summary>
+    /// Image ▸ Image Size: the canvas and every layer's pixels resampled to a new size, as one undo step.
+    /// </summary>
+    private async Task ImageSize()
+    {
+        if (_document is not { } document) return;
+        if (await ImageSizeDialog.Ask(this, document.Width, document.Height, document.Resolution,
+                LayerSampling.HighQuality) is not { } asked)
+        {
+            return;
+        }
+        if (_document is not { } current) return;
+        if (!Edit("Image Size", () => ImageEdits.Resize(current, asked.Width, asked.Height, asked.Resolution, asked.Sampling)))
+        {
+            Say("That size is too large to resample to.");
+            return;
+        }
+        _canvas.Fit();
+        Say($"Image is now {asked.Width} x {asked.Height} at {asked.Resolution:0.##} per inch");
     }
 
     /// <summary>View ▸ New Guide: a line across the canvas to line things up against.</summary>
