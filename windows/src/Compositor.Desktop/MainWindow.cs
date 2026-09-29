@@ -308,6 +308,16 @@ public sealed class MainWindow : Window
                     {
                         Command("_Hue/Saturation…", () => _ = ImageAdjustment(AdjustmentKind.HueSaturation)),
                         Command("_Levels…", () => _ = ImageAdjustment(AdjustmentKind.Levels)),
+                        new MenuItem
+                        {
+                            Header = "_Auto Levels",
+                            Items =
+                            {
+                                Command("Auto _Contrast", () => AutoLevels(LevelsAuto.Contrast)),
+                                Command("Auto C_olour", () => AutoLevels(LevelsAuto.Color)),
+                                Command("Auto Colour + Neutral _Midtones", () => AutoLevels(LevelsAuto.Neutral)),
+                            },
+                        },
                         Command("C_urves…", () => _ = ImageAdjustment(AdjustmentKind.Curves)),
                         Command("_Exposure…", () => _ = ImageAdjustment(AdjustmentKind.Exposure)),
                         Command("Black & _White…", () => _ = ImageAdjustment(AdjustmentKind.BlackWhite)),
@@ -1611,6 +1621,24 @@ public sealed class MainWindow : Window
         }
         Edit("Clear Guides", () => GuideEdits.Clear(document) > 0);
         Say("Guides cleared");
+    }
+
+    /// <summary>
+    /// Image ▸ Auto Levels: the levels the picture itself asks for, worked out from its own histogram and
+    /// put straight on the layer. The Mac build shows them in the Levels panel instead; this skips the panel,
+    /// since what it works out is the whole of the edit.
+    /// </summary>
+    private void AutoLevels(LevelsAuto mode)
+    {
+        if (_document is not { } document || Selected is not { } id) return;
+        if (document.Layers.FirstOrDefault(layer => layer.ID == id) is not { Asset: not null, IsGroup: false, Adjustment: null })
+        {
+            Say("Auto Levels needs a layer with pixels of its own");
+            return;
+        }
+        if (!Edit("Auto Levels", () => LevelsEdits.Auto(document, id, mode))) Say("There is nothing in that layer to stretch");
+        else Say($"Auto Levels: {mode}");
+        Reselect(id);
     }
 
     /// <summary>
