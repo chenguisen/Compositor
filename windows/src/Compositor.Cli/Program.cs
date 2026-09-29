@@ -30,6 +30,7 @@ internal static class Program
                 "import" => Import(args),
                 "crop" => Crop(args),
                 "guide" => Guide(args),
+                "distort" => Distort(args),
                 "canvas" => Canvas(args),
                 "resize" => Resize(args),
                 "trim" => Trim(args),
@@ -57,6 +58,9 @@ internal static class Program
           import <image> <out.comp>           start a project from one image
           crop   <in> <out> x y w h           crop the canvas to a rectangle
           guide  <in> <out> h|v <position>    add a guide; - means take them all away
+          distort <in> <out> <layer> x1 y1 x2 y2 x3 y3 x4 y4
+                                              move a layer's four corners (top left, top right,
+                                              bottom right, bottom left) and resample it
           canvas <in> <out> w h [anchor]      resize the canvas, moving content
           resize <in> <out> w h [dpi]         resample the image and every layer
           trim   <in> <out> [tolerance]       crop the canvas to what is drawn on it
@@ -239,6 +243,39 @@ internal static class Program
         }
         ProjectStore.Save(ProjectSnapshot.FromDocument(document), args[2]);
         Console.WriteLine($"wrote {args[2]} ({direction} guide at {position:0.##})");
+        return 0;
+    }
+
+    /// <summary>
+    /// Free distortion from the command line: the four corners in document pixels, in handle order. The only
+    /// way to distort a layer without a pointer, which is what makes the whole path checkable.
+    /// </summary>
+    private static int Distort(string[] args)
+    {
+        if (args.Length != 12) return Fail("distort needs an input, an output, a layer and four corners as eight numbers.");
+        var numbers = new float[8];
+        for (var index = 0; index < 8; index++)
+        {
+            if (!float.TryParse(args[index + 4], out numbers[index])) return Fail("A corner is a pair of numbers.");
+        }
+        using var snapshot = ProjectStore.Load(args[1]);
+        using var document = snapshot.ToDocument();
+        var matches = document.Layers
+            .Where(layer => string.Equals(layer.Name, args[3], StringComparison.OrdinalIgnoreCase)).ToList();
+        if (matches.Count == 0) return Fail($"No layer in that project is called '{args[3]}'.");
+        if (matches.Count > 1) return Fail($"{matches.Count} layers are called '{args[3]}'; rename one of them first.");
+        var corners = new SKPoint[4];
+        for (var index = 0; index < 4; index++)
+        {
+            corners[index] = new SKPoint(numbers[index * 2], numbers[index * 2 + 1]);
+        }
+        if (!DistortEdits.Distort(document, matches[0].ID, corners))
+        {
+            return Fail("The distortion was refused: that shape cannot be made from those corners, or it would not fit in memory.");
+        }
+        ProjectStore.Save(ProjectSnapshot.FromDocument(document), args[2]);
+        var layer = document.Layers.First(entry => entry.ID == matches[0].ID);
+        Console.WriteLine($"wrote {args[2]} (distorted '{layer.Name}' into {layer.Transform.Width:0}x{layer.Transform.Height:0})");
         return 0;
     }
 

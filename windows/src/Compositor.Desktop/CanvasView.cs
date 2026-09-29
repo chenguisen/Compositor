@@ -66,6 +66,8 @@ public sealed class CanvasView : Control
     private double _zoom = 1;
     private Point? _dragging;
     private Guid? _guideDrag;
+    private SKPoint[]? _distortCorners;
+    private int _distortHandle;
 
     /// <summary>The stroke being drawn, in document pixels, until the pointer comes back up.</summary>
     private readonly List<SKPoint> _stroke = [];
@@ -188,6 +190,21 @@ public sealed class CanvasView : Control
 
     /// <summary>A guide has been taken hold of: the window begins one undo step here.</summary>
     public Action? GuideDragStarted { get; set; }
+
+    /// <summary>
+    /// Whether a corner can be dragged on its own. The window allows it for one layer at a time, since a
+    /// distortion resamples that layer's pixels and a box around several is not one layer's shape.
+    /// </summary>
+    public bool DistortEnabled { get; set; }
+
+    /// <summary>A distortion has been taken hold of: the window begins one undo step here.</summary>
+    public Action? DistortStarted { get; set; }
+
+    /// <summary>The distortion is something else now; nothing is resampled until it is let go.</summary>
+    public Action<IReadOnlyList<SKPoint>>? DistortChanged { get; set; }
+
+    /// <summary>The distortion has been let go: the window resamples the pixels into that shape.</summary>
+    public Action<IReadOnlyList<SKPoint>>? DistortFinished { get; set; }
 
     /// <summary>The guide being dragged has been put at a document position.</summary>
     public Action<Guid, double>? GuideMoved { get; set; }
@@ -522,6 +539,17 @@ public sealed class CanvasView : Control
     private bool beginTransformDrag(LayerTransform box, SKPoint point, KeyModifiers modifiers)
     {
         var handle = TransformEdits.HandleAt(box, point, TransformEdits.Grab / _zoom, TransformEdits.RotateGrip / _zoom);
+        // Ctrl on a corner takes hold of that corner on its own, which is a distortion: the shape it is
+        // dragged into is not a rectangle with an angle, so the pixels are resampled into it on release.
+        if (handle is { } corner && Corner(corner) is { } index && DistortEnabled
+            && modifiers.HasFlag(KeyModifiers.Control))
+        {
+            _distortCorners = TransformEdits.Corners(box);
+            _distortHandle = index;
+            DistortStarted?.Invoke();
+            InvalidateVisual();
+            return true;
+        }
         if (handle is null && !box.Contains(point)) return false;
         _transformDragging = true;
         _handle = handle;
@@ -530,6 +558,16 @@ public sealed class CanvasView : Control
         TransformStarted?.Invoke();
         return true;
     }
+
+    /// <summary>Which of the four corners a handle is, or null for the edges, the middle and the turn grip.</summary>
+    private static int? Corner(TransformHandle handle) => handle switch
+    {
+        TransformHandle.TopLeft => 0,
+        TransformHandle.TopRight => 1,
+        TransformHandle.BottomRight => 2,
+        TransformHandle.BottomLeft => 3,
+        _ => null,
+    };
 
     /// <summary>Closes an open polygonal lasso and hands it to the app.</summary>
     private void CompleteSelection()
@@ -644,7 +682,19 @@ public sealed class CanvasView : Control
             var left = ToScreen(new SKPoint(0, (float)lineY));
             context.DrawLine(SnapPen, left, new Point(Bounds.Width, left.Y));
         }
-        if (!TransformEnabled || TransformBox is not { } box) return;
+        if (!TransformEnabled) return;
+        // A distortion in progress is its own shape: the box is what it is being dragged away from.
+        if (_distortCorners is { } shape)
+        {
+            for (var index = 0; index < shape.Length; index++)
+            {
+                context.DrawLine(TransformPen, ToScreen(shape[index]), ToScreen(shape[(index + 1) % shape.Length]));
+                var at = ToScreen(shape[index]);
+                context.DrawRectangle(null, TransformPen, new Rect(at.X - 3, at.Y - 3, 6, 6));
+            }
+            return;
+        }
+        if (TransformBox is not { } box) return;
         var corners = TransformEdits.Corners(box);
         for (var index = 0; index < corners.Length; index++)
         {
@@ -919,6 +969,14 @@ public sealed class CanvasView : Control
     protected override void OnPointerMoved(PointerEventArgs e)
     {
         var now = e.GetPosition(this);
+        if (_distortCorners is { } corners)
+        {
+            corners[_distortHandle] = ToDocument(now);
+            DistortChanged?.Invoke(corners);
+            InvalidateVisual();
+            e.Handled = true;
+            return;
+        }
         if (_guideDrag is { } moved && _document is { } document
             && document.Guides.FirstOrDefault(entry => entry.ID == moved) is { } guide)
         {
@@ -1026,6 +1084,15 @@ public sealed class CanvasView : Control
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
+        if (_distortCorners is { } shape)
+        {
+            _distortCorners = null;
+            e.Pointer.Capture(null);
+            InvalidateVisual();
+            DistortFinished?.Invoke(shape);
+            e.Handled = true;
+            return;
+        }
         if (_guideDrag is not null)
         {
             _guideDrag = null;

@@ -173,6 +173,8 @@ public sealed class MainWindow : Window
         _canvas.EyedropperClicked = Picked;
         _canvas.ShapeFinished = ShapeFinished;
         _canvas.GradientFinished = GradientFinished;
+        _canvas.DistortStarted = DistortStarted;
+        _canvas.DistortFinished = DistortFinished;
         _canvas.GuideDragStarted = GuideDragStarted;
         _canvas.GuideMoved = GuideMoved;
         _canvas.GuideDragFinished = GuideDragFinished;
@@ -345,7 +347,7 @@ public sealed class MainWindow : Window
                     Items =
                     {
                         ToolItem("_Pan (drag to scroll)", Tool.Pan),
-                        ToolItem("_Move (drag the layer)", Tool.Move),
+                        ToolItem("_Move (drag the layer; Ctrl-drag a corner to distort it)", Tool.Move),
                         ToolItem("Marquee (_rectangular selection)", Tool.Marquee),
                         ToolItem("_Elliptical marquee", Tool.Ellipse),
                         ToolItem("_Lasso (freehand)", Tool.Lasso),
@@ -1484,6 +1486,26 @@ public sealed class MainWindow : Window
         Say($"Image is now {asked.Width} x {asked.Height} at {asked.Resolution:0.##} per inch");
     }
 
+    /// <summary>A distortion has been taken hold of: one undo step for the whole drag, as a slider drag gets.</summary>
+    private void DistortStarted()
+    {
+        if (_document is not { } document) return;
+        _history.Begin("Distort", document, Selected);
+    }
+
+    /// <summary>
+    /// The distortion has been let go: the layer's pixels are resampled into that shape, which is the one
+    /// edit. The shape is only drawn while it is dragged — nothing is resampled until it is let go, so a drag
+    /// costs nothing until it ends, where the Mac build previews it as it moves.
+    /// </summary>
+    private void DistortFinished(IReadOnlyList<SKPoint> corners)
+    {
+        if (_document is not { } document || Selected is not { } id) return;
+        if (!DistortEdits.Distort(document, id, corners)) Say("That shape cannot be made");
+        _history.End(document, Selected);
+        Reselect(id);
+    }
+
     /// <summary>A guide has been taken hold of: one undo step for the whole drag, as a slider drag gets.</summary>
     private void GuideDragStarted()
     {
@@ -2164,6 +2186,9 @@ public sealed class MainWindow : Window
         }
         // One box around everything the transform moves, which for one layer is its own.
         _canvas.TransformBox = TransformEdits.GroupBox(document, SelectedLayers);
+        // A corner can be dragged on its own only when the box is one layer's, since a distortion resamples
+        // that layer's pixels into the shape and a box around several is not one layer's shape.
+        _canvas.DistortEnabled = SelectedLayers.Count == 1;
     }
 
     /// <summary>
