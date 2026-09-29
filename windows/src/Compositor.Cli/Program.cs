@@ -36,6 +36,7 @@ internal static class Program
                 "type" => Type(args),
                 "shape" => Shape(args),
                 "gradient" => Gradient(args),
+                "camera-raw" => CameraRaw(args),
                 _ => Fail($"'{args[0]}' is not a command. Try --help."),
             };
         }
@@ -61,6 +62,8 @@ internal static class Program
           type   <in> <out> <text> [size]     add a text layer
           shape  <in> <out> rectangle|ellipse|line [size]   add a shape layer
           gradient <in> <out> <layer> [linear|radial]       fill a layer with a gradient
+          camera-raw <in> <out> <layer> [exposure] [contrast] [saturation] [vignette]
+                                                              the Camera Raw filter over a layer
         """);
 
     private static int Info(string[] args)
@@ -338,6 +341,46 @@ internal static class Program
         }
         ProjectStore.Save(ProjectSnapshot.FromDocument(document), args[2]);
         Console.WriteLine($"wrote {args[2]} ({fill} gradient over '{matches[0].Name}', from {start.X},{start.Y} to {end.X},{end.Y})");
+        return 0;
+    }
+
+    /// <summary>Runs the Camera Raw filter's Light and Color stages, and a vignette, over one layer.</summary>
+    private static int CameraRaw(string[] args)
+    {
+        if (args.Length is < 4 or > 8)
+        {
+            return Fail("camera-raw needs a project, an output, the layer to filter, and up to four amounts "
+                + "(exposure, contrast, saturation, vignette).");
+        }
+        var amounts = new double[4];
+        for (var index = 4; index < args.Length; index++)
+        {
+            if (!double.TryParse(args[index], out amounts[index - 4]))
+            {
+                return Fail("camera-raw's amounts must be numbers.");
+            }
+        }
+        using var snapshot = ProjectStore.Load(args[1]);
+        using var document = snapshot.ToDocument();
+        var matches = document.Layers
+            .Where(layer => string.Equals(layer.Name, args[3], StringComparison.OrdinalIgnoreCase)).ToList();
+        if (matches.Count == 0) return Fail($"No layer in that project is called '{args[3]}'.");
+        if (matches.Count > 1) return Fail($"{matches.Count} layers are called '{args[3]}'; rename one of them first.");
+        var settings = new CameraRawSettings
+        {
+            Exposure = amounts[0],
+            Contrast = amounts[1],
+            Saturation = amounts[2],
+            VignetteAmount = amounts[3],
+        };
+        if (!settings.IsValid) return Fail("Those amounts are outside the ranges the filter allows.");
+        if (!CameraRawEdits.Apply(document, matches[0].ID, settings))
+        {
+            return Fail("The filter was refused: that layer holds no pixels, or they would not fit in memory.");
+        }
+        ProjectStore.Save(ProjectSnapshot.FromDocument(document), args[2]);
+        Console.WriteLine($"wrote {args[2]} (Camera Raw over '{matches[0].Name}': exposure {settings.Exposure:0.##}, " +
+            $"contrast {settings.Contrast:0}, saturation {settings.Saturation:0}, vignette {settings.VignetteAmount:0})");
         return 0;
     }
 

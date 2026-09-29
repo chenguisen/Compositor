@@ -250,6 +250,14 @@ public sealed class MainWindow : Window
                 },
                 new MenuItem
                 {
+                    Header = "_Filter",
+                    Items =
+                    {
+                        Command("_Camera Raw Filter…", () => _ = CameraRawFilter()),
+                    },
+                },
+                new MenuItem
+                {
                     Header = "_Tools",
                     Items =
                     {
@@ -952,6 +960,27 @@ public sealed class MainWindow : Window
     private static JsonPoint Unit(SKRectI box, SKPoint point) => new(
         box.Width > 0 ? (point.X - box.Left) / box.Width : 0.5,
         box.Height > 0 ? (point.Y - box.Top) / box.Height : 0.5);
+
+    /// <summary>
+    /// The Camera Raw filter: its sliders are asked for, then the Light, Color and Effects stages run over the
+    /// selected layer's own pixels, held to the selection, as one undo step. The Mac build previews it while
+    /// the panel is open; this applies it when the panel is dismissed.
+    /// </summary>
+    private async Task CameraRawFilter()
+    {
+        if (_document is not { } document || Selected is not { } id) return;
+        if (document.Layers.FirstOrDefault(layer => layer.ID == id) is not { Asset: not null, IsGroup: false })
+        {
+            Say("Camera Raw needs a layer with pixels of its own");
+            return;
+        }
+        if (await CameraRawDialog.Ask(this, new CameraRawSettings()) is not { } settings) return;
+        if (_document is not { } current) return;
+        Edit("Camera Raw Filter", () => CameraRawEdits.Apply(current, id, settings));
+        Reselect(id);
+        Say($"Camera Raw: exposure {settings.Exposure:0.##}, contrast {settings.Contrast:0}, " +
+            $"saturation {settings.Saturation:0}");
+    }
 
     /// <summary>The ratios the Crop tool offers, as the Mac build's ratio menu does.</summary>
     private void BuildCropRatios()
