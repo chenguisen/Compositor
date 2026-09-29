@@ -114,6 +114,27 @@ public static class TextEdits
         return true;
     }
 
+    /// <summary>
+    /// Where the caret sits when the text ends: after the last character of the last line, and on the first
+    /// line's baseline when there is no text yet. Relative to the layer's own top left, in layer pixels.
+    /// </summary>
+    public static SKPoint Caret(LayerTextStyle style)
+    {
+        var pieces = Layout(style, out _, out _);
+        if (pieces.Count == 0) return new SKPoint((float)Padding, (float)(Padding + Baseline(style)));
+        var last = pieces[^1];
+        return new SKPoint(last.X + (float)Advance(last.Text, last.Typeface, style), last.Y);
+    }
+
+    /// <summary>How far below the top of a line its writing sits.</summary>
+    private static double Baseline(LayerTextStyle style)
+    {
+        var metrics = Metrics(style.FontName, style.FontSize);
+        var ascent = -metrics.Ascent;
+        var descent = metrics.Descent;
+        return (style.LineHeight - (ascent + descent)) / 2 + ascent;
+    }
+
     /// <summary>What a text layer needs to be drawn: its face, its size and the leading between lines.</summary>
     public static SKFontMetrics Metrics(string fontName, double size) =>
         new SKFont(Typeface(fontName), (float)size).Metrics;
@@ -137,13 +158,10 @@ public static class TextEdits
         var content = style.Content ?? "";
         var colours = Colours(style, content.Length);
         var fonts = Fonts(style, content.Length);
-        var metrics = Metrics(style.FontName, style.FontSize);
-        var ascent = -metrics.Ascent;
-        var descent = metrics.Descent;
         var lineHeight = style.LineHeight;
         // Where the lines have to fit: the paragraph box less its padding, or no limit at all for point text.
         var limit = style.BoxSize is { } box ? Math.Max(1, box.Width - Padding * 2) : double.PositiveInfinity;
-        var baseline = (lineHeight - (ascent + descent)) / 2 + ascent;
+        var baseline = Baseline(style);
 
         measuredWidth = 0;
         var line = 0;

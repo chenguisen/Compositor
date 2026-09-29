@@ -4,6 +4,8 @@ using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
+using Avalonia.Threading;
+using Avalonia.Input.TextInput;
 using Compositor.Core.Document;
 using Compositor.Core.Model;
 using Format = Compositor.Core.Format;
@@ -43,6 +45,9 @@ public sealed class CanvasView : Control
 
     /// <summary>The transform box: solid white, so it reads against any picture.</summary>
     private static readonly Pen TransformPen = new() { Brush = Brushes.White, Thickness = 1 };
+
+    /// <summary>The caret: white, over whatever it is on.</summary>
+    private static readonly Pen CaretPen = new() { Brush = Brushes.White, Thickness = 1 };
 
     /// <summary>What a crop is about to take away.</summary>
     private static readonly IBrush DimBrush = new SolidColorBrush(Color.FromArgb(150, 0, 0, 0));
@@ -141,6 +146,27 @@ public sealed class CanvasView : Control
     /// <summary>Handed the point the Type tool was clicked at, in document pixels.</summary>
     public Action<SKPoint>? TextClicked { get; set; }
 
+    /// <summary>Whether text is being typed on the canvas, so the keys come here and a caret is drawn.</summary>
+    public bool TextEditing { get; private set; }
+
+    /// <summary>The caret to draw, in document pixels, while text is being typed.</summary>
+    public SKRect? TextCaret { get; set; }
+
+    /// <summary>Text that was typed, a newline included.</summary>
+    public Action<string>? TextTyped { get; set; }
+
+    /// <summary>The delete key.</summary>
+    public Action? TextBackspaced { get; set; }
+
+    /// <summary>Ctrl and Enter, or a click outside the text.</summary>
+    public Action? TextCommitted { get; set; }
+
+    /// <summary>Escape.</summary>
+    public Action? TextCancelled { get; set; }
+
+    private readonly DispatcherTimer _caretBlink = new() { Interval = TimeSpan.FromMilliseconds(530) };
+    private bool _caretOn = true;
+
     /// <summary>When set, the box below is drawn with its handles and can be dragged about.</summary>
     public bool TransformEnabled { get; set; }
 
@@ -185,6 +211,71 @@ public sealed class CanvasView : Control
     public CanvasView()
     {
         ClipToBounds = true;
+        // The canvas takes the keys while text is being typed, as the Mac build's canvas does.
+        Focusable = true;
+        _caretBlink.Tick += (_, _) =>
+        {
+            _caretOn = !_caretOn;
+            if (TextEditing) InvalidateVisual();
+        };
+    }
+
+    /// <summary>Starts typing on the canvas: the keys come here and a caret blinks where the text ends.</summary>
+    public void BeginText()
+    {
+        TextEditing = true;
+        _caretOn = true;
+        _caretBlink.Start();
+        Focus();
+        InvalidateVisual();
+    }
+
+    /// <summary>Stops typing: the keys go back to the rest of the window.</summary>
+    public void EndText()
+    {
+        TextEditing = false;
+        TextCaret = null;
+        _caretBlink.Stop();
+        InvalidateVisual();
+    }
+
+    protected override void OnTextInput(TextInputEventArgs e)
+    {
+        if (TextEditing && e.Text is { Length: > 0 } typed)
+        {
+            // Whatever the keyboard layout or the input method produced, as it produced it.
+            TextTyped?.Invoke(typed);
+            e.Handled = true;
+            return;
+        }
+        base.OnTextInput(e);
+    }
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        if (TextEditing)
+        {
+            switch (e.Key)
+            {
+                case Key.Escape:
+                    TextCancelled?.Invoke();
+                    e.Handled = true;
+                    return;
+                case Key.Enter or Key.Return when e.KeyModifiers.HasFlag(KeyModifiers.Control):
+                    TextCommitted?.Invoke();
+                    e.Handled = true;
+                    return;
+                case Key.Enter or Key.Return:
+                    TextTyped?.Invoke("\n");
+                    e.Handled = true;
+                    return;
+                case Key.Back:
+                    TextBackspaced?.Invoke();
+                    e.Handled = true;
+                    return;
+            }
+        }
+        base.OnKeyDown(e);
     }
 
     public CanvasDocument? Document
@@ -275,6 +366,15 @@ public sealed class CanvasView : Control
         context.DrawImage(image, destination);
         DrawSelection(context);
         DrawStroke(context);
+    }
+
+    /// <summary>The caret, drawn over everything else while text is being typed.</summary>
+    private void DrawCaret(DrawingContext context)
+    {
+        if (!TextEditing || !_caretOn || TextCaret is not { } caret) return;
+        var top = ToScreen(new SKPoint(caret.Left, caret.Top));
+        var bottom = ToScreen(new SKPoint(caret.Right, caret.Bottom));
+        context.DrawLine(CaretPen, top, bottom);
     }
 
     /// <summary>The gradient line being dragged, with a cross at each end as Photoshop draws it.</summary>
@@ -396,6 +496,7 @@ public sealed class CanvasView : Control
             Thickness = 1,
             DashStyle = new DashStyle([4.0, 4.0], 0),
         };
+        DrawCaret(context);
         DrawGradient(context);
         DrawShape(context);
         DrawDraft(context, pen);

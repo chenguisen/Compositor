@@ -43,6 +43,12 @@ public sealed class MainWindow : Window
     /// <summary>The rest of the Layer menu, so all of it can go dead together when nothing is selected.</summary>
     private readonly List<MenuItem> _layerItems = [];
 
+    /// <summary>
+    /// The text being typed on the canvas, if any: it keeps the whole of the typing as one undo step, and
+    /// letting it go puts the layer back the way it was.
+    /// </summary>
+    private TextSession? _text;
+
     /// <summary>How the Gradient tool paints: its shape, whether it fades to the background colour or to
     /// nothing, which way round, and the colour it fades to.</summary>
     private readonly MenuItem _gradientMenu = new() { Header = "Gradient _options" };
@@ -151,6 +157,10 @@ public sealed class MainWindow : Window
         BuildShapeKinds();
         BuildGradientMenu();
         _canvas.TextClicked = TypeHere;
+        _canvas.TextTyped = TypedText;
+        _canvas.TextBackspaced = BackspacedText;
+        _canvas.TextCommitted = CommitText;
+        _canvas.TextCancelled = CancelText;
         _canvas.TransformStarted = TransformStarted;
         _canvas.TransformChanged = TransformChanged;
         _canvas.TransformFinished = TransformFinished;
@@ -708,6 +718,7 @@ public sealed class MainWindow : Window
         _canvas.SampleSourceOnClick = tool == Tool.Clone;
         _canvas.EyedropperOnClick = tool == Tool.Eyedropper;
         _canvas.TypeOnClick = tool == Tool.Type;
+        if (tool != Tool.Type) CommitText();
         _canvas.CropEnabled = tool == Tool.Crop;
         _canvas.ShapeEnabled = tool == Tool.Shape;
         _canvas.GradientEnabled = tool == Tool.Gradient;
@@ -1036,46 +1047,112 @@ public sealed class MainWindow : Window
     /// pixels and the style that drew them, so choosing Edit Text on one draws it again rather than painting
     /// over it.
     /// </summary>
+    /// <summary>
+    /// A click with the Type tool: on a live text layer it joins that layer's words, and anywhere else it
+    /// starts new text there. Typing then draws the layer as it goes, so the words appear where they go.
+    /// </summary>
     private void TypeHere(SKPoint origin)
     {
         if (_document is not { } document) return;
-        _ = TypeText(origin);
+        // A click inside the text already being typed stays in that session.
+        if (_text?.Contains(document, origin) == true) return;
+        CommitText();
+        if (document.Layers.FirstOrDefault(layer => layer.Transform.Contains(origin) && layer.Text is not null)
+            is { } target)
+        {
+            _text = TextSession.Editing(target);
+            _history.Begin("Edit Text", document, target.ID);
+        }
+        else
+        {
+            _text = TextSession.New(new LayerTextStyle
+            {
+                Content = "",
+                FontName = "Arial",
+                FontSize = 72,
+                Red = _brush.Red,
+                Green = _brush.Green,
+                Blue = _brush.Blue,
+            }, origin);
+            _history.Begin("Type", document, Selected);
+        }
+        _canvas.BeginText();
+        ShowTextCaret();
+        Refresh();
+        Say("Typing — Escape lets it go, Ctrl+Enter keeps it");
     }
 
-    private async Task TypeText(SKPoint origin)
+    /// <summary>Keys that were typed, put into the text and drawn as they go.</summary>
+    private void TypedText(string typed)
     {
-        if (_document is not { } document) return;
-        await PlaceText(document, origin);
-    }
-
-    private async Task PlaceText(CanvasDocument document, SKPoint origin)
-    {
-        var style = new LayerTextStyle
+        if (_document is not { } document || _text is not { } session) return;
+        // A carriage return arrives with Enter as well as the key press, and one newline is enough.
+        typed = typed.Replace("\r", "");
+        if (typed.Length == 0) return;
+        if (!session.Type(document, typed))
         {
-            Content = "Text",
-            FontName = "Arial",
-            FontSize = 72,
-            Red = _brush.Red,
-            Green = _brush.Green,
-            Blue = _brush.Blue,
-        };
-        if (await TextDialog.Ask(this, "Type", style) is not { } wanted) return;
-        if (_document is not { } current) return;
-        _history.Begin("Type", current, Selected);
-        var made = TextEdits.Add(current, wanted, origin);
-        _history.End(current, Selected);
-        if (made is null)
-        {
-            Say("That text could not be drawn: the box it makes is too big, or there are too many layers");
+            Say("That text could not be drawn: its box is too big for one surface");
             return;
         }
-        Reselect(made);
-        Say($"Type: {wanted.Content.Length} characters, {wanted.FontName} {wanted.FontSize:0} pixels");
+        ShowText();
     }
 
-    /// <summary>Changes the selected text layer's words or settings and draws it again.</summary>
+    /// <summary>The delete key: the last character goes.</summary>
+    private void BackspacedText()
+    {
+        if (_document is not { } document || _text is not { } session) return;
+        if (session.Backspace(document)) ShowText();
+    }
+
+    /// <summary>Puts the caret where the text ends and keeps the panel on the layer being typed on.</summary>
+    private void ShowText()
+    {
+        if (_document is not { } document || _text is not { } session) return;
+        ShowTextCaret();
+        ShowLayers(document);
+        if (session.LayerID is { } made)
+        {
+            var row = _rows.IndexOf(made);
+            if (row >= 0) _layers.SelectedIndex = row;
+        }
+        Refresh();
+    }
+
+    private void ShowTextCaret() =>
+        _canvas.TextCaret = _document is { } document && _text is { } session ? session.Caret(document) : null;
+
+    /// <summary>Ctrl and Enter: the words are kept, and the whole session is one undo step.</summary>
+    private void CommitText()
+    {
+        if (_text is not { } session) return;
+        var typed = session.Content;
+        _text = null;
+        _canvas.EndText();
+        if (_document is not { } document) return;
+        var kept = session.Commit(document);
+        _history.End(document, kept);
+        if (kept is { } layer) Reselect(layer);
+        else Refresh();
+        if (kept is not null) Say($"Text: {typed.Replace('\n', ' ').Trim().Length} characters");
+    }
+
+    /// <summary>Escape: the words go back to what they were, and the history drops the step.</summary>
+    private void CancelText()
+    {
+        if (_text is not { } session) return;
+        _text = null;
+        _canvas.EndText();
+        if (_document is not { } document) return;
+        session.Cancel(document);
+        _history.End(document, session.LayerID);
+        Refresh();
+        Say("Text let go");
+    }
+
+    /// <summary>Changes the selected text layer's face, size or colour and draws it again.</summary>
     private async Task EditText()
     {
+        CommitText();
         if (_document is not { } document || Selected is not { } id) return;
         if (document.Layers.FirstOrDefault(layer => layer.ID == id) is not { Text: { } text } layer)
         {

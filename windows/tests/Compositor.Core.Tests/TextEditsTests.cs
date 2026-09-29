@@ -252,4 +252,43 @@ public class TextEditsTests : IDisposable
         Assert.Null(TextEdits.Add(document, style, new SKPoint(0, 0)));
         Assert.Empty(document.Layers);
     }
+
+    [Fact]
+    public void TheCaretSitsAfterTheLastCharacterOfTheLastLine()
+    {
+        // An empty layer has its caret on the first line, inside the padding.
+        var empty = TextEdits.Caret(Style(""));
+        Assert.Equal(TextEdits.Padding, empty.X, 2);
+        Assert.True(empty.Y > TextEdits.Padding, $"the caret is at {empty.Y}");
+
+        var one = TextEdits.Caret(Style("Hello"));
+        var two = TextEdits.Caret(Style("Hello" + Environment.NewLine + "Hi"));
+        // Each is on its own baseline, so the second line is a line lower.
+        Assert.True(two.Y > one.Y, $"{two.Y} is not below {one.Y}");
+        Assert.Equal(one.Y + Style("x").LineHeight, two.Y, 2);
+        // And on the second line the caret is after fewer characters, so it is nearer the left.
+        Assert.True(two.X < one.X, $"{two.X} is not left of {one.X}");
+        // A longer line puts the caret further right.
+        Assert.True(TextEdits.Caret(Style("Hello there")).X > one.X);
+    }
+
+    [Fact]
+    public void TrackingMovesTheCaretWithTheLetters()
+    {
+        var plain = TextEdits.Caret(Style("Hello"));
+        var spaced = Style("Hello");
+        spaced.Tracking = 10;
+        Assert.True(TextEdits.Caret(spaced).X > plain.X);
+    }
+
+    [Fact]
+    public void AParagraphPutsTheCaretAfterTheWordOnItsLastLine()
+    {
+        var style = Style("one two three four", 24);
+        style.BoxSize = new JsonSize { Width = 90, Height = 400 };
+        var caret = TextEdits.Caret(style);
+        // The text wraps, so the caret is on the last of the lines and inside the box.
+        Assert.True(caret.Y > Style("x").LineHeight, $"the caret is at {caret.Y}");
+        Assert.True(caret.X < 90, $"the caret is at {caret.X}");
+    }
 }
