@@ -334,7 +334,7 @@ internal sealed class ToolOptionsBar : Border
         _gradientKind.ItemsSource = new[] { "Linear", "Radial", "Angle", "Reflected", "Diamond" };
         _gradientKind.SelectedIndex = 0;
         _gradientKind.SelectionChanged += (_, _) => Set(ref _options.Gradient, (GradientShape)Math.Max(0, _gradientKind.SelectedIndex));
-        _gradientTo.ItemsSource = new[] { "To nothing", "To the background colour" };
+        _gradientTo.ItemsSource = new[] { "To nothing", "To the background color" };
         _gradientTo.SelectedIndex = 0;
         _gradientTo.SelectionChanged += (_, _) => Set(ref _options.GradientToBackground, _gradientTo.SelectedIndex == 1);
         _gradientReversed.IsCheckedChanged += (_, _) => Set(ref _options.GradientReversed, _gradientReversed.IsChecked == true);

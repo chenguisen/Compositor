@@ -196,8 +196,8 @@ public static class Shortcuts
         Menu("Copy", "C", Ctrl);
         Menu("Copy Merged", "C", Ctrl | Shift);
         Menu("Paste", "V", Ctrl);
-        Menu("Fill with Foreground Colour", "Delete", Alt);
-        Menu("Fill with Background Colour", "Delete", Ctrl);
+        Menu("Fill with Foreground Color", "Delete", Alt);
+        Menu("Fill with Background Color", "Delete", Ctrl);
         Menu("Content-Aware Fill", "Delete", Alt | Shift);
         Menu("Select All", "A", Ctrl);
         Menu("Deselect", "D", Ctrl);
@@ -244,7 +244,7 @@ public static class Shortcuts
         Canvas("Shape tool", "U");
         Canvas("Gradient tool", "G");
         Canvas("Swap foreground/background", "X");
-        Canvas("Reset colours", "D");
+        Canvas("Reset colors", "D");
         Canvas("Temporary Hand tool (hold)", "Space");
         Canvas("Decrease brush size", "OemOpenBrackets");
         Canvas("Increase brush size", "OemCloseBrackets");

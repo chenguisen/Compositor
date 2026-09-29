@@ -26,7 +26,7 @@ internal sealed class TrimDialog : DialogWindow
         SizeToContent = SizeToContent.Height;
         CanResize = false;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
-        _basedOn.ItemsSource = new[] { "Transparent pixels", "Top-left pixel colour", "Bottom-right pixel colour" };
+        _basedOn.ItemsSource = new[] { "Transparent pixels", "Top-left pixel color", "Bottom-right pixel color" };
         _basedOn.SelectedIndex = (int)start.BasedOn;
         _basedOn.Width = 200;
         _top.IsChecked = start.Top;

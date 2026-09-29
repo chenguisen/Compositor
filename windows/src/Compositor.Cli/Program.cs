@@ -343,12 +343,12 @@ internal static class Program
     {
         if (args.Length is not (7 or 11))
         {
-            return Fail("fill needs an input, an output, a layer, three colour numbers and, if you want one, a rectangle.");
+            return Fail("fill needs an input, an output, a layer, three color numbers and, if you want one, a rectangle.");
         }
         var colour = new byte[3];
         for (var index = 0; index < 3; index++)
         {
-            if (!byte.TryParse(args[index + 4], out colour[index])) return Fail("The colour is three numbers, 0 to 255.");
+            if (!byte.TryParse(args[index + 4], out colour[index])) return Fail("The color is three numbers, 0 to 255.");
         }
         var numbers = new int[4];
         for (var index = 0; index < args.Length - 7; index++)

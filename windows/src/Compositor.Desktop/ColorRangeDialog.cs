@@ -25,7 +25,7 @@ internal sealed class ColorRangeDialog : DialogWindow
 
     private ColorRangeDialog(SKColor start)
     {
-        Title = "Colour Range";
+        Title = "Color Range";
         Width = 420;
         SizeToContent = SizeToContent.Height;
         CanResize = false;
@@ -42,15 +42,15 @@ internal sealed class ColorRangeDialog : DialogWindow
         group.Children.Add(Row("Red", _red));
         group.Children.Add(Row("Green", _green));
         group.Children.Add(Row("Blue", _blue));
-        group.Children.Add(Row("Colour", _swatch));
+        group.Children.Add(Row("Color", _swatch));
         group.Children.Add(Row("Fuzziness", _fuzziness));
         group.Children.Add(_invert);
         group.Children.Add(Row("Then", _mode));
         group.Children.Add(new TextBlock
         {
-            Text = "Every pixel in the picture this near the colour is selected, wherever it is. The Mac "
-                + "build picks its colours by clicking on the canvas and can look for several at once; this "
-                + "panel takes one colour, and the mode adds it or takes it away.",
+            Text = "Every pixel in the picture this near the color is selected, wherever it is. The Mac "
+                + "build picks its colors by clicking on the canvas and can look for several at once; this "
+                + "panel takes one color, and the mode adds it or takes it away.",
             TextWrapping = TextWrapping.Wrap,
             Opacity = 0.75,
         });

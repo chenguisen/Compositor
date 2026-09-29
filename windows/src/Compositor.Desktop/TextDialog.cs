@@ -55,7 +55,7 @@ internal sealed class TextDialog : DialogWindow
                 _content,
                 Row("Font", _font),
                 Row("Size in pixels", _size),
-                Row("Colour, red green blue 0-255", _colour),
+                Row("Color, red green blue 0-255", _colour),
                 Row("Tracking, pixels between letters", _tracking),
                 Row("Leading, line to line 0 for auto", _leading),
                 new TextBlock { Text = "Alignment" },

@@ -82,7 +82,7 @@ internal sealed class DitherDialog : DialogWindow
         Text(group, "Characters", _characters, () => Style() == DitherStyle.Ascii);
         Choice(group, "Marks", _lightOnDark, start.LightOnDark, () => DitherSettings.DrawsMarks(Style()));
 
-        Heading(group, "Colours");
+        Heading(group, "Colors");
         Choice(group, "Ink and paper", _colors, ["Black & White", "Two Colors", "Original"], (int)start.Colors, () => true);
         Add(group, "Dark red", 0, 1, start.DarkRed, defaults.DarkRed, (s, v) => s.DarkRed = v, "0.00", TwoColours);
         Add(group, "Dark green", 0, 1, start.DarkGreen, defaults.DarkGreen, (s, v) => s.DarkGreen = v, "0.00", TwoColours);

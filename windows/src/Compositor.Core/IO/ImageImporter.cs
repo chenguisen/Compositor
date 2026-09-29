@@ -188,7 +188,7 @@ public static class ImageImporter
         using var image = context.MakeDcrawMemoryImage();
         if (image.Width <= 0 || image.Height <= 0 || image.Channels < 3 || image.Bits != 8)
         {
-            throw new ImportException(ImportError.Unreadable, "That RAW did not come back as 8-bit colour.");
+            throw new ImportException(ImportError.Unreadable, "That RAW did not come back as 8-bit color.");
         }
         var length = image.DataSize;
         if (length <= 0) throw new ImportException(ImportError.Unreadable);

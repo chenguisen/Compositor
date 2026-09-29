@@ -305,9 +305,9 @@ internal sealed class CameraRawPanel
         Add(groups, "Noise luminance", 0, 100, start.NoiseLuminance, (s, v) => s.NoiseLuminance = v);
         Add(groups, "Noise luminance detail", 0, 100, start.NoiseLuminanceDetail, (s, v) => s.NoiseLuminanceDetail = v);
         Add(groups, "Noise luminance contrast", 0, 100, start.NoiseLuminanceContrast, (s, v) => s.NoiseLuminanceContrast = v);
-        Add(groups, "Noise colour", 0, 100, start.NoiseColor, (s, v) => s.NoiseColor = v);
-        Add(groups, "Noise colour detail", 0, 100, start.NoiseColorDetail, (s, v) => s.NoiseColorDetail = v);
-        Add(groups, "Noise colour smoothness", 0, 100, start.NoiseColorSmoothness, (s, v) => s.NoiseColorSmoothness = v);
+        Add(groups, "Noise color", 0, 100, start.NoiseColor, (s, v) => s.NoiseColor = v);
+        Add(groups, "Noise color detail", 0, 100, start.NoiseColorDetail, (s, v) => s.NoiseColorDetail = v);
+        Add(groups, "Noise color smoothness", 0, 100, start.NoiseColorSmoothness, (s, v) => s.NoiseColorSmoothness = v);
 
         groups.Children.Add(Heading("Optics"));
         Add(groups, "Remove chromatic aberration", 0, 1, start.RemoveChromaticAberration ? 1 : 0, (s, v) => s.RemoveChromaticAberration = v > 0.5, "0");
@@ -389,7 +389,7 @@ internal sealed class CameraRawPanel
         groups.Children.Add(_curve);
         Add(groups, "Refine saturation", -100, 100, start.RefineSaturation, (s, v) => s.RefineSaturation = v);
 
-        groups.Children.Add(Heading("Colour mixer"));
+        groups.Children.Add(Heading("Color mixer"));
         // The hues come first in the mixer's own places and then the saturations, which is the order the
         // kernel reads them in rather than the order a panel would list them.
         var mixer = start.Mixer;
@@ -404,15 +404,15 @@ internal sealed class CameraRawPanel
             Add(groups, $"{name}: luminance", -100, 100, At(mixer, luminance), (s, v) => s.Mixer[luminance] = v);
         }
 
-        groups.Children.Add(Heading("Point colour"));
+        groups.Children.Add(Heading("Point color"));
         groups.Children.Add(new TextBlock
         {
-            Text = "Pick the colour the brush is set to out of the picture, then move it. The Mac build picks "
-                + "colours by clicking on the canvas, which this panel does not do.",
+            Text = "Pick the color the brush is set to out of the picture, then move it. The Mac build picks "
+                + "colors by clicking on the canvas, which this panel does not do.",
             TextWrapping = Avalonia.Media.TextWrapping.Wrap,
             Opacity = 0.75,
         });
-        var addPoint = new Button { Content = "Add the brush colour" };
+        var addPoint = new Button { Content = "Add the brush color" };
         var removePoint = new Button { Content = "Remove" };
         addPoint.Click += (_, _) => AddPoint();
         removePoint.Click += (_, _) => RemovePoint();
@@ -437,7 +437,7 @@ internal sealed class CameraRawPanel
         foreach (var point in start.Points) _pointList.Add(point.Normalized());
         if (_pointList.Count > 0) _points.SelectedIndex = 0;
 
-        groups.Children.Add(Heading("Colour grading"));
+        groups.Children.Add(Heading("Color grading"));
         Add(groups, "Shadows: hue", 0, 360, start.ShadowHue, (s, v) => s.ShadowHue = v, "0");
         Add(groups, "Shadows: amount", 0, 100, start.ShadowSaturation, (s, v) => s.ShadowSaturation = v, "0");
         Add(groups, "Shadows: lightness", -100, 100, start.ShadowLuminance, (s, v) => s.ShadowLuminance = v);

@@ -129,7 +129,7 @@ internal sealed class ToolRail : Grid
         Canvas.SetTop(front, 4);
         swatches.Children.Add(back);
         swatches.Children.Add(front);
-        var swap = Small("⇄", "Swap the foreground and background colours");
+        var swap = Small("⇄", "Swap the foreground and background colors");
         var reset = Small("↺", "Put them back to black and white");
         swap.Click += (_, _) => ColoursSwapped?.Invoke();
         reset.Click += (_, _) => ColoursReset?.Invoke();
@@ -161,7 +161,7 @@ internal sealed class ToolRail : Grid
             BorderThickness = new Thickness(1),
             BorderBrush = new SolidColorBrush(Colors.White, 0.35),
         };
-        ToolTip.SetTip(button, foreground ? "Foreground colour" : "Background colour");
+        ToolTip.SetTip(button, foreground ? "Foreground color" : "Background color");
         button.Click += (_, _) => ColourChosen?.Invoke(foreground);
         return button;
     }
@@ -191,12 +191,12 @@ internal sealed class ToolRail : Grid
         [Tool.Ellipse] = "Elliptical marquee — drag an oval",
         [Tool.Lasso] = "Lasso — drag round a shape",
         [Tool.Polygon] = "Polygonal lasso — click each corner",
-        [Tool.Wand] = "Magic wand — click a colour",
+        [Tool.Wand] = "Magic wand — click a color",
         [Tool.Brush] = "Brush",
         [Tool.Clone] = "Clone stamp — Alt-click a source first",
         [Tool.Blur] = "Blur brush",
         [Tool.Liquify] = "Liquify brush — push the pixels around",
-        [Tool.Smudge] = "Smudge brush — drag the colour along",
+        [Tool.Smudge] = "Smudge brush — drag the color along",
         [Tool.Heal] = "Spot healing",
         [Tool.Eyedropper] = "Eyedropper — click the canvas",
         [Tool.Type] = "Type — click where the text goes",

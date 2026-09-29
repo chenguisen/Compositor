@@ -437,10 +437,10 @@ public sealed class MainWindow : Window
                         Command("_Paste", Paste, "Paste"),
                         Command("Layer via Cop_y", LayerViaCopy, "Layer via Copy"),
                         new Separator(),
-                        Command("Fill with _Foreground Colour", () => FillPixels(BrushColour(), "Fill"),
-                            "Fill with Foreground Colour"),
-                        Command("Fill with _Background Colour", () => FillPixels(BackgroundColour(), "Fill"),
-                            "Fill with Background Colour"),
+                        Command("Fill with _Foreground Color", () => FillPixels(BrushColour(), "Fill"),
+                            "Fill with Foreground Color"),
+                        Command("Fill with _Background Color", () => FillPixels(BackgroundColour(), "Fill"),
+                            "Fill with Background Color"),
                         Command("_Clear Selection Pixels", ClearPixels),
                         new Separator(),
                         Command("Flip Layer _Horizontal", () => Flip(horizontal: true, canvas: false)),
@@ -501,7 +501,7 @@ public sealed class MainWindow : Window
                             {
                                 Command("Auto _Contrast", () => AutoLevels(LevelsAuto.Contrast)),
                                 Command("Auto C_olour", () => AutoLevels(LevelsAuto.Color)),
-                                Command("Auto Colour + Neutral _Midtones", () => AutoLevels(LevelsAuto.Neutral)),
+                                Command("Auto Color + Neutral _Midtones", () => AutoLevels(LevelsAuto.Neutral)),
                             },
                         },
                         Command("C_urves…", () => _ = ImageAdjustment(AdjustmentKind.Curves), "Curves"),
@@ -550,12 +550,12 @@ public sealed class MainWindow : Window
                         ToolItem("_Elliptical marquee", Tool.Ellipse),
                         ToolItem("_Lasso (freehand)", Tool.Lasso, "Lasso tool"),
                         ToolItem("_Polygonal lasso (click each corner)", Tool.Polygon),
-                        ToolItem("Magic _wand (click a colour)", Tool.Wand, "Magic wand"),
+                        ToolItem("Magic _wand (click a color)", Tool.Wand, "Magic wand"),
                         ToolItem("_Brush", Tool.Brush, "Brush tool"),
                         ToolItem("_Clone stamp (Alt-click a source first)", Tool.Clone, "Clone Stamp"),
                         ToolItem("Blur brush", Tool.Blur, "Blur / Smudge / Liquify"),
                         ToolItem("_Liquify brush (push the pixels around)", Tool.Liquify),
-                        ToolItem("S_mudge brush (drag the colour along)", Tool.Smudge),
+                        ToolItem("S_mudge brush (drag the color along)", Tool.Smudge),
                         ToolItem("Spot _healing", Tool.Heal, "Spot Healing"),
                         ToolItem("_Eyedropper (click the canvas)", Tool.Eyedropper, "Eyedropper tool"),
                         ToolItem("_Type (click where the text goes)", Tool.Type, "Type tool"),
@@ -580,7 +580,7 @@ public sealed class MainWindow : Window
                                 Command("_Size…", () => _ = SetBrush(BrushSetting.Size)),
                                 Command("_Hardness…", () => _ = SetBrush(BrushSetting.Hardness)),
                                 Command("_Opacity…", () => _ = SetBrush(BrushSetting.Opacity)),
-                                Command("_Colour…", () => _ = SetBrush(BrushSetting.Colour)),
+                                Command("_Color…", () => _ = SetBrush(BrushSetting.Colour)),
                                 new Separator(),
                                 Command("Spot healing: _Content-Aware", () => Heal(HealingMode.ContentAware)),
                                 Command("Spot healing: Create _Texture", () => Heal(HealingMode.CreateTexture)),
@@ -605,7 +605,7 @@ public sealed class MainWindow : Window
                         Command("Layer's _Pixels", SelectLayerPixels),
                         Command("_Mask's Black Areas", SelectMaskBlack),
                         new Separator(),
-                        Command("Colour _Range…", () => _ = ColorRange()),
+                        Command("Color _Range…", () => _ = ColorRange()),
                     },
                 },
                 new MenuItem
@@ -974,8 +974,8 @@ public sealed class MainWindow : Window
         Does("Copy", Copy);
         Does("Copy Merged", CopyMerged);
         Does("Paste", Paste);
-        Does("Fill with Foreground Colour", () => FillPixels(BrushColour(), "Fill"));
-        Does("Fill with Background Colour", () => FillPixels(BackgroundColour(), "Fill"));
+        Does("Fill with Foreground Color", () => FillPixels(BrushColour(), "Fill"));
+        Does("Fill with Background Color", () => FillPixels(BackgroundColour(), "Fill"));
         Does("Content-Aware Fill", ContentAwareFill);
         Does("Select All", () => Change("Select All", SelectionEdits.SelectAll));
         Does("Deselect", Deselect);
@@ -1020,7 +1020,7 @@ public sealed class MainWindow : Window
         Does("Shape tool", () => SetTool(Tool.Shape), Shortcuts.Canvas);
         Does("Gradient tool", () => SetTool(Tool.Gradient), Shortcuts.Canvas);
         Does("Swap foreground/background", SwapColours, Shortcuts.Canvas);
-        Does("Reset colours", ResetColours, Shortcuts.Canvas);
+        Does("Reset colors", ResetColours, Shortcuts.Canvas);
         When("Temporary Hand tool (hold)", TakeHand, Shortcuts.Canvas);
         When("Decrease brush size", () => StepBrushSize(false), Shortcuts.Canvas);
         When("Increase brush size", () => StepBrushSize(true), Shortcuts.Canvas);
@@ -1779,15 +1779,15 @@ public sealed class MainWindow : Window
         var after = _rail.Palette;
         if (after.Foreground != before.Background || after.Background != before.Foreground)
         {
-            throw new InvalidOperationException("the swap did not carry both colours across");
+            throw new InvalidOperationException("the swap did not carry both colors across");
         }
         if (BrushColour() != after.Foreground) throw new InvalidOperationException("the swap left the brush behind");
         ResetColours();
         if (BrushColour() != new SKColor(0, 0, 0) || BackgroundColour() != new SKColor(255, 255, 255))
         {
-            throw new InvalidOperationException("the reset did not put the colours back to black and white");
+            throw new InvalidOperationException("the reset did not put the colors back to black and white");
         }
-        report.Add($"colours: {Spell(before.Foreground)}/{Spell(before.Background)} swapped to " +
+        report.Add($"colors: {Spell(before.Foreground)}/{Spell(before.Background)} swapped to " +
             $"{Spell(after.Foreground)}/{Spell(after.Background)}, and reset to black over white");
 
         // The toolbar's zoom controls are the View menu's own commands, so the status line has to follow them.
@@ -2407,9 +2407,9 @@ public sealed class MainWindow : Window
                 : $"Clone stamp copying from {_cloneSource.Value.X:0},{_cloneSource.Value.Y:0} — drag on the canvas",
             Tool.Blur => $"Blur brush: {_options.Brush.Diameter:0} pixels — drag over what should soften",
             Tool.Liquify => $"Liquify brush: {_options.Brush.Diameter:0} pixels — drag the pixels where they should go",
-            Tool.Smudge => $"Smudge brush: {_options.Brush.Diameter:0} pixels — drag the colour along",
+            Tool.Smudge => $"Smudge brush: {_options.Brush.Diameter:0} pixels — drag the color along",
             Tool.Heal => $"Spot healing ({_options.Brush.Healing}): {_options.Brush.Diameter:0} pixels — drag over what should go",
-            Tool.Eyedropper => "Eyedropper — click the canvas to take its colour",
+            Tool.Eyedropper => "Eyedropper — click the canvas to take its color",
             Tool.Type => "Type — click where the text goes, then type it",
             Tool.Crop => "Crop — drag a frame, Alt to grow it from the middle, then Crop ▸ Apply",
             Tool.Shape => $"Shape ({_options.Shape}) — drag it out; Shift squares it, Alt grows it from the middle",
@@ -2419,7 +2419,7 @@ public sealed class MainWindow : Window
             Tool.Ellipse => "Elliptical marquee — drag an oval; Shift adds, Alt subtracts",
             Tool.Lasso => "Lasso — drag round a shape; Shift adds, Alt subtracts",
             Tool.Polygon => "Polygonal lasso — click each corner, double-click to close",
-            Tool.Wand => "Magic wand — click a colour to take everything like it",
+            Tool.Wand => "Magic wand — click a color to take everything like it",
             _ => "Pan — drag to scroll",
         });
     }
@@ -2428,14 +2428,14 @@ public sealed class MainWindow : Window
     private static string Spell(BrushSettings brush) =>
         (brush.Hardness >= 1 ? "hard" : $"{brush.Hardness * 100:0}% hard") +
         (brush.Opacity < 1 ? $", {brush.Opacity * 100:0}%" : "") +
-        $", colour {brush.Red * 255:0},{brush.Green * 255:0},{brush.Blue * 255:0}";
+        $", color {brush.Red * 255:0},{brush.Green * 255:0},{brush.Blue * 255:0}";
 
     /// <summary>Asks for one of the magic wand's amounts, as the options bar's own buttons do.</summary>
     private async Task SetWand(WandSetting which)
     {
         if (which == WandSetting.Tolerance)
         {
-            if (await Ask("Wand tolerance", "How far off the colour still counts, 0 to 255",
+            if (await Ask("Wand tolerance", "How far off the color still counts, 0 to 255",
                     $"{_options.Wand.Tolerance}", 0, 255) is not { } tolerance)
             {
                 return;
@@ -2534,7 +2534,7 @@ public sealed class MainWindow : Window
         _options.GradientBackground = (_options.Brush.Red, _options.Brush.Green, _options.Brush.Blue);
         _options.Brush = _options.Brush with { Red = red, Green = green, Blue = blue };
         PushBrush();
-        Say("Swapped the foreground and background colours");
+        Say("Swapped the foreground and background colors");
     }
 
     /// <summary>Puts the colours back to black and white, as the Mac's palette does with D.</summary>
@@ -2562,11 +2562,11 @@ public sealed class MainWindow : Window
             _gradientMenu.Items.Add(Command($"_{shape}", () => SetGradient(shape, null, null)));
         }
         _gradientMenu.Items.Add(new Separator());
-        _gradientMenu.Items.Add(Command("_To the background colour", () => SetGradient(null, true, null)));
+        _gradientMenu.Items.Add(Command("_To the background color", () => SetGradient(null, true, null)));
         _gradientMenu.Items.Add(Command("To _nothing", () => SetGradient(null, false, null)));
         _gradientMenu.Items.Add(new Separator());
         _gradientMenu.Items.Add(Command("_Reversed", () => SetGradient(null, null, !_options.GradientReversed)));
-        _gradientMenu.Items.Add(Command("_Background colour…", () => _ = SetGradientBackground()));
+        _gradientMenu.Items.Add(Command("_Background color…", () => _ = SetGradientBackground()));
     }
 
     private void SetGradient(GradientShape? shape, bool? toBackground, bool? reversed)
@@ -2582,14 +2582,14 @@ public sealed class MainWindow : Window
     private async Task SetGradientBackground()
     {
         var current = $"{_options.GradientBackground.Red * 255:0},{_options.GradientBackground.Green * 255:0},{_options.GradientBackground.Blue * 255:0}";
-        if (await TextPrompt.Ask(this, "Gradient background colour", "Red, green and blue, 0 to 255", current)
+        if (await TextPrompt.Ask(this, "Gradient background color", "Red, green and blue, 0 to 255", current)
             is not { } typed)
         {
             return;
         }
         if (Colour(typed) is not { } colour)
         {
-            Say("The colour has to be three numbers from 0 to 255, as in 255,0,0");
+            Say("The color has to be three numbers from 0 to 255, as in 255,0,0");
             return;
         }
         _options.GradientBackground = colour;
@@ -3742,7 +3742,7 @@ public sealed class MainWindow : Window
             (byte)Math.Round(_options.Brush.Blue * 255));
         if (await ColorRangeDialog.Ask(this, start) is not { } asked) return;
         using var sample = DocumentRenderer.Render(document);
-        Edit($"Colour Range {asked.Fuzziness}", () => SelectionEdits.SelectColorRange(
+        Edit($"Color Range {asked.Fuzziness}", () => SelectionEdits.SelectColorRange(
             document, sample, [asked.Colour], [], asked.Fuzziness, asked.Invert, asked.Mode));
         Say($"Selected what is near {asked.Colour} within {asked.Fuzziness}");
     }
@@ -4088,7 +4088,7 @@ public sealed class MainWindow : Window
         if (_document is not { } document) return;
         if ((long)document.Width * document.Height > DocumentLimits.MaxSurfacePixels)
         {
-            Say("This canvas is too big to read a colour from in one piece");
+            Say("This canvas is too big to read a color from in one piece");
             return;
         }
         var x = (int)Math.Floor(point.X);
@@ -4109,7 +4109,7 @@ public sealed class MainWindow : Window
             Blue = colour.Blue / 255.0,
         };
         PushBrush();
-        Say($"Brush colour {colour.Red},{colour.Green},{colour.Blue}");
+        Say($"Brush color {colour.Red},{colour.Green},{colour.Blue}");
     }
 
     /// <summary>How Spot Healing works out what to put in the painted area.</summary>
@@ -4146,14 +4146,14 @@ public sealed class MainWindow : Window
                 }
                 break;
             default:
-                if (await TextPrompt.Ask(this, "Brush colour", "Red, green and blue, 0 to 255",
+                if (await TextPrompt.Ask(this, "Brush color", "Red, green and blue, 0 to 255",
                         $"{_options.Brush.Red * 255:0},{_options.Brush.Green * 255:0},{_options.Brush.Blue * 255:0}") is not { } typed)
                 {
                     return;
                 }
                 if (Colour(typed) is not { } colour)
                 {
-                    Say("The colour has to be three numbers from 0 to 255, as in 255,0,0");
+                    Say("The color has to be three numbers from 0 to 255, as in 255,0,0");
                     return;
                 }
                 _options.Brush = _options.Brush with { Red = colour.Red, Green = colour.Green, Blue = colour.Blue };

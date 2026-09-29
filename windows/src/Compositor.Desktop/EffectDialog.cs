@@ -38,7 +38,7 @@ internal sealed class EffectDialog : DialogWindow
                 var stroke = current?.Stroke ?? new StrokeEffect();
                 _on.IsChecked = current?.Stroke is { IsEnabled: true };
                 Add(group, "Size, pixels", 0, StrokeEffect.MaxSize, stroke.Size, 4, (s, v) => ((StrokeEffect)s).Size = v, "0");
-                Colour(group, "Colour", stroke.Red, stroke.Green, stroke.Blue,
+                Colour(group, "Color", stroke.Red, stroke.Green, stroke.Blue,
                     (r, g, b) => { stroke.Red = r; stroke.Green = g; stroke.Blue = b; });
                 Add(group, "Opacity", 0, 1, stroke.Opacity, 1, (s, v) => ((StrokeEffect)s).Opacity = v, "0.00");
                 _inside = new CheckBox { Content = "Inside the edge", IsChecked = stroke.Inside };
@@ -52,7 +52,7 @@ internal sealed class EffectDialog : DialogWindow
                 Add(group, "Angle, degrees", -360, 360, shadow.Angle, 90, (s, v) => ((ShadowEffect)s).Angle = v);
                 Add(group, "Distance, pixels", 0, 5000, shadow.Distance, 20, (s, v) => ((ShadowEffect)s).Distance = v, "0");
                 Add(group, "Blur, pixels", 0, 500, shadow.Blur, 20, (s, v) => ((ShadowEffect)s).Blur = v);
-                Colour(group, "Colour", shadow.Red, shadow.Green, shadow.Blue,
+                Colour(group, "Color", shadow.Red, shadow.Green, shadow.Blue,
                     (r, g, b) => { shadow.Red = r; shadow.Green = g; shadow.Blue = b; });
                 Add(group, "Opacity", 0, 1, shadow.Opacity, 0.5, (s, v) => ((ShadowEffect)s).Opacity = v, "0.00");
                 break;
@@ -61,7 +61,7 @@ internal sealed class EffectDialog : DialogWindow
             {
                 var overlay = current?.ColorOverlay ?? new ColorOverlayEffect();
                 _on.IsChecked = current?.ColorOverlay is { IsEnabled: true };
-                Colour(group, "Colour", overlay.Red, overlay.Green, overlay.Blue,
+                Colour(group, "Color", overlay.Red, overlay.Green, overlay.Blue,
                     (r, g, b) => { overlay.Red = r; overlay.Green = g; overlay.Blue = b; });
                 Add(group, "Opacity", 0, 1, overlay.Opacity, 1, (s, v) => ((ColorOverlayEffect)s).Opacity = v, "0.00");
                 break;
@@ -73,7 +73,7 @@ internal sealed class EffectDialog : DialogWindow
                 Add(group, "Angle, degrees", -360, 360, inner.Angle, 90, (s, v) => ((InnerShadowEffect)s).Angle = v);
                 Add(group, "Distance, pixels", 0, 5000, inner.Distance, 10, (s, v) => ((InnerShadowEffect)s).Distance = v, "0");
                 Add(group, "Blur, pixels", 0, 500, inner.Blur, 10, (s, v) => ((InnerShadowEffect)s).Blur = v);
-                Colour(group, "Colour", inner.Red, inner.Green, inner.Blue,
+                Colour(group, "Color", inner.Red, inner.Green, inner.Blue,
                     (r, g, b) => { inner.Red = r; inner.Green = g; inner.Blue = b; });
                 Add(group, "Opacity", 0, 1, inner.Opacity, 0.5, (s, v) => ((InnerShadowEffect)s).Opacity = v, "0.00");
                 break;
@@ -83,7 +83,7 @@ internal sealed class EffectDialog : DialogWindow
                 var glow = current?.OuterGlow ?? new OuterGlowEffect();
                 _on.IsChecked = current?.OuterGlow is { IsEnabled: true };
                 Add(group, "Size, pixels", 0, 500, glow.Size, 20, (s, v) => ((OuterGlowEffect)s).Size = v);
-                Colour(group, "Colour", glow.Red, glow.Green, glow.Blue,
+                Colour(group, "Color", glow.Red, glow.Green, glow.Blue,
                     (r, g, b) => { glow.Red = r; glow.Green = g; glow.Blue = b; });
                 Add(group, "Opacity", 0, 1, glow.Opacity, 0.75, (s, v) => ((OuterGlowEffect)s).Opacity = v, "0.00");
                 break;
@@ -93,7 +93,7 @@ internal sealed class EffectDialog : DialogWindow
                 var glow = current?.InnerGlow ?? new InnerGlowEffect();
                 _on.IsChecked = current?.InnerGlow is { IsEnabled: true };
                 Add(group, "Size, pixels", 0, 500, glow.Size, 10, (s, v) => ((InnerGlowEffect)s).Size = v);
-                Colour(group, "Colour", glow.Red, glow.Green, glow.Blue,
+                Colour(group, "Color", glow.Red, glow.Green, glow.Blue,
                     (r, g, b) => { glow.Red = r; glow.Green = g; glow.Blue = b; });
                 Add(group, "Opacity", 0, 1, glow.Opacity, 0.75, (s, v) => ((InnerGlowEffect)s).Opacity = v, "0.00");
                 break;
