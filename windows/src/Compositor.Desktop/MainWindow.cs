@@ -911,6 +911,55 @@ public sealed class MainWindow : Window
         if (panel.ShowingVectorscope) throw new InvalidOperationException("the scope did not swap back");
         report.Add("scope: the histogram and the vectorscope swap over and back");
 
+        // Guided upright: the panel asks for lines on the picture, a line drawn on the canvas is read into a
+        // turn, and the picture moves by what it asks for.
+        if (panel.DrawingGuides) throw new InvalidOperationException("the panel was already asking for guides");
+        panel.PressDrawGuides();
+        if (!panel.DrawingGuides) throw new InvalidOperationException("the Draw Guides button asked for nothing");
+        if (!_canvas.UprightDrawing) throw new InvalidOperationException("the canvas was not armed to draw a line");
+        // The middle of the layer, and a line ten degrees below the horizontal across it.
+        var box = target.Transform;
+        var from = box.Point(0.1, 0.2);
+        var to = box.Point(0.9, 0.2 + 0.8 * Math.Tan(10 * Math.PI / 180));
+        _canvas.UprightDrawn!(from, to);
+        if (panel.Guides.Count != 1) throw new InvalidOperationException("the line was not taken");
+        if (_canvas.UprightGuides.Count != 1) throw new InvalidOperationException("the line is not drawn for the canvas");
+        var asked = panel.Current().Geometry;
+        if (asked.Upright != CameraRawUprightMode.Guided) throw new InvalidOperationException("the line did not choose Guided");
+        if (Math.Abs(GuidedUpright.Corrections(asked.Guides).Rotate + 10) > 0.01)
+        {
+            throw new InvalidOperationException("the line did not ask for its own angle back");
+        }
+        // The grade is asked for again, and what comes back is the picture with the line's turn in it.
+        ShowPreviewOnce(null, EventArgs.Empty);
+        report.Add($"upright: 1 line drawn, asking for a turn of {GuidedUpright.Corrections(asked.Guides).Rotate:0.##} degrees");
+
+        // A second, steeper line adds the keystone; a third is not read at all.
+        _canvas.UprightDrawn!(box.Point(0.5, 0.1), box.Point(0.5 + 0.4 * Math.Cos(70 * Math.PI / 180),
+            0.1 + 0.4 * Math.Sin(70 * Math.PI / 180)));
+        var two = GuidedUpright.Corrections(panel.Guides);
+        if (two.Vertical != GuidedUpright.Keystone || two.Horizontal != 0)
+        {
+            throw new InvalidOperationException($"the steep second line asked for {two.Vertical}/{two.Horizontal}");
+        }
+        ShowPreviewOnce(null, EventArgs.Empty);
+        report.Add($"upright: a steeper second line asks for a keystone of {two.Vertical:0}");
+
+        // Stopping, and clearing, put the canvas and the picture back.
+        panel.PressDrawGuides();
+        if (panel.DrawingGuides || _canvas.UprightDrawing)
+        {
+            throw new InvalidOperationException("stopping left the panel or the canvas asking for lines");
+        }
+        panel.ClearGuides();
+        if (panel.Guides.Count != 0 || _canvas.UprightGuides.Count != 0)
+        {
+            throw new InvalidOperationException("clearing left lines behind");
+        }
+        if (panel.Current().Geometry.Adjusts) throw new InvalidOperationException("the cleared lines still adjust");
+        ShowPreviewOnce(null, EventArgs.Empty);
+        report.Add("upright: stopping and clearing put the canvas and the picture back");
+
         // Apply writes them into the layer as one undo step, and puts the panel away with the Layers panel back.
         panel.Apply();
         if (_cameraRaw is not null) throw new InvalidOperationException("Apply did not put the panel away");
@@ -940,14 +989,16 @@ public sealed class MainWindow : Window
         }
         report.Add("cancelled: the panel is away and the layer is as Apply left it");
 
-        // Left up with an amount moved: the caller draws the window, and the docked panel is what there is to
-        // look at in that picture.
+        // Left up with an amount moved and a line drawn: the caller draws the window, and the docked panel and
+        // the line over the picture are what there is to look at in that drawing.
         CameraRawFilter();
         if (_cameraRaw is not { } shown) throw new InvalidOperationException("the panel did not stay open");
         shown.Move("Exposure, stops", 0.8);
         shown.Move("Clarity", 30);
+        shown.PressDrawGuides();
+        _canvas.UprightDrawn!(box.Point(0.1, 0.75), box.Point(0.9, 0.75 - 0.8 * Math.Tan(8 * Math.PI / 180)));
         ShowPreviewOnce(null, EventArgs.Empty);
-        report.Add("left open with exposure 0.8 and clarity 30, for the drawing");
+        report.Add("left open with exposure 0.8, clarity 30 and one upright line, for the drawing");
         return string.Join(Environment.NewLine, report);
     }
 
@@ -1916,6 +1967,9 @@ public sealed class MainWindow : Window
         // The readout under the scope follows the pointer over the canvas, and is cleared when it leaves.
         _canvas.PointerMovedAt = point => _cameraRaw?.ShowReadout(UnderCursor(point));
         _canvas.PointerLeftCanvas = () => _cameraRaw?.ShowReadout(null);
+        // Guided upright asks for lines to be drawn on the picture, which is the canvas's business.
+        panel.CanvasChanged += UprightCanvasChanged;
+        _canvas.UprightDrawn = UprightDrawn;
         panel.Show();
         Say("Camera Raw: the panel is docked on the right and the canvas shows what it is doing");
     }
@@ -1949,6 +2003,62 @@ public sealed class MainWindow : Window
             : null;
     }
 
+    /// <summary>
+    /// The Camera Raw panel's lines have changed — one drawn or cleared, or the panel has started or stopped
+    /// asking for one: the canvas is armed for a drag, or let go, and is handed the lines to draw.
+    /// </summary>
+    private void UprightCanvasChanged()
+    {
+        if (_cameraRaw is not { } panel) return;
+        _canvas.UprightDrawing = panel.DrawingGuides;
+        ShowUprightGuides();
+    }
+
+    /// <summary>
+    /// A line drawn on the picture. It is stored in the layer's own fractions, which is how the geometry reads
+    /// it, and the picture is shown with what the line asks for. A line with an end off the layer is refused
+    /// rather than stored, since a fraction outside the picture is not a place the geometry can read.
+    /// </summary>
+    private void UprightDrawn(SKPoint start, SKPoint end)
+    {
+        if (_cameraRaw is not { } panel || _cameraRawLayer is not { } id) return;
+        if (_document is not { } document || document.Layers.FirstOrDefault(layer => layer.ID == id) is not { } layer)
+        {
+            return;
+        }
+        if (Fraction(layer, start) is not { } from || Fraction(layer, end) is not { } to)
+        {
+            Say("A guide has to be drawn inside the layer it straightens");
+            return;
+        }
+        panel.AddGuide(new CameraRawGeometryGuide(from.X, from.Y, to.X, to.Y));
+        Say($"Upright: {panel.Guides.Count} line(s) drawn; the picture is turned by what they ask for");
+    }
+
+    /// <summary>The lines the panel has, in document pixels, for the canvas to draw over the picture.</summary>
+    private void ShowUprightGuides()
+    {
+        if (_cameraRaw is not { } panel || _cameraRawLayer is not { } id
+            || _document is not { } document || document.Layers.FirstOrDefault(layer => layer.ID == id) is not { } layer)
+        {
+            _canvas.UprightGuides = [];
+            return;
+        }
+        var box = layer.Transform;
+        _canvas.UprightGuides = panel.Guides
+            .Select(guide => (box.Point(guide.StartX, guide.StartY), box.Point(guide.EndX, guide.EndY)))
+            .ToList();
+    }
+
+    /// <summary>Where a document point sits in a layer's own grid, as fractions of its sides, or null when the
+    /// point is off the layer.</summary>
+    private static (double X, double Y)? Fraction(ImageLayer layer, SKPoint point)
+    {
+        if (layer.Asset is not { } asset || asset.Width <= 0 || asset.Height <= 0) return null;
+        if (layer.Transform.InBox(point) is not { } at) return null;
+        return (at.X / asset.Width, at.Y / asset.Height);
+    }
+
     /// <summary>Writes the panel's amounts into the layer it was opened on, as one undo step.</summary>
     private void ApplyCameraRaw(CameraRawSettings settings)
     {
@@ -1977,6 +2087,9 @@ public sealed class MainWindow : Window
         _layersSide.IsVisible = true;
         _canvas.PointerMovedAt = null;
         _canvas.PointerLeftCanvas = null;
+        _canvas.UprightDrawing = false;
+        _canvas.UprightDrawn = null;
+        _canvas.UprightGuides = [];
         StopPreview();
     }
 

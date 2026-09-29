@@ -15,7 +15,8 @@ public enum GeometryProjection
 /// The Camera Raw filter's Geometry group: the picture turned, keystoned and zoomed inside its own pixels.
 /// The Mac build works it out as Core Image's perspective transform over four corners, which is what this does.
 /// <para>
-/// Guided upright has no part here: it reads lines drawn on the canvas, which this port has no way to draw.
+/// Guided upright is part of it: lines drawn on the picture are read into a turn and, when one of them is
+/// steep, a keystone, and those are added to whatever the sliders say.
 /// </para>
 /// </summary>
 public sealed class CameraRawGeometrySettings
@@ -42,28 +43,62 @@ public sealed class CameraRawGeometrySettings
     /// <summary>Trims the empty wedges a turn or keystone leaves, fitting what is left to the same size.</summary>
     public bool ConstrainCrop { get; set; }
 
+    /// <summary>Whether the lines drawn on the picture are read, and the lines themselves.</summary>
+    public CameraRawUprightMode Upright { get; set; }
+    public List<CameraRawGeometryGuide> Guides { get; } = [];
+
+    /// <summary>Whether the drawn lines ask for anything: a Guided choice with no usable line must not warp.</summary>
+    private bool UsesGuides => Upright == CameraRawUprightMode.Guided && Guides.Any(guide => guide.IsUsable);
+
     /// <summary>Whether anything here would move the picture.</summary>
     public bool Adjusts =>
-        Vertical != 0 || Horizontal != 0 || Rotate != 0 || Aspect != 0 || Scale != 0 || OffsetX != 0 || OffsetY != 0;
+        UsesGuides || Vertical != 0 || Horizontal != 0 || Rotate != 0 || Aspect != 0 || Scale != 0
+        || OffsetX != 0 || OffsetY != 0;
 
     public bool IsValid =>
         Within(Vertical, ToneRange) && Within(Horizontal, ToneRange) && Within(Aspect, ToneRange)
         && Within(Scale, ToneRange) && Within(OffsetX, ToneRange) && Within(OffsetY, ToneRange)
-        && Within(Rotate, RotateRange) && Projection is >= GeometryProjection.Perspective and <= GeometryProjection.Rectilinear;
+        && Within(Rotate, RotateRange) && Projection is >= GeometryProjection.Perspective and <= GeometryProjection.Rectilinear
+        && Upright is >= CameraRawUprightMode.Off and <= CameraRawUprightMode.Guided
+        && Guides.All(guide => Fraction(guide.StartX) && Fraction(guide.StartY)
+            && Fraction(guide.EndX) && Fraction(guide.EndY));
 
-    /// <summary>The same settings with every slider brought inside its range.</summary>
-    public CameraRawGeometrySettings Normalized() => new()
+    /// <summary>Whether a drawn guide's number is a place on the picture rather than off it.</summary>
+    private static bool Fraction(double value) => double.IsFinite(value) && value is >= 0 and <= 1;
+
+    /// <summary>The same settings with every slider brought inside its range, and every stub of a line dropped.</summary>
+    public CameraRawGeometrySettings Normalized()
     {
-        Projection = Projection,
-        Vertical = Clamp(Vertical, ToneRange),
-        Horizontal = Clamp(Horizontal, ToneRange),
-        Rotate = Clamp(Rotate, RotateRange),
-        Aspect = Clamp(Aspect, ToneRange),
-        Scale = Clamp(Scale, ToneRange),
-        OffsetX = Clamp(OffsetX, ToneRange),
-        OffsetY = Clamp(OffsetY, ToneRange),
-        ConstrainCrop = ConstrainCrop,
-    };
+        var result = new CameraRawGeometrySettings
+        {
+            Projection = Projection,
+            Vertical = Clamp(Vertical, ToneRange),
+            Horizontal = Clamp(Horizontal, ToneRange),
+            Rotate = Clamp(Rotate, RotateRange),
+            Aspect = Clamp(Aspect, ToneRange),
+            Scale = Clamp(Scale, ToneRange),
+            OffsetX = Clamp(OffsetX, ToneRange),
+            OffsetY = Clamp(OffsetY, ToneRange),
+            ConstrainCrop = ConstrainCrop,
+            // Carried through rather than dropped: Corners works from what this returns, so a field left out
+            // here is a field the geometry silently ignores.
+            Upright = Upright,
+        };
+        result.Guides.AddRange(Guides.Where(guide => guide.IsUsable));
+        return result;
+    }
+
+    /// <summary>
+    /// The amounts the geometry really applies: the sliders, plus whatever the drawn lines ask for. The lines
+    /// are read here rather than in the sliders, so turning Upright off puts the picture back to the sliders'
+    /// own amounts without clearing them.
+    /// </summary>
+    private (double Vertical, double Horizontal, double Rotate) Effective()
+    {
+        if (Upright != CameraRawUprightMode.Guided) return (Vertical, Horizontal, Rotate);
+        var (vertical, horizontal, rotate) = GuidedUpright.Corrections(Guides);
+        return (Vertical + vertical, Horizontal + horizontal, Rotate + rotate);
+    }
 
     /// <summary>
     /// Where the picture's four corners are taken to, in the picture's own pixels, top left first and round
@@ -74,9 +109,12 @@ public sealed class CameraRawGeometrySettings
     {
         var settings = Normalized();
         double w = width, h = height;
+        // What the drawn lines ask for is added to the sliders here, so a guided picture is worked out on the
+        // same corners as one the sliders were moved on.
+        var (down, across, turn) = settings.Effective();
         var strength = settings.Projection == GeometryProjection.Perspective ? 1.0 : 0.55;
-        var keystone = settings.Vertical / 100 * w * 0.18 * strength;
-        var sides = settings.Horizontal / 100 * h * 0.18 * strength;
+        var keystone = down / 100 * w * 0.18 * strength;
+        var sides = across / 100 * h * 0.18 * strength;
         var aspect = 1 + settings.Aspect / 200;
         var zoom = 1 + settings.Scale / 100;
         var shiftX = settings.OffsetX / 100 * w * 0.15;
@@ -87,7 +125,7 @@ public sealed class CameraRawGeometrySettings
             (X: w + sides + shiftX, Y: -shiftY),
             (X: -sides + shiftX, Y: -shiftY));
         var centre = (X: w / 2 + shiftX, Y: h / 2 + shiftY);
-        var radians = settings.Rotate * Math.PI / 180;
+        var radians = turn * Math.PI / 180;
 
         (double X, double Y) Turn((double X, double Y) point)
         {

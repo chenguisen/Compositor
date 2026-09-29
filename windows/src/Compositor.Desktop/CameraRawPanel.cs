@@ -56,6 +56,78 @@ internal sealed class CameraRawPanel
     };
     private const string EmptyReadout = "R —   G —   B —";
 
+    /// <summary>Whether the drawn lines are read, the lines themselves, and whether more are being drawn.</summary>
+    private CameraRawUprightMode _upright;
+    private readonly List<CameraRawGeometryGuide> _guides = [];
+    private bool _drawing;
+    private readonly ComboBox _uprightChoice = new() { Width = 160 };
+    private readonly Button _drawGuides = new() { Content = "Draw Guides" };
+    private readonly TextBlock _guideNote = new()
+    {
+        TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+        FontSize = 11,
+        Opacity = 0.75,
+    };
+
+    /// <summary>
+    /// What the canvas is to show has changed — a line was drawn or cleared, or the panel has started or
+    /// stopped asking for one — so the window arms it or lets it go and hands it the lines it has.
+    /// </summary>
+    public event Action? CanvasChanged;
+
+    /// <summary>The lines drawn on the picture, in the layer's own fractions, as the panel has them.</summary>
+    public IReadOnlyList<CameraRawGeometryGuide> Guides => _guides;
+
+    /// <summary>Whether the panel is asking for a line to be drawn on the picture right now.</summary>
+    public bool DrawingGuides => _drawing;
+
+    /// <summary>
+    /// Adds a line drawn on the picture, given in the layer's own fractions. The first line levels itself and a
+    /// steep second one asks for a keystone, so a line is enough to change the picture: the preview is asked
+    /// for again, and the panel's Upright choice follows to Guided.
+    /// </summary>
+    public void AddGuide(CameraRawGeometryGuide guide)
+    {
+        if (!guide.IsUsable) return;
+        _guides.Add(guide);
+        _upright = CameraRawUprightMode.Guided;
+        _uprightChoice.SelectedIndex = (int)_upright;
+        RefreshGuides();
+        CanvasChanged?.Invoke();
+        RefreshPreview();
+    }
+
+    /// <summary>The lines put away, which leaves the slider amounts alone.</summary>
+    public void ClearGuides()
+    {
+        _guides.Clear();
+        RefreshGuides();
+        CanvasChanged?.Invoke();
+        RefreshPreview();
+    }
+
+    /// <summary>Stops asking for lines to be drawn, which is what Apply and Cancel do too.</summary>
+    public void StopDrawingGuides() => SetDrawing(false);
+
+    private void SetDrawing(bool drawing)
+    {
+        if (_drawing == drawing) return;
+        _drawing = drawing;
+        _drawGuides.Content = drawing ? "Stop drawing" : "Draw Guides";
+        RefreshGuides();
+        CanvasChanged?.Invoke();
+    }
+
+    /// <summary>The row's own words: how many lines there are and what to do with the next one.</summary>
+    private void RefreshGuides()
+    {
+        _guideNote.Text = _guides.Count == 0
+            ? "Drag on the picture to draw a line that should be level or upright. One line turns the "
+                + "picture; a second, steeper one adds a keystone."
+            : $"{_guides.Count} line{(_guides.Count == 1 ? "" : "s")} drawn"
+                + (_drawing ? " — drag again to add another." : " — Draw Guides adds another.");
+    }
+
     /// <summary>The body, for the window to dock at its right edge.</summary>
     public Control View { get; }
 
@@ -101,21 +173,33 @@ internal sealed class CameraRawPanel
     /// <summary>Asks for the other of the histogram and the vectorscope, as a right-click on the scope does.</summary>
     internal void SwapScope() => _scopes.Swap();
 
+    /// <summary>Presses the Draw Guides button, which asks the canvas to take lines or lets it go.</summary>
+    internal void PressDrawGuides() => SetDrawing(!_drawing);
+
     /// <summary>Whether the density is being drawn rather than the three ribbons.</summary>
     internal bool ShowingVectorscope => _scopes.Vectorscope;
 
     /// <summary>Writes the amounts as they stand into the layer. The buttons go through here, and so does the
     /// self check, so what it drives is the path a press takes.</summary>
-    public void Apply() => Applied?.Invoke(Current());
+    public void Apply()
+    {
+        SetDrawing(false);
+        Applied?.Invoke(Current());
+    }
 
     /// <summary>Asks for nothing to be written. The buttons go through here, and so does the self check.</summary>
-    public void Cancel() => Cancelled?.Invoke();
+    public void Cancel()
+    {
+        SetDrawing(false);
+        Cancelled?.Invoke();
+    }
 
-    /// <summary>Puts every amount back to nothing, and the curve with them.</summary>
+    /// <summary>Puts every amount back to nothing, and lets go of the drawn lines with them.</summary>
     public void Reset()
     {
         foreach (var (slider, _, _, _) in _rows) slider.Value = 0;
         if (_curve is not null) _curve.Curves = new Compositor.Core.Format.CurvesSettings();
+        ClearGuides();
     }
 
     /// <summary>
@@ -142,6 +226,7 @@ internal sealed class CameraRawPanel
             Geometry = new CameraRawGeometrySettings
             {
                 Projection = (GeometryProjection)Math.Max(0, _geometryProjection.SelectedIndex),
+                Upright = _upright,
             },
             Curve = _curve is { } curve ? curve.Curves : new Compositor.Core.Format.CurvesSettings(),
             // The mixer's places are written into by the rows, so the settings the rows are handed have all
@@ -150,6 +235,7 @@ internal sealed class CameraRawPanel
             Points = [.. Points()],
         };
         foreach (var (slider, set, _, _) in _rows) set(settings, slider.Value);
+        settings.Geometry.Guides.AddRange(_guides);
         return settings;
     }
 
@@ -239,6 +325,38 @@ internal sealed class CameraRawPanel
         Add(groups, "Lens vignette midpoint", 0, 100, start.OpticsVignetteMidpoint, (s, v) => s.OpticsVignetteMidpoint = v);
 
         groups.Children.Add(Heading("Geometry"));
+        // Guided upright is the Mac's own: a line drawn on the picture that should be level or upright. It sits
+        // with the amounts it is added to, because that is what it is — the lines ask for a turn and, when one
+        // of them is steep, a keystone, and the sliders add to that.
+        _upright = start.Geometry.Upright;
+        _uprightChoice.ItemsSource = new[] { "Off", "Guided" };
+        _uprightChoice.SelectedIndex = (int)_upright;
+        _uprightChoice.SelectionChanged += (_, _) =>
+        {
+            _upright = (CameraRawUprightMode)Math.Max(0, _uprightChoice.SelectedIndex);
+            RefreshPreview();
+        };
+        _drawGuides.Click += (_, _) => SetDrawing(!_drawing);
+        var clear = new Button { Content = "Clear guides" };
+        clear.Click += (_, _) => ClearGuides();
+        groups.Children.Add(new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            Children =
+            {
+                new TextBlock { Text = "Upright", Width = 190, VerticalAlignment = VerticalAlignment.Center },
+                _uprightChoice,
+            },
+        });
+        groups.Children.Add(new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            Children = { _drawGuides, clear },
+        });
+        groups.Children.Add(_guideNote);
+        RefreshGuides();
         groups.Children.Add(Choice("Projection", _geometryProjection, ["Perspective", "Rectilinear"]));
         Add(groups, "Vertical", -100, 100, start.Geometry.Vertical, (s, v) => s.Geometry.Vertical = v);
         Add(groups, "Horizontal", -100, 100, start.Geometry.Horizontal, (s, v) => s.Geometry.Horizontal = v);

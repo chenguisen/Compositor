@@ -52,6 +52,13 @@ public sealed class CanvasView : Control
     /// <summary>What a crop is about to take away.</summary>
     private static readonly IBrush DimBrush = Skin.CropDimBrush;
 
+    /// <summary>The Camera Raw panel's own lines: not the document's guides, so not drawn like them.</summary>
+    private static readonly Pen UprightPen = new()
+    {
+        Brush = new SolidColorBrush(Color.FromRgb(0x4F, 0xC3, 0xF7)),
+        Thickness = 1.5,
+    };
+
     private CanvasDocument? _document;
     private SKPoint _origin;
     private double _zoom = 1;
@@ -78,6 +85,27 @@ public sealed class CanvasView : Control
 
     /// <summary>Handed a click of the wand, in document pixels.</summary>
     public Action<SKPoint, SelectionMode>? WandClicked { get; set; }
+
+    /// <summary>
+    /// When set, dragging on the canvas draws a line for the Camera Raw panel to straighten the picture by,
+    /// whatever tool is in hand: the panel asks for this while its Draw Guides button is on.
+    /// </summary>
+    public bool UprightDrawing { get; set; }
+
+    /// <summary>The lines already drawn for the panel, in document pixels, which the canvas draws for it.</summary>
+    public IReadOnlyList<(SKPoint Start, SKPoint End)> UprightGuides
+    {
+        get => _uprightGuides;
+        set { _uprightGuides = value; InvalidateVisual(); }
+    }
+
+    private IReadOnlyList<(SKPoint Start, SKPoint End)> _uprightGuides = [];
+
+    /// <summary>The line being drawn, in document pixels, until the pointer comes back up.</summary>
+    private (SKPoint Start, SKPoint End)? _uprightDraft;
+
+    /// <summary>Handed the line a guide drag finished on, in document pixels.</summary>
+    public Action<SKPoint, SKPoint>? UprightDrawn;
 
     /// <summary>
     /// Handed where the pointer is over the canvas, in document pixels, on every move over it — a panel that
@@ -509,7 +537,18 @@ public sealed class CanvasView : Control
         DrawPixelGrid(context, document);
         if (ShowsGuides) DrawGuides(context, document);
         DrawSelection(context);
+        DrawUprightGuides(context);
         DrawStroke(context);
+    }
+
+    /// <summary>
+    /// The lines the Camera Raw panel is straightening by, and the one being drawn, in a colour of their own so
+    /// they read as the panel's rather than as the document's own guides.
+    /// </summary>
+    private void DrawUprightGuides(DrawingContext context)
+    {
+        foreach (var (start, end) in _uprightGuides) context.DrawLine(UprightPen, ToScreen(start), ToScreen(end));
+        if (_uprightDraft is { } draft) context.DrawLine(UprightPen, ToScreen(draft.Start), ToScreen(draft.End));
     }
 
     /// <summary>
@@ -1075,6 +1114,17 @@ public sealed class CanvasView : Control
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
+        // A Camera Raw guide comes before everything: the panel has asked to draw lines on the picture, and
+        // nothing else the canvas does should happen while the pointer is down.
+        if (_document is not null && UprightDrawing && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+        {
+            var at = ToDocument(e.GetPosition(this));
+            _uprightDraft = (at, at);
+            e.Pointer.Capture(this);
+            e.Handled = true;
+            InvalidateVisual();
+            return;
+        }
         if (GuidesMovable && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed
             && GuideAt(ToDocument(e.GetPosition(this))) is { } guide)
         {
@@ -1224,6 +1274,13 @@ public sealed class CanvasView : Control
         // Every move is reported, whatever the drag in hand is, so a readout that follows the pointer does not
         // stop while a stroke is being painted.
         PointerMovedAt?.Invoke(ToDocument(now));
+        if (_uprightDraft is { } drawn)
+        {
+            _uprightDraft = (drawn.Start, ToDocument(now));
+            InvalidateVisual();
+            e.Handled = true;
+            return;
+        }
         if (_distortCorners is { } corners)
         {
             corners[_distortHandle] = ToDocument(now);
@@ -1340,6 +1397,15 @@ public sealed class CanvasView : Control
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
+        if (_uprightDraft is { } drawn)
+        {
+            _uprightDraft = null;
+            e.Pointer.Capture(null);
+            InvalidateVisual();
+            UprightDrawn?.Invoke(drawn.Start, drawn.End);
+            e.Handled = true;
+            return;
+        }
         if (_distortCorners is { } shape)
         {
             _distortCorners = null;
