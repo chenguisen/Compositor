@@ -178,6 +178,8 @@ public sealed class MainWindow : Window
         _canvas.EyedropperClicked = Picked;
         _canvas.ShapeFinished = ShapeFinished;
         _canvas.GradientFinished = GradientFinished;
+        _canvas.GradientStarted = GradientStarted;
+        _canvas.GradientChanged = GradientChanged;
         _canvas.DistortStarted = DistortStarted;
         _canvas.DistortFinished = DistortFinished;
         _canvas.GuideDragStarted = GuideDragStarted;
@@ -1052,14 +1054,34 @@ public sealed class MainWindow : Window
     /// A gradient drag: the colour runs from one end to the other, over the selected layer's pixels or its
     /// mask, at the brush's opacity, as one undo step.
     /// </summary>
-    private void GradientFinished(SKPoint start, SKPoint end)
+    /// <summary>The gradient's line has been taken hold of: the canvas starts showing what it would do.</summary>
+    private void GradientStarted()
     {
         if (_document is not { } document || Selected is not { } id) return;
-        if (!GradientEdits.HasLine(start, end))
-        {
-            Say("Drag the line the gradient should run along");
-            return;
-        }
+        StartPreview(document, id);
+    }
+
+    /// <summary>
+    /// The line has moved: the gradient is filled into the preview so the run of it can be seen before the
+    /// mouse comes up. Nothing is committed until it does.
+    /// </summary>
+    private void GradientChanged(SKPoint start, SKPoint end)
+    {
+        if (_document is not { } document || Selected is not { } id) return;
+        if (!GradientEdits.HasLine(start, end)) return;
+        var (mask, from, to, opacity, shape) = GradientPlan(document, id);
+        RequestPreview((target, layer) => GradientEdits.Fill(target, layer, mask, start, end, from, to, opacity, shape));
+    }
+
+    /// <summary>
+    /// What the gradient tool would do with the brush as it stands: which of the layer's two surfaces it fills,
+    /// between which colours, and in which shape. The same answer serves the drag's preview and the fill the
+    /// drag ends up making.
+    /// </summary>
+    private (bool Mask, SKColor From, SKColor To, double Opacity, GradientShape Shape) GradientPlan(
+        CanvasDocument document, Guid layerID)
+    {
+        var mask = _paintingMask && document.Layers.FirstOrDefault(layer => layer.ID == layerID)?.Mask is not null;
         var from = new SKColor(
             (byte)Math.Clamp(Math.Round(_brush.Red * 255), 0, 255),
             (byte)Math.Clamp(Math.Round(_brush.Green * 255), 0, 255),
@@ -1071,9 +1093,20 @@ public sealed class MainWindow : Window
                 (byte)Math.Clamp(Math.Round(_gradientBackground.Blue * 255), 0, 255))
             : new SKColor(from.Red, from.Green, from.Blue, 0);
         if (_gradientReversed) (from, to) = (to, from);
-        var mask = _paintingMask;
-        var shape = _gradientShape;
-        var opacity = _brush.Opacity;
+        return (mask, from, to, _brush.Opacity, _gradientShape);
+    }
+
+    /// <summary>The gradient's line has been let go: the fill is made, as one undo step.</summary>
+    private void GradientFinished(SKPoint start, SKPoint end)
+    {
+        if (_document is not { } document || Selected is not { } id) return;
+        StopPreview();
+        if (!GradientEdits.HasLine(start, end))
+        {
+            Say("Drag the line the gradient should run along");
+            return;
+        }
+        var (mask, from, to, opacity, shape) = GradientPlan(document, id);
         Edit(mask ? "Gradient Mask" : "Gradient",
             () => GradientEdits.Fill(document, id, mask, start, end, from, to, opacity, shape));
         Reselect(id);

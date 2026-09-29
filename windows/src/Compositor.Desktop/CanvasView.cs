@@ -141,6 +141,12 @@ public sealed class CanvasView : Control
     /// <summary>Handed the two ends of a gradient drag, in document pixels.</summary>
     public Action<SKPoint, SKPoint>? GradientFinished { get; set; }
 
+    /// <summary>The line the gradient runs along is being dragged: where it is now.</summary>
+    public Action<SKPoint, SKPoint>? GradientChanged { get; set; }
+
+    /// <summary>The gradient's line has been taken hold of: the app starts showing what it would do.</summary>
+    public Action? GradientStarted { get; set; }
+
     private bool _gradientDrag;
     private SKPoint _gradientStart;
     private SKPoint _gradientEnd;
@@ -957,6 +963,7 @@ public sealed class CanvasView : Control
         if (GradientEnabled && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
         {
             _gradientDrag = true;
+            GradientStarted?.Invoke();
             _gradientStart = ToDocument(e.GetPosition(this));
             _gradientEnd = _gradientStart;
             e.Pointer.Capture(this);
@@ -1076,6 +1083,7 @@ public sealed class CanvasView : Control
         if (_gradientDrag)
         {
             _gradientEnd = ToDocument(now);
+            GradientChanged?.Invoke(_gradientStart, _gradientEnd);
             InvalidateVisual();
             base.OnPointerMoved(e);
             return;

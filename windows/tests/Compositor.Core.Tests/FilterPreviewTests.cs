@@ -119,6 +119,29 @@ public class FilterPreviewTests
     }
 
     [Fact]
+    public void AGradientCanBeLookedAtBeforeItIsFilledIn()
+    {
+        // The gradient tool's drag: the fill is run on the preview as the line moves, so the run of it can be
+        // seen before the mouse comes up.
+        var (document, layer) = Warm(40);
+        using var _ = document;
+        using var preview = FilterPreview.Begin(document, layer.ID);
+        Assert.NotNull(preview);
+        var from = new SKColor(0, 0, 0);
+        var to = new SKColor(255, 255, 255);
+        Assert.True(preview.Show((target, id) => GradientEdits.Fill(target, id, false,
+            new SKPoint(0, 20), new SKPoint(40, 20), from, to, 1, GradientShape.Linear)));
+
+        // The preview runs from one colour to the other across the picture…
+        var shown = preview.Document.Layers.First(entry => entry.ID == layer.ID);
+        Assert.True(shown.Asset!.Image.GetPixel(0, 20).Red < 40, $"the far end is {shown.Asset.Image.GetPixel(0, 20)}");
+        Assert.True(shown.Asset.Image.GetPixel(39, 20).Red > 210, $"the near end is {shown.Asset.Image.GetPixel(39, 20)}");
+        // …and the layer itself is the flat colour it was, not a pixel of the gradient on it.
+        Assert.Equal(new SKColor(200, 60, 40), layer.Asset!.Image.GetPixel(0, 20));
+        Assert.Equal(new SKColor(200, 60, 40), layer.Asset.Image.GetPixel(39, 20));
+    }
+
+    [Fact]
     public void APreviewNeedsALayerThatIsThere()
     {
         var (document, _) = Warm(20);
