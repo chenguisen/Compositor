@@ -89,6 +89,46 @@ public class SnapToTests
     }
 
     [Fact]
+    public void TheGridIsATargetOnlyWhileItIsGivenAndAskedFor()
+    {
+        var (document, moving) = Scene();
+        using var _ = document;
+        var grid = new LayoutGrid(20, 4);
+        // The grid's lines are every five pixels across and down.
+        var (xs, ys) = TransformEdits.SnapTargets(document, new[] { moving.ID }, SnapTo.Grid, grid);
+        Assert.Equal([0, 5, 10, 15, 20], xs.Take(5));
+        Assert.Contains(95, xs);
+        Assert.Contains(75, ys);
+        // Asking for the grid without giving one leaves nothing to snap to.
+        Assert.Empty(TransformEdits.SnapTargets(document, new[] { moving.ID }, SnapTo.Grid).Xs);
+        // And a switch that is off does not add them.
+        var (others, _) = TransformEdits.SnapTargets(document, new[] { moving.ID }, SnapTo.Canvas, grid);
+        Assert.DoesNotContain(15, others);
+    }
+
+    [Fact]
+    public void ADragLinesUpWithTheGridWhenItIsTheOnlyThingOn()
+    {
+        var (document, moving) = Scene();
+        using var _ = document;
+        var grid = new LayoutGrid(20, 4);
+        // The layer's left edge is two pixels off a line of the grid at ten, and its top edge two off one at
+        // twenty: both are near enough to take hold of.
+        var draft = new LayerTransform(12, 22, 10, 10);
+        var on = TransformEdits.Snap(document, draft, new[] { moving.ID }, 4, out var line, out var lineY,
+            SnapTo.Grid, grid);
+        Assert.Equal(10, on.X, 6);
+        Assert.Equal(20, on.Y, 6);
+        Assert.Equal(0, line % 5);
+        Assert.Equal(0, lineY % 5);
+        // Without the grid there is nothing there to line up with.
+        var off = TransformEdits.Snap(document, draft, new[] { moving.ID }, 4, out var none, out var nothing, SnapTo.None);
+        Assert.Equal(draft, off);
+        Assert.Null(none);
+        Assert.Null(nothing);
+    }
+
+    [Fact]
     public void AGuideIsSnappedToWhileItsSwitchIsOnAndNotOnceItIsOff()
     {
         var (document, moving) = Scene();

@@ -41,6 +41,7 @@ public sealed class MainWindow : Window
     private readonly MenuItem _snapToCanvas = new();
     private readonly MenuItem _snapToGuides = new();
     private readonly MenuItem _snapToLayers = new();
+    private readonly MenuItem _snapToGrid = new();
     private SnapTo _snapTo = SnapTo.All;
     private LayoutGrid _grid = new();
     private bool _gridVisible;
@@ -1544,6 +1545,7 @@ public sealed class MainWindow : Window
         (_snapToCanvas, SnapTo.Canvas, "Snap to Canvas"),
         (_snapToGuides, SnapTo.Guides, "Snap to Guides"),
         (_snapToLayers, SnapTo.Layers, "Snap to Layers"),
+        (_snapToGrid, SnapTo.Grid, "Snap to Grid"),
     ];
 
     /// <summary>View ▸ Snap to …: one kind of thing a drag lines up with, on or off.</summary>
@@ -2215,7 +2217,10 @@ public sealed class MainWindow : Window
         if (_document is not { } document || _transforming is null) return;
         if (_transformBox is not { } from) return;
         var tolerance = TransformSnap.Distance / Math.Max(_canvas.Zoom, 0.0001);
-        var placed = TransformEdits.Snap(document, draft, _transformOriginals.Keys, tolerance, out var lineX, out var lineY, _snapTo);
+        // The grid is only a target while it is being shown: snapping to lines that are not there would be
+        // a surprise. It is the one target that carries a value rather than a place.
+        var placed = TransformEdits.Snap(document, draft, _transformOriginals.Keys, tolerance,
+            out var lineX, out var lineY, _snapTo, _gridVisible ? _grid : null);
         _canvas.SnapLines = (lineX, lineY);
         // Every layer is carried along by the box's own move, so several keep the shape they had.
         TransformEdits.Carry(document, _transformOriginals, from, placed);

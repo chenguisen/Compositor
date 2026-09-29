@@ -24,7 +24,10 @@ public enum SnapTo
     /// <summary>The boxes of the other layers that hold pixels.</summary>
     Layers = 4,
 
-    All = Canvas | Guides | Layers,
+    /// <summary>The layout grid, when one is being shown.</summary>
+    Grid = 8,
+
+    All = Canvas | Guides | Layers | Grid,
 }
 
 public enum TransformHandle
@@ -367,10 +370,16 @@ public static class TransformEdits
     /// each can be switched off on its own.
     /// </summary>
     public static (List<double> Xs, List<double> Ys) SnapTargets(CanvasDocument document,
-        IReadOnlyCollection<Guid> moving, SnapTo snapTo = SnapTo.All)
+        IReadOnlyCollection<Guid> moving, SnapTo snapTo = SnapTo.All, LayoutGrid? grid = null)
     {
         var xs = new List<double>();
         var ys = new List<double>();
+        if (snapTo.HasFlag(SnapTo.Grid) && grid is { } lines)
+        {
+            // The grid's own lines across the whole document, which is where the eye sees them.
+            for (var at = 0.0; at <= document.Width; at += lines.Step) xs.Add(at);
+            for (var at = 0.0; at <= document.Height; at += lines.Step) ys.Add(at);
+        }
         if (snapTo.HasFlag(SnapTo.Canvas))
         {
             xs.AddRange([0, document.Width, document.Width / 2.0]);
@@ -404,9 +413,9 @@ public static class TransformEdits
     /// draw along.
     /// </summary>
     public static LayerTransform Snap(CanvasDocument document, LayerTransform draft, IReadOnlyCollection<Guid> moving,
-        double tolerance, out double? lineX, out double? lineY, SnapTo snapTo = SnapTo.All)
+        double tolerance, out double? lineX, out double? lineY, SnapTo snapTo = SnapTo.All, LayoutGrid? grid = null)
     {
-        var (xs, ys) = SnapTargets(document, moving, snapTo);
+        var (xs, ys) = SnapTargets(document, moving, snapTo, grid);
         var snap = TransformSnap.Offset(Bounds(draft), xs, ys, tolerance);
         lineX = snap.LineX;
         lineY = snap.LineY;
