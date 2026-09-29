@@ -1,7 +1,10 @@
 using Compositor.Core.Document;
+using Compositor.Core.Format;
 using Compositor.Core.Model;
+using Compositor.Core.Pixels;
 using Compositor.Core.Rendering;
 using SkiaSharp;
+using LayerMask = Compositor.Core.Model.LayerMask;
 using LayerTransform = Compositor.Core.Model.LayerTransform;
 
 namespace Compositor.Core.Tests;
@@ -371,6 +374,31 @@ public class FilterEditsTests
         Assert.False(FilterEdits.Apply(document, layer.ID, FilterKind.MotionBlur, new FilterSettings { MotionDistance = 9000 }));
         Assert.False(FilterEdits.Apply(document, layer.ID, FilterKind.MotionBlur, new FilterSettings { MotionAngle = 120 }));
         Assert.Equal(128, Middle(layer).Red);
+    }
+
+    [Fact]
+    public void TheMotionBlurAdjustmentIsTheMotionBlurFilter()
+    {
+        // The Mac build has one filter behind both the panel and the adjustment layer, so the same amounts
+        // have to make the same pixels either way. The adjustment used to be a second copy of the kernel that
+        // sampled half a pixel off, which showed up here as a streak shifted a pixel from the filter's.
+        var side = 41;
+        using var pixels = new SKBitmap(Bitmaps.ColorInfo(side, side));
+        pixels.Erase(SKColors.Transparent);
+        pixels.SetPixel(side / 2, side / 2, SKColors.White);
+        var adjustment = new LayerAdjustment { Kind = AdjustmentKind.MotionBlur, MotionAngle = 30, MotionDistance = 16 };
+
+        var throughTheAdjustment = pixels.GetPixelSpan().ToArray();
+        AdjustmentOperators.Apply(adjustment, 1, throughTheAdjustment, side, side, side * 4);
+
+        var throughTheFilter = new byte[throughTheAdjustment.Length];
+        pixels.GetPixelSpan().CopyTo(throughTheFilter);
+        MotionPixels.Streak(pixels.GetPixelSpan(), throughTheFilter, side, side, side * 4,
+            adjustment.ResolvedMotionDistance * MotionPixels.RadiusPerPixel, adjustment.ResolvedMotionAngle * Math.PI / 180);
+
+        Assert.Equal(throughTheFilter, throughTheAdjustment);
+        // And the streak it made is the filter's: long along its angle and no wider than the dot across it.
+        Assert.True(throughTheAdjustment[(side / 2 * side + side / 2) * 4 + 3] > 0, "the dot was blurred away");
     }
 
     [Fact]

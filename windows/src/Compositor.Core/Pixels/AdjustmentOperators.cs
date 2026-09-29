@@ -480,41 +480,15 @@ public static class AdjustmentOperators
         && settings.MidCyanRed == 0 && settings.MidMagentaGreen == 0 && settings.MidYellowBlue == 0
         && settings.HighlightCyanRed == 0 && settings.HighlightMagentaGreen == 0 && settings.HighlightYellowBlue == 0;
 
-    // ---------------------------------------------------------------- Blurs
-
     /// <summary>
-    /// Motion Blur's kernel: a Gaussian one tap per pixel, three standard deviations wide, normalized.
-    /// Sampling a Gaussian kernel coarsely would fold fine detail back in — a checkerboard sits unattenuated
-    /// under an even tap stride whatever the spread — so every pixel is a tap and a long streak costs its
-    /// length. The Gaussian Blur adjustment no longer comes through here: its radius reaches 250, which is
-    /// where the tap-per-pixel cost became minutes, and <see cref="GaussianBlur"/> stands boxes in for it.
-    /// </summary>
-    private static float[] GaussianWeights(float sigma, out int half)
-    {
-        half = Math.Max(1, (int)MathF.Ceiling(3 * sigma));
-        var weights = new float[half * 2 + 1];
-        float total = 0;
-        for (int k = -half; k <= half; k++)
-        {
-            float weight = MathF.Exp(-(k * k) / (2 * sigma * sigma));
-            weights[k + half] = weight;
-            total += weight;
-        }
-        for (int i = 0; i < weights.Length; i++) weights[i] /= total;
-        return weights;
-    }
-
-    /// <summary>
-    /// Motion Blur: a line convolution along <paramref name="angle"/> degrees counterclockwise from
-    /// horizontal, over <paramref name="distance"/> pixels. Core Image's radius is not the streak's length
-    /// but its spread: an even streak of length d spreads d/√12, so that radius gives a Gaussian of the same
-    /// spread, which is what this kernel is. Outside the buffer is transparent black, as for the Gaussian.
+    /// Motion Blur: the line convolution <see cref="MotionPixels.Streak"/> makes, over the buffer's own
+    /// pixels. One kernel for both the panel and the adjustment layer, as the Mac build has one filter for
+    /// both — this used to be a second copy that sampled half a pixel off and cost a tap for every pixel of
+    /// the streak, which is where a distance of 2000 measured at ten minutes.
     /// </summary>
     private static void ApplyMotionBlur(double distance, double angle, Span<byte> rgba, int width, int height,
                                         int stride, byte[]? source)
     {
-        float sigma = (float)(distance / Math.Sqrt(12.0));
-        float[] weights = GaussianWeights(sigma, out int half);
         byte[] image;
         try
         {
@@ -525,70 +499,7 @@ public static class AdjustmentOperators
             return;
         }
         if (source is null) rgba[..image.Length].CopyTo(image);
-        ReadOnlySpan<byte> from = image;
-        // Rows run downward, so a counterclockwise angle in Core Image's y-up space points this way here.
-        double radians = angle * Math.PI / 180;
-        float dx = (float)Math.Cos(radians), dy = (float)-Math.Sin(radians);
-        for (int y = 0; y < height; y++)
-        {
-            int row = y * stride;
-            for (int x = 0; x < width; x++)
-            {
-                float red = 0, green = 0, blue = 0, alpha = 0;
-                for (int k = -half; k <= half; k++)
-                {
-                    float weight = weights[k + half];
-                    float sx = x + dx * k, sy = y + dy * k;
-                    int left = (int)MathF.Floor(sx), top = (int)MathF.Floor(sy);
-                    if (left >= 0 && top >= 0 && left + 1 < width && top + 1 < height)
-                    {
-                        // One neighborhood fetch for all four channels, the same arithmetic as Sample.
-                        float fx = sx - left, fy = sy - top;
-                        int p00 = top * stride + left * 4, p10 = p00 + 4;
-                        int p01 = p00 + stride, p11 = p01 + 4;
-                        red += weight * Blend(from[p00], from[p10], from[p01], from[p11], fx, fy);
-                        green += weight * Blend(from[p00 + 1], from[p10 + 1], from[p01 + 1], from[p11 + 1], fx, fy);
-                        blue += weight * Blend(from[p00 + 2], from[p10 + 2], from[p01 + 2], from[p11 + 2], fx, fy);
-                        alpha += weight * Blend(from[p00 + 3], from[p10 + 3], from[p01 + 3], from[p11 + 3], fx, fy);
-                        continue;
-                    }
-                    red += weight * Sample(from, width, height, stride, sx, sy, 0);
-                    green += weight * Sample(from, width, height, stride, sx, sy, 1);
-                    blue += weight * Sample(from, width, height, stride, sx, sy, 2);
-                    alpha += weight * Sample(from, width, height, stride, sx, sy, 3);
-                }
-                int p = row + x * 4;
-                rgba[p] = (byte)MathF.Min(255f, MathF.Max(0f, MathF.Round(red, MidpointRounding.AwayFromZero)));
-                rgba[p + 1] = (byte)MathF.Min(255f, MathF.Max(0f, MathF.Round(green, MidpointRounding.AwayFromZero)));
-                rgba[p + 2] = (byte)MathF.Min(255f, MathF.Max(0f, MathF.Round(blue, MidpointRounding.AwayFromZero)));
-                rgba[p + 3] = (byte)MathF.Min(255f, MathF.Max(0f, MathF.Round(alpha, MidpointRounding.AwayFromZero)));
-            }
-        }
-    }
-
-    /// <summary>Bilinear sample of one channel at a fractional pixel position, zero outside the buffer.</summary>
-    private static float Sample(ReadOnlySpan<byte> source, int width, int height, int stride,
-                                float x, float y, int channel)
-    {
-        int left = (int)MathF.Floor(x), top = (int)MathF.Floor(y);
-        float fx = x - left, fy = y - top;
-        return Blend(Fetch(source, width, height, stride, left, top, channel),
-                     Fetch(source, width, height, stride, left + 1, top, channel),
-                     Fetch(source, width, height, stride, left, top + 1, channel),
-                     Fetch(source, width, height, stride, left + 1, top + 1, channel), fx, fy);
-    }
-
-    private static float Blend(float topLeft, float topRight, float bottomLeft, float bottomRight, float fx, float fy)
-    {
-        float upper = topLeft + (topRight - topLeft) * fx;
-        float lower = bottomLeft + (bottomRight - bottomLeft) * fx;
-        return upper + (lower - upper) * fy;
-    }
-
-    private static float Fetch(ReadOnlySpan<byte> source, int width, int height, int stride, int x, int y, int channel)
-    {
-        if ((uint)x >= (uint)width || (uint)y >= (uint)height) return 0;
-        return source[y * stride + x * 4 + channel];
+        MotionPixels.Streak(image, rgba, width, height, stride, distance / Math.Sqrt(12.0), angle * Math.PI / 180);
     }
 
     // ---------------------------------------------------------------- Add Noise
