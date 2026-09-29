@@ -14,7 +14,9 @@ internal static class Program
     public static int Main(string[] args)
     {
         // Draws the canvas control straight to a PNG, so the interface can be checked without a window.
-        if (args is ["--render", var project, var output]) return Render(project, output);
+        // `--grid` turns the layout grid on for the render, which is how that drawing is checked.
+        if (args is ["--render", var project, var output]) return Render(project, output, showGrid: false);
+        if (args is ["--render", var gridProject, var gridOutput, "--grid"]) return Render(gridProject, gridOutput, showGrid: true);
         Build().StartWithClassicDesktopLifetime(args);
         return 0;
     }
@@ -22,7 +24,7 @@ internal static class Program
     public static AppBuilder Build() =>
         AppBuilder.Configure<DesktopApp>().UsePlatformDetect().WithInterFont().LogToTrace();
 
-    private static int Render(string project, string output)
+    private static int Render(string project, string output, bool showGrid)
     {
         Build().SetupWithoutStarting();
         using var document = project == "--demo" ? Demo() : ProjectStore.Load(project).ToDocument();
@@ -57,6 +59,7 @@ internal static class Program
         view.Measure(new Size(640, 480));
         view.Arrange(new Rect(0, 0, 640, 480));
         view.Document = document;
+        if (showGrid) view.Grid = new LayoutGrid();
         using var target = new RenderTargetBitmap(new PixelSize(640, 480));
         target.Render(view);
         target.Save(output, new PngBitmapEncoderOptions());
