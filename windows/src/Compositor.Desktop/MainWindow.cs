@@ -279,6 +279,7 @@ public sealed class MainWindow : Window
                     {
                         Command("_Hue/Saturation…", () => _ = ImageAdjustment(AdjustmentKind.HueSaturation)),
                         Command("_Levels…", () => _ = ImageAdjustment(AdjustmentKind.Levels)),
+                        Command("C_urves…", () => _ = ImageAdjustment(AdjustmentKind.Curves)),
                         Command("_Exposure…", () => _ = ImageAdjustment(AdjustmentKind.Exposure)),
                         Command("Black & _White…", () => _ = ImageAdjustment(AdjustmentKind.BlackWhite)),
                         Command("_Gradient Map…", () => _ = ImageAdjustment(AdjustmentKind.GradientMap)),
@@ -1202,9 +1203,7 @@ public sealed class MainWindow : Window
     }
 
     /// <summary>
-    /// The kinds of adjustment layer the Layer menu offers, and the settings verb beside it. Curves and
-    /// Gradient Map are left out for now: their editors are a curve and a ramp rather than a row of
-    /// amounts, and everything else is here.
+    /// The kinds of adjustment layer the Layer menu offers, and the settings verb beside it.
     /// </summary>
     private void BuildAdjustmentMenu()
     {
@@ -1212,6 +1211,7 @@ public sealed class MainWindow : Window
                  {
                      ("_Hue/Saturation", AdjustmentKind.HueSaturation),
                      ("_Levels", AdjustmentKind.Levels),
+                     ("C_urves", AdjustmentKind.Curves),
                      ("_Exposure", AdjustmentKind.Exposure),
                      ("_Black & White", AdjustmentKind.BlackWhite),
                      ("_Gradient Map", AdjustmentKind.GradientMap),

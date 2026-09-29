@@ -317,11 +317,21 @@ public static class AdjustmentOperators
         var tables = new float[768];
         for (int channel = 1; channel <= 3; channel++)
         {
-            var points = curves.Channels[channel];
             for (int i = 0; i < 256; i++)
-                tables[(channel - 1) * 256 + i] = (float)(CurveValue(points, CurveValue(curves.Channels[0], i)) / 255);
+                tables[(channel - 1) * 256 + i] = (float)(CurvesValue(curves, channel, i) / 255);
         }
         ApplyLookup(rgba, width, height, stride, tables);
+    }
+
+    /// <summary>
+    /// The value one channel takes for an input: the master curve first and then that channel's own, which is
+    /// the same two steps in the same order the operator applies to every pixel. The panel draws this, so what
+    /// it shows is what the pixels get. The master is asked for the master's own answer, not bent by itself.
+    /// </summary>
+    public static double CurvesValue(CurvesSettings curves, int channel, double x)
+    {
+        var master = CurveValue(curves.Channels[0], x);
+        return channel == 0 ? master : CurveValue(curves.Channels[channel], master);
     }
 
     /// <summary>

@@ -18,6 +18,7 @@ internal sealed class AdjustmentDialog : Window
     private readonly List<double> _fallbacks = [];
     private readonly List<(CheckBox Box, Action<LayerAdjustment, bool> Set, bool Fallback)> _boxes = [];
     private readonly ComboBox? _range;
+    private CurveEditor? _curve;
     private readonly ComboBox? _levelsChannel;
     private LayerAdjustment? _result;
 
@@ -74,6 +75,20 @@ internal sealed class AdjustmentDialog : Window
                 Add(group, "Size", 0.5, 20, start.Grain.Size, 1.5, (s, v) => s.GrainSettings = Grain(s, size: v), "0.0");
                 Add(group, "Roughness", 0, 100, start.Grain.Roughness, 50, (s, v) => s.GrainSettings = Grain(s, roughness: v));
                 break;
+            case AdjustmentKind.Curves:
+            {
+                var channel = new ComboBox
+                {
+                    ItemsSource = new[] { "RGB", "Red", "Green", "Blue" },
+                    SelectedIndex = Math.Clamp((int)start.Curves.Channel, 0, 3),
+                    Width = 120,
+                };
+                group.Children.Add(Row("Channel", channel));
+                _curve = new CurveEditor { Curves = Clone(start.Curves), Channel = channel.SelectedIndex, Height = 260 };
+                channel.SelectionChanged += (_, _) => _curve.Channel = Math.Max(0, channel.SelectedIndex);
+                group.Children.Add(_curve);
+                break;
+            }
             case AdjustmentKind.GradientMap:
                 Add(group, "Darkest: red", 0, 1, start.GradientMap.Shadows.Red, 0, (s, v) => s.GradientMapSettings = Map(s, shadowRed: v), "0.00");
                 Add(group, "Darkest: green", 0, 1, start.GradientMap.Shadows.Green, 0, (s, v) => s.GradientMapSettings = Map(s, shadowGreen: v), "0.00");
@@ -301,7 +316,18 @@ internal sealed class AdjustmentDialog : Window
         foreach (var (box, _, fallback) in _boxes) box.IsChecked = fallback;
         if (_range is not null) _range.SelectedIndex = HueBand.Ranges.IndexOf(ColorRange.Master);
         if (_levelsChannel is not null) _levelsChannel.SelectedIndex = (int)fresh.Levels.Channel;
+        if (_curve is not null) _curve.Curves = Clone(fresh.Curves);
     }
+
+    /// <summary>
+    /// The layer's curves copied, so dragging a handle does not reach the layer until Apply: the editor writes
+    /// into the copy it is given, and a history snapshot holds the record it started from.
+    /// </summary>
+    private static CurvesSettings Clone(CurvesSettings curves) => new()
+    {
+        Channel = curves.Channel,
+        Channels = curves.Channels.Select(points => points.Select(point => new CurvePoint { X = point.X, Y = point.Y }).ToList()).ToList(),
+    };
 
     /// <summary>A copy of the layer's levels, so the panel's changes do not reach the layer until Apply.</summary>
     private static LevelsSettings Levels(LayerAdjustment settings)
@@ -347,6 +373,7 @@ internal sealed class AdjustmentDialog : Window
             NoiseMonochromatic = start.NoiseMonochromatic,
             NoiseSeed = start.NoiseSeed,
         };
+        if (_curve is { } curve) settings.Curves = curve.Curves;
         foreach (var (slider, set) in _rows) set(settings, slider.Value);
         foreach (var (box, set, _) in _boxes) set(settings, box.IsChecked == true);
         // The rows build the range-aware settings from the layer's own, so the range goes on afterwards.
