@@ -28,6 +28,7 @@ internal static class Program
                 "render" => Render(args),
                 "save" => Save(args),
                 "import" => Import(args),
+                "new" => New(args),
                 "crop" => Crop(args),
                 "guide" => Guide(args),
                 "distort" => Distort(args),
@@ -58,6 +59,7 @@ internal static class Program
           render <project.comp> <out.png>     flatten it to a PNG
           save   <project.comp> <out.comp>    read it and write it back
           import <image> <out.comp>           start a project from one image
+          new    <out.comp> w h [dpi]         start a blank project, with one empty layer
           crop   <in> <out> x y w h           crop the canvas to a rectangle
           guide  <in> <out> h|v <position>    add a guide; - means take them all away
           distort <in> <out> <layer> x1 y1 x2 y2 x3 y3 x4 y4
@@ -372,6 +374,30 @@ internal static class Program
             (args.Length == 11
                 ? $" inside {numbers[2]}x{numbers[3]} at {numbers[0]},{numbers[1]})"
                 : ")"));
+        return 0;
+    }
+
+    private static int New(string[] args)
+    {
+        if (args.Length is not (4 or 5)) return Fail("new needs an output and a size, and a resolution if you want one.");
+        if (!int.TryParse(args[2], out var width) || !int.TryParse(args[3], out var height))
+        {
+            return Fail("A canvas size is two whole numbers of pixels.");
+        }
+        var resolution = 72.0;
+        if (args.Length == 5 && !double.TryParse(args[4], out resolution))
+        {
+            return Fail("The resolution is a number of pixels per inch.");
+        }
+        using var document = LayerPlacement.NewDocument(width, height, resolution);
+        if (document is null)
+        {
+            return Fail($"A canvas is at least one pixel each way, at most {DocumentLimits.MaxSide} a side, " +
+                $"and holds at most {DocumentLimits.MaxSurfaceMegapixels} megapixels.");
+        }
+        ProjectStore.Save(ProjectSnapshot.FromDocument(document), args[1]);
+        Console.WriteLine($"wrote {args[1]} ({document.Width}x{document.Height} at {document.Resolution:0.##} per inch, " +
+            $"{document.Layers.Count} empty layer)");
         return 0;
     }
 

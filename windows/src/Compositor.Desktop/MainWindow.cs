@@ -293,6 +293,7 @@ public sealed class MainWindow : Window
                     Header = "_File",
                     Items =
                     {
+                        Command("_New Project…", () => _ = NewProject(), "Ctrl+N"),
                         Command("_Open project folder…", OpenProject),
                         _recentMenu,
                         Command("_Import image…", () => _ = ImportImage()),
@@ -640,6 +641,47 @@ public sealed class MainWindow : Window
         ShowLayers(_document);
         Say($"{Path.GetFileName(path)} — {_document.Width} by {_document.Height}, " +
             $"{_document.Layers.Count} layers, {_document.Resolution:0} pixels per inch");
+    }
+
+    /// <summary>
+    /// File ▸ New: a blank canvas of the size asked for, with one empty layer over it. What was open is closed
+    /// with it — a document that has been changed and not saved asks first, as a window would.
+    /// </summary>
+    private async Task NewProject()
+    {
+        if (!await MayReplace()) return;
+        if (await NewDocumentDialog.Ask(this) is not { } asked) return;
+        var made = LayerPlacement.NewDocument(asked.Width, asked.Height, asked.Resolution);
+        if (made is null)
+        {
+            Say("That size is too large for a canvas");
+            return;
+        }
+        _document?.Dispose();
+        _document = made;
+        _canvas.Document = _document;
+        _projectPath = null;
+        // Nothing is saved yet, so there is no folder to watch.
+        WatchProject();
+        _history.Reset();
+        ShowLayers(_document);
+        if (_document.Layers.Count > 0) Reselect(_document.Layers[^1].ID);
+        Refresh();
+        Say($"New {_document.Width} by {_document.Height} canvas at {_document.Resolution:0.##} per inch, not saved yet");
+    }
+
+    /// <summary>
+    /// Whether the document that is open may be thrown away for something else. It may when it holds nothing
+    /// that was not saved; otherwise the person is asked, and only a yes lets it go.
+    /// </summary>
+    private async Task<bool> MayReplace()
+    {
+        if (_document is null || !_history.IsModified) return true;
+        var named = _projectPath is { } path
+            ? $"{Path.GetFileName(path)} has been changed since it was last saved."
+            : "This project has not been saved.";
+        return await ConfirmDialog.Ask(this, "Discard unsaved changes?",
+            $"{named} Anything not saved is lost.", "Discard", "Keep");
     }
 
     /// <summary>The layer the panel has selected, or the top one when nothing is: what an edit acts on.</summary>

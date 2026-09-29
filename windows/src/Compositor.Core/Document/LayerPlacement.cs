@@ -31,6 +31,21 @@ public static class LayerPlacement
         return layer.ID;
     }
 
+    /// <summary>
+    /// A new document: a blank canvas of that size with one empty layer over it, which is what File ▸ New
+    /// makes. The layer is empty rather than filled, so it paints on from nothing as the Mac build's does.
+    /// Null when the size is not one a document may be.
+    /// </summary>
+    public static CanvasDocument? NewDocument(int width, int height, double resolution = 72)
+    {
+        if (width < 1 || height < 1 || width > DocumentLimits.MaxSide || height > DocumentLimits.MaxSide) return null;
+        if ((long)width * height > DocumentLimits.MaxSurfacePixels) return null;
+        var document = new CanvasDocument(Guid.NewGuid(), width, height, resolution);
+        document.Layers.Add(new ImageLayer(Guid.NewGuid(), null,
+            new Model.LayerTransform(0, 0, width, height), "Layer 1"));
+        return document;
+    }
+
     /// <summary>A new empty folder above the selected layer, in the folder that one is in.</summary>
     public static Guid? AddFolder(CanvasDocument document, Guid? activeID)
     {
