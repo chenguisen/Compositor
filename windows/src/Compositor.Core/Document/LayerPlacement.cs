@@ -45,6 +45,40 @@ public static class LayerPlacement
     }
 
     /// <summary>
+    /// A new adjustment layer above the selected one, in the folder that one is in. It holds no pixels: what
+    /// it does is run its adjustment over everything under it, so it covers the whole canvas.
+    /// </summary>
+    public static Guid? AddAdjustment(CanvasDocument document, AdjustmentKind kind, Guid? activeID)
+    {
+        if (document.Layers.Count >= MaxLayers) return null;
+        var active = Active(document, activeID);
+        var layer = new ImageLayer(Guid.NewGuid(), null, WholeCanvas(document), FreeName(document, Name(kind)))
+        {
+            ParentID = active is { IsGroup: true } ? active.ID : active?.ParentID,
+            Adjustment = new LayerAdjustment { Kind = kind },
+        };
+        document.Layers.Insert(Above(document, active), layer);
+        return layer.ID;
+    }
+
+    /// <summary>What that kind of adjustment layer is called, as the Filter and Image menus name it.</summary>
+    public static string Name(AdjustmentKind kind) => kind switch
+    {
+        AdjustmentKind.HueSaturation => "Hue/Saturation",
+        AdjustmentKind.Levels => "Levels",
+        AdjustmentKind.Curves => "Curves",
+        AdjustmentKind.Exposure => "Exposure",
+        AdjustmentKind.GradientMap => "Gradient Map",
+        AdjustmentKind.Grain => "Grain",
+        AdjustmentKind.AddNoise => "Add Noise",
+        AdjustmentKind.GaussianBlur => "Gaussian Blur",
+        AdjustmentKind.MotionBlur => "Motion Blur",
+        AdjustmentKind.Invert => "Invert",
+        AdjustmentKind.BlackWhite => "Black & White",
+        _ => "Color Balance",
+    };
+
+    /// <summary>
     /// Wraps the given layers in a new folder, as the Mac build does it: a selected folder brings its whole
     /// subtree, and a layer inside a selected folder is not pulled out of it as well. The folder takes the
     /// place the topmost of them had, inside the folder they had in common.

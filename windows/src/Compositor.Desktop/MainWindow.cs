@@ -35,6 +35,8 @@ public sealed class MainWindow : Window
 
     /// <summary>The clipping, mask and visibility rows, whose names and availability follow the selection.</summary>
     private readonly MenuItem _visibility = new();
+    private readonly MenuItem _adjustmentMenu = new() { Header = "New _Adjustment Layer" };
+    private MenuItem _adjustmentSettings = new();
     private readonly MenuItem _clipping = new() { HotKey = new KeyGesture(Key.G, KeyModifiers.Control | KeyModifiers.Alt) };
     private readonly MenuItem _addMask = new() { Header = "Add _Mask" };
     private readonly MenuItem _maskToggle = new();
@@ -156,6 +158,7 @@ public sealed class MainWindow : Window
         BuildCropRatios();
         BuildShapeKinds();
         BuildGradientMenu();
+        BuildAdjustmentMenu();
         _canvas.TextClicked = TypeHere;
         _canvas.TextTyped = TypedText;
         _canvas.TextBackspaced = BackspacedText;
@@ -244,6 +247,8 @@ public sealed class MainWindow : Window
                             new KeyGesture(Key.N, KeyModifiers.Control | KeyModifiers.Shift)),
                         LayerCommand("New F_older", NewFolder, null,
                             (document, _) => document.Layers.Count < LayerPlacement.MaxLayers),
+                        _adjustmentMenu,
+                        _adjustmentSettings,
                         new Separator(),
                         _visibility,
                     },
@@ -1056,6 +1061,61 @@ public sealed class MainWindow : Window
         }
         Reselect(id);
         Say("Content-Aware Fill applied");
+    }
+
+    /// <summary>
+    /// The kinds of adjustment layer the Layer menu offers, and the settings verb beside it. Curves and
+    /// Gradient Map are left out for now: their editors are a curve and a ramp rather than a row of
+    /// amounts, and everything else is here.
+    /// </summary>
+    private void BuildAdjustmentMenu()
+    {
+        foreach (var (label, kind) in new (string Label, AdjustmentKind Kind)[]
+                 {
+                     ("_Hue/Saturation", AdjustmentKind.HueSaturation),
+                     ("_Levels", AdjustmentKind.Levels),
+                     ("_Exposure", AdjustmentKind.Exposure),
+                     ("_Black & White", AdjustmentKind.BlackWhite),
+                     ("_Grain", AdjustmentKind.Grain),
+                     ("_Add Noise", AdjustmentKind.AddNoise),
+                     ("_Gaussian Blur", AdjustmentKind.GaussianBlur),
+                     ("_Motion Blur", AdjustmentKind.MotionBlur),
+                     ("C_olor Balance", AdjustmentKind.ColorBalance),
+                     ("_Invert", AdjustmentKind.Invert),
+                 })
+        {
+            _adjustmentMenu.Items.Add(Command(label, () => _ = NewAdjustment(kind)));
+        }
+        _adjustmentSettings = LayerCommand("Adjustment _Settings…", () => _ = EditAdjustment(), null,
+            (_, layer) => layer.Adjustment is not null);
+    }
+
+    /// <summary>A new adjustment layer over the selected one, with its settings asked for straight away.</summary>
+    private async Task NewAdjustment(AdjustmentKind kind)
+    {
+        if (_document is not { } document) return;
+        _history.Begin("New Adjustment Layer", document, Selected);
+        var made = LayerPlacement.AddAdjustment(document, kind, Selected);
+        _history.End(document, Selected);
+        if (made is null)
+        {
+            Say("This document already holds as many layers as it may.");
+            return;
+        }
+        Reselect(made);
+        await EditAdjustment();
+    }
+
+    /// <summary>The selected adjustment layer's settings, changed and put back as one undo step.</summary>
+    private async Task EditAdjustment()
+    {
+        if (_document is not { } document || Selected is not { } id) return;
+        if (LayerAdjustmentEdits.Settings(document, id) is not { } settings) return;
+        if (await AdjustmentDialog.Ask(this, settings) is not { } changed) return;
+        if (_document is not { } current) return;
+        Edit($"{LayerPlacement.Name(changed.Kind)} Adjustment", () => LayerAdjustmentEdits.Set(current, id, changed));
+        Reselect(id);
+        Say($"{LayerPlacement.Name(changed.Kind)} adjustment set");
     }
 
     /// <summary>The ratios the Crop tool offers, as the Mac build's ratio menu does.</summary>
