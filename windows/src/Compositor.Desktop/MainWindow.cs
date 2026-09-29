@@ -23,13 +23,14 @@ namespace Compositor.Desktop;
 public sealed class MainWindow : Window
 {
     private static readonly IBrush Panel = new SolidColorBrush(Color.FromRgb(0x22, 0x24, 0x28));
+    /// <summary>The tab in front, marked: a lighter panel than the strip it sits on.</summary>
+    private static readonly IBrush Accent = new SolidColorBrush(Color.FromRgb(0x3A, 0x3E, 0x46));
     private static readonly IBrush Ink = new SolidColorBrush(Color.FromRgb(0xE6, 0xE8, 0xEB));
 
     private readonly CanvasView _canvas = new();
     /// <summary>The layers panel: several rows may be selected, and the current row is the one an edit acts on.</summary>
     private readonly ListBox _layers = new() { SelectionMode = Avalonia.Controls.SelectionMode.Multiple };
     private readonly TextBlock _status = new() { Margin = new Thickness(10, 3, 10, 3), Foreground = Ink };
-    private readonly DocumentHistory _history = new();
 
     /// <summary>One row, because what ⌘E does depends on the panel selection: it is named for it here.</summary>
     private readonly MenuItem _merge = new() { HotKey = new KeyGesture(Key.E, KeyModifiers.Control) };
@@ -144,18 +145,61 @@ public sealed class MainWindow : Window
     private bool _erasing;
     private readonly List<(MenuItem Item, Func<CanvasDocument, ImageLayer, bool> Ready)> _layerRows = [];
 
-    /// <summary>Owns the pixels: the document's layers reference the snapshot's images, so the document
-    /// disposes them and the snapshot is dropped rather than disposed.</summary>
-    private CanvasDocument? _document;
+    /// <summary>
+    /// One open project: everything that belongs to a document rather than to the window. There is always a
+    /// tab, even before anything is open — the empty one is where the next project goes — so the five names
+    /// below always have something to answer for.
+    /// </summary>
+    private sealed class Tab
+    {
+        /// <summary>Owns the pixels: the document's layers reference the snapshot's images, so the document
+        /// disposes them and the snapshot is dropped rather than disposed.</summary>
+        public CanvasDocument? Document { get; set; }
 
-    /// <summary>The layer behind each row of the panel, so a selection can be turned back into an id.</summary>
-    private readonly List<Guid> _rows = [];
+        public DocumentHistory History { get; } = new();
 
-    /// <summary>Where this project was opened from, so Save writes back to it.</summary>
-    private string? _projectPath;
-    /// <summary>The project's folder watched for someone else writing it, and the timer that asks about it.</summary>
-    private ProjectWatch? _watch;
+        /// <summary>Where this project was opened from, so Save writes back to it.</summary>
+        public string? Path { get; set; }
+
+        /// <summary>The project's folder watched for someone else writing it.</summary>
+        public ProjectWatch? Watch { get; set; }
+
+        /// <summary>The layer behind each row of the panel, so a selection can be turned back into an id.</summary>
+        public List<Guid> Rows { get; } = [];
+
+        /// <summary>Which row the panel had selected, so a tab comes back the way it was left.</summary>
+        public int SelectedRow { get; set; }
+
+        /// <summary>What the tab is called: the project's name, or what it is until it is saved.</summary>
+        public string Name => Path is { } path ? System.IO.Path.GetFileName(path) : "Untitled";
+    }
+
+    private readonly List<Tab> _tabs = [];
+    private Tab _open = new();
     private DispatcherTimer? _watchTimer;
+    private readonly StackPanel _tabStrip = new() { Orientation = Orientation.Horizontal, Spacing = 4 };
+
+    private CanvasDocument? _document
+    {
+        get => _open.Document;
+        set => _open.Document = value;
+    }
+
+    private DocumentHistory _history => _open.History;
+
+    private List<Guid> _rows => _open.Rows;
+
+    private string? _projectPath
+    {
+        get => _open.Path;
+        set => _open.Path = value;
+    }
+
+    private ProjectWatch? _watch
+    {
+        get => _open.Watch;
+        set => _open.Watch = value;
+    }
 
     /// <summary>Which pointer tool is in hand, and the menu rows that show it.</summary>
     private enum Tool
@@ -277,9 +321,11 @@ public sealed class MainWindow : Window
         _addMask.Items.Add(Command("_Reveal All (White)", () => AddMask(revealing: true)));
         _addMask.Items.Add(Command("_Hide All (Black)", () => AddMask(revealing: false)));
         _layers.SelectionChanged += (_, _) => UpdateLayerMenu();
+        _tabs.Add(_open);
         Content = Layout();
+        RefreshTabs();
         UpdateLayerMenu();
-        Say("File ▸ Open project folder… to load a .comp");
+        Say("File ▸ New Project… for a blank canvas, or File ▸ Open project folder… to load a .comp");
     }
 
     private Control Layout()
@@ -303,6 +349,7 @@ public sealed class MainWindow : Window
                         Command("_Export PNG…", ExportPng),
                         Command("Export _JPEG…", () => _ = ExportJpeg()),
                         new Separator(),
+                        Command("_Close Tab", () => _ = CloseTab(_open), "Ctrl+W"),
                         Command("E_xit", Close),
                     },
                 },
@@ -538,10 +585,18 @@ public sealed class MainWindow : Window
         var statusBar = new Border { Height = 28, Background = Panel, Child = _status };
 
         var root = new DockPanel();
+        var tabs = new Border
+        {
+            Background = Panel,
+            Padding = new Thickness(8, 4, 8, 4),
+            Child = _tabStrip,
+        };
         DockPanel.SetDock(menu, Dock.Top);
+        DockPanel.SetDock(tabs, Dock.Top);
         DockPanel.SetDock(side, Dock.Right);
         DockPanel.SetDock(statusBar, Dock.Bottom);
         root.Children.Add(menu);
+        root.Children.Add(tabs);
         root.Children.Add(side);
         root.Children.Add(statusBar);
         root.Children.Add(Views());
@@ -629,18 +684,137 @@ public sealed class MainWindow : Window
     private void Open(string path)
     {
         var snapshot = ProjectStore.Load(path);
+        // Into an empty tab when there is one and a tab of its own otherwise: an open project is not thrown
+        // away by opening another, as the Mac build keeps one open per tab.
+        _open = TabForNew();
         _document?.Dispose();
         // ToDocument takes the pixel references, so the document owns them from here on.
         _document = snapshot.ToDocument();
-        _canvas.Document = _document;
         _projectPath = path;
-        WatchProject();
-        NoteRecent(path);
-        // A fresh document starts with clean history, as reopening a file does.
+        // A fresh project starts with clean history, as opening a file does.
         _history.Reset();
-        ShowLayers(_document);
-        Say($"{Path.GetFileName(path)} — {_document.Width} by {_document.Height}, " +
+        NoteRecent(path);
+        Show(_open);
+        Say($"{System.IO.Path.GetFileName(path)} — {_document.Width} by {_document.Height}, " +
             $"{_document.Layers.Count} layers, {_document.Resolution:0} pixels per inch");
+    }
+
+    /// <summary>
+    /// The tab the next project goes into: the empty one when the tab in front holds nothing, and a new one
+    /// otherwise. It is put in front, and the caller fills it in.
+    /// </summary>
+    private Tab TabForNew()
+    {
+        if (_open.Document is not null)
+        {
+            var made = new Tab();
+            _tabs.Insert(_tabs.IndexOf(_open) + 1, made);
+            _open = made;
+        }
+        return _open;
+    }
+
+    /// <summary>
+    /// The tab brought in front: the canvas and the panel are given what it holds, and its folder is watched
+    /// again. Whatever was half-done in the tab being left — a preview, a draft outline, a drag, a typing
+    /// session — belongs to that tab, so it is let go rather than carried over.
+    /// </summary>
+    private void Bring(Tab tab)
+    {
+        if (!ReferenceEquals(tab, _open))
+        {
+            _open.SelectedRow = _layers.SelectedIndex;
+            StopPreview();
+            _canvas.CancelDraft();
+            if (_text is not null) CancelText();
+            _transforming = null;
+            _transformBox = null;
+            _transformOriginals.Clear();
+            _cropFrame = null;
+            _open = tab;
+        }
+        Show(tab);
+    }
+
+    /// <summary>The tab laid out: its document on the canvas, its layers in the panel, its folder watched.</summary>
+    private void Show(Tab tab)
+    {
+        _canvas.Document = tab.Document;
+        if (tab.Document is not null)
+        {
+            ShowLayers(tab.Document);
+            _layers.SelectedIndex = tab.SelectedRow >= 0 && tab.SelectedRow < _rows.Count
+                ? tab.SelectedRow
+                : _rows.Count > 0 ? 0 : -1;
+        }
+        else
+        {
+            _rows.Clear();
+            _layers.ItemsSource = new List<ListBoxItem>();
+            _layers.SelectedIndex = -1;
+        }
+        WatchProject();
+        ShowTransformBox();
+        ShowCropBox();
+        ShowTextCaret();
+        RefreshTabs();
+        Refresh();
+    }
+
+    /// <summary>
+    /// A tab closed: it is asked about first when it holds work that was not saved, the document it owns is
+    /// let go, and the tab beside it comes in front. The last tab is not closed — an empty one takes its place,
+    /// so there is always somewhere for the next project to go.
+    /// </summary>
+    private async Task CloseTab(Tab tab)
+    {
+        if (!await MayReplace(tab)) return;
+        var at = _tabs.IndexOf(tab);
+        if (at < 0) return;
+        var wasOpen = ReferenceEquals(tab, _open);
+        _tabs.RemoveAt(at);
+        if (_tabs.Count == 0) _tabs.Add(new Tab());
+        tab.Document?.Dispose();
+        var next = _tabs[Math.Min(at, _tabs.Count - 1)];
+        if (wasOpen)
+        {
+            // Nothing is kept from a tab that has just been closed.
+            _open = next;
+            Show(next);
+        }
+        else
+        {
+            RefreshTabs();
+        }
+        Say($"{tab.Name} closed");
+    }
+
+    /// <summary>The tab strip: a button a tab, the one in front marked, and a way to start another.</summary>
+    private void RefreshTabs()
+    {
+        _tabStrip.Children.Clear();
+        foreach (var tab in _tabs)
+        {
+            var name = new Button { Content = tab.Name, Tag = tab };
+            name.Click += (_, _) => Bring(tab);
+            var close = new Button { Content = "×", Padding = new Thickness(4, 0, 4, 0), Tag = tab };
+            close.Click += (_, _) => _ = CloseTab(tab);
+            _tabStrip.Children.Add(new Border
+            {
+                Background = ReferenceEquals(tab, _open) ? Accent : Brushes.Transparent,
+                CornerRadius = new CornerRadius(4),
+                Padding = new Thickness(4, 0, 4, 0),
+                Child = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 2,
+                    Children = { name, close },
+                },
+            });
+        }
+        var add = new Button { Content = "+", Padding = new Thickness(8, 0, 8, 0) };
+        add.Click += (_, _) => _ = NewProject();
+        _tabStrip.Children.Add(add);
     }
 
     /// <summary>
@@ -649,7 +823,6 @@ public sealed class MainWindow : Window
     /// </summary>
     private async Task NewProject()
     {
-        if (!await MayReplace()) return;
         if (await NewDocumentDialog.Ask(this) is not { } asked) return;
         var made = LayerPlacement.NewDocument(asked.Width, asked.Height, asked.Resolution);
         if (made is null)
@@ -657,16 +830,12 @@ public sealed class MainWindow : Window
             Say("That size is too large for a canvas");
             return;
         }
-        _document?.Dispose();
+        _open = TabForNew();
         _document = made;
-        _canvas.Document = _document;
         _projectPath = null;
-        // Nothing is saved yet, so there is no folder to watch.
-        WatchProject();
         _history.Reset();
-        ShowLayers(_document);
+        Show(_open);
         if (_document.Layers.Count > 0) Reselect(_document.Layers[^1].ID);
-        Refresh();
         Say($"New {_document.Width} by {_document.Height} canvas at {_document.Resolution:0.##} per inch, not saved yet");
     }
 
@@ -674,11 +843,12 @@ public sealed class MainWindow : Window
     /// Whether the document that is open may be thrown away for something else. It may when it holds nothing
     /// that was not saved; otherwise the person is asked, and only a yes lets it go.
     /// </summary>
-    private async Task<bool> MayReplace()
+    private async Task<bool> MayReplace(Tab? tab = null)
     {
-        if (_document is null || !_history.IsModified) return true;
-        var named = _projectPath is { } path
-            ? $"{Path.GetFileName(path)} has been changed since it was last saved."
+        var which = tab ?? _open;
+        if (which.Document is null || !which.History.IsModified) return true;
+        var named = which.Path is { } path
+            ? $"{System.IO.Path.GetFileName(path)} has been changed since it was last saved."
             : "This project has not been saved.";
         return await ConfirmDialog.Ask(this, "Discard unsaved changes?",
             $"{named} Anything not saved is lost.", "Discard", "Keep");
@@ -1925,7 +2095,7 @@ public sealed class MainWindow : Window
     /// </summary>
     private void WatchProject()
     {
-        _watch = ProjectWatch.For(_projectPath);
+        _watch ??= ProjectWatch.For(_projectPath);
         if (_watch is null)
         {
             _watchTimer?.Stop();
@@ -3006,6 +3176,7 @@ public sealed class MainWindow : Window
             }
             WriteTo(document, path);
             _projectPath = path;
+            RefreshTabs();
         }
         catch (Exception error)
         {
@@ -3022,6 +3193,7 @@ public sealed class MainWindow : Window
             _history.MarkSaved();
             // A save is the app's own writing, so the watch takes what is on disk now as what it holds: the
             // folder is only worth watching for what someone else writes afterwards.
+            _watch = ProjectWatch.For(path);
             WatchProject();
             NoteRecent(path);
             Refresh();

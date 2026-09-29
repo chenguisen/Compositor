@@ -1,4 +1,5 @@
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Media.Imaging;
 using Compositor.Core.Document;
 using Compositor.Core.Format;
@@ -47,7 +48,31 @@ internal static class Program
         {
             return Rulers(rulerOutput, double.Parse(rulerScale), double.Parse(rulerOrigin));
         }
+        // `--window` builds the whole window and draws it, which is the only way to check the parts that are
+        // not the canvas — the menus, the tab strip and the panel — without a display to click them on.
+        if (args is ["--window", var windowOutput]) return Window(windowOutput);
         Build().StartWithClassicDesktopLifetime(args);
+        return 0;
+    }
+
+    /// <summary>
+    /// The window itself, built and drawn to a PNG. It is a smoke test rather than a picture of anything: what
+    /// it proves is that the window's construction runs — every menu row, the tab strip and the layer panel.
+    /// </summary>
+    private static int Window(string output)
+    {
+        Build().SetupWithoutStarting();
+        var window = new MainWindow();
+        // A window's own content is not laid out without a platform window, so what is measured, arranged and
+        // drawn is that content — which is the whole interface: the menus, the tab strip and the panel.
+        var content = (Control)window.Content!;
+        content.Measure(new Size(1280, 820));
+        content.Arrange(new Rect(0, 0, 1280, 820));
+        content.UpdateLayout();
+        using var target = new RenderTargetBitmap(new PixelSize(1280, 820));
+        target.Render(content);
+        target.Save(output, new PngBitmapEncoderOptions());
+        Console.WriteLine($"wrote {output}: the window built and drew");
         return 0;
     }
 
