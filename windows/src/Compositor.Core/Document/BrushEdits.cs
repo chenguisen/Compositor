@@ -52,7 +52,9 @@ public sealed record BrushSettings(
     /// <summary>The Clone Stamp reads every visible layer as shown, rather than the active layer alone.</summary>
     bool CloneAllLayers = false,
     /// <summary>How a Spot Healing stroke rebuilds the area.</summary>
-    HealingMode Healing = HealingMode.ContentAware);
+    HealingMode Healing = HealingMode.ContentAware,
+    /// <summary>The grain Spot Healing adds when it fills smoothly. Zero picks a new pattern each stroke.</summary>
+    uint Seed = 0);
 
 /// <summary>
 /// Painting a stroke into a layer's own pixels. Mouse samples arrive in document coordinates, so they are
@@ -183,10 +185,104 @@ public static class BrushEdits
             using var source = SKImage.FromBitmap(asset.Image);
             canvas.DrawImage(source, SKRect.Create(0, 0, width, height), new SKSamplingOptions(SKFilterMode.Nearest), paint);
         }
-        if (sample is null) Apply(painted, coverage, settings);
-        else ApplySampled(painted, coverage, settings, sample, toDocument);
+        var paintedNow = sample is not null
+            ? ApplySampled(painted, coverage, settings, sample, toDocument)
+            : settings.Mode == BrushMode.Heal ? Heal(painted, coverage, settings) : Apply(painted, coverage, settings);
+        if (!paintedNow)
+        {
+            painted.Dispose();
+            return false;
+        }
         layer.Asset = ImportedImage.Create(painted, asset.Name);
         return true;
+    }
+
+    /// <summary>
+    /// Spot Healing: the area the stroke covered is rebuilt from what surrounds it, by the ported kernel,
+    /// in one go. The Mac build shows a dark wash while the stroke is being drawn and does this when it
+    /// ends; this port does the same work without the wash, so the picture changes on release.
+    /// </summary>
+    private static bool Heal(SKBitmap painted, float[] coverage, BrushSettings settings)
+    {
+        var width = painted.Width;
+        var height = painted.Height;
+        var bounds = new int[4];
+        CoverageBounds(coverage, width, height, bounds);
+        if (bounds[2] <= bounds[0] || bounds[3] <= bounds[1]) return true;
+
+        // Room for the kernel's patch search, which looks up to about three spot-widths away.
+        var portrait = Math.Max(bounds[2] - bounds[0], bounds[3] - bounds[1]);
+        var reach = (int)Math.Ceiling((portrait + 32) * 3.2);
+        var left = Math.Max(0, bounds[0] - reach);
+        var top = Math.Max(0, bounds[1] - reach);
+        var right = Math.Min(width, bounds[2] + reach);
+        var bottom = Math.Min(height, bounds[3] + reach);
+        var w = right - left;
+        var h = bottom - top;
+        if (w <= 0 || h <= 0) return true;
+
+        // The kernel works on premultiplied pixels, which is what a render is held in; a layer's own
+        // pixels are straight, so the region is premultiplied on the way in and unpremultiplied on the way
+        // back out.
+        var room = new byte[w * h * 4];
+        var gray = new byte[w * h];
+        var pixels = painted.GetPixelSpan();
+        for (var y = 0; y < h; y++)
+        {
+            for (var x = 0; x < w; x++)
+            {
+                var from = (top + y) * painted.RowBytes + (left + x) * 4;
+                var to = (y * w + x) * 4;
+                var alpha = pixels[from + 3];
+                for (var channel = 0; channel < 3; channel++)
+                {
+                    room[to + channel] = (byte)((pixels[from + channel] * alpha + 127) / 255);
+                }
+                room[to + 3] = alpha;
+                gray[y * w + x] = (byte)Math.Clamp(Math.Round(coverage[(top + y) * width + left + x] * 255), 0, 255);
+            }
+        }
+
+        var seed = settings.Seed != 0 ? settings.Seed : (uint)Random.Shared.Next(1, int.MaxValue);
+        var mode = (int)settings.Healing;
+        if (HealPixels.SpotHeal(room, gray, w, h, w * 4, (float)settings.Opacity, mode, seed) != 0) return false;
+
+        for (var y = 0; y < h; y++)
+        {
+            for (var x = 0; x < w; x++)
+            {
+                var from = (y * w + x) * 4;
+                var to = (top + y) * painted.RowBytes + (left + x) * 4;
+                var alpha = room[from + 3];
+                for (var channel = 0; channel < 3; channel++)
+                {
+                    pixels[to + channel] = alpha == 0 ? (byte)0 : (byte)Math.Min(255, (room[from + channel] * 255 + alpha / 2) / alpha);
+                }
+                pixels[to + 3] = alpha;
+            }
+        }
+        return true;
+    }
+
+    /// <summary>Half-open bounds of the pixels a stroke covered, written as x0, y0, x1, y1.</summary>
+    private static void CoverageBounds(float[] coverage, int width, int height, int[] bounds)
+    {
+        int left = width, top = height, right = 0, bottom = 0;
+        for (var y = 0; y < height; y++)
+        {
+            for (var x = 0; x < width; x++)
+            {
+                if (coverage[y * width + x] <= 0) continue;
+                if (x < left) left = x;
+                if (x + 1 > right) right = x + 1;
+                if (y < top) top = y;
+                if (y + 1 > bottom) bottom = y + 1;
+            }
+        }
+        bounds[0] = left;
+        bounds[1] = top;
+        bounds[2] = right;
+        bounds[3] = bottom;
     }
 
     /// <summary>
@@ -240,7 +336,7 @@ public static class BrushEdits
     /// from there, and the sample's own alpha scales the dab — so a transparent part of the sample leaves
     /// the layer as it was, as drawing it would.
     /// </summary>
-    private static void ApplySampled(SKBitmap painted, float[] coverage, BrushSettings settings, SKBitmap sample,
+    private static bool ApplySampled(SKBitmap painted, float[] coverage, BrushSettings settings, SKBitmap sample,
         SKMatrix toDocument)
     {
         var offset = settings.CloneFrom ?? default;
@@ -268,6 +364,7 @@ public static class BrushEdits
                 Blend(destination, index * 4, alpha, red, green, blue);
             }
         }
+        return true;
     }
 
     /// <summary>Straight (unpremultiplied) source-over, which is the form a layer's pixels are held in.</summary>
@@ -379,7 +476,7 @@ public static class BrushEdits
     }
 
     /// <summary>Paints the colour through the coverage, or takes the alpha away when erasing.</summary>
-    private static void Apply(SKBitmap pixels, float[] coverage, BrushSettings settings)
+    private static bool Apply(SKBitmap pixels, float[] coverage, BrushSettings settings)
     {
         var span = pixels.GetPixelSpan();
         for (var index = 0; index < coverage.Length; index++)
@@ -394,5 +491,6 @@ public static class BrushEdits
             }
             Blend(span, at, alpha, settings.Red, settings.Green, settings.Blue);
         }
+        return true;
     }
 }

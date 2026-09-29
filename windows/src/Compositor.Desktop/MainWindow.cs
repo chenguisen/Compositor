@@ -64,6 +64,7 @@ public sealed class MainWindow : Window
         Brush,
         Clone,
         Blur,
+        Heal,
     }
 
     private readonly Dictionary<Tool, MenuItem> _toolItems = [];
@@ -186,6 +187,7 @@ public sealed class MainWindow : Window
                         ToolItem("_Brush", Tool.Brush),
                         ToolItem("_Clone stamp (Alt-click a source first)", Tool.Clone),
                         ToolItem("Blur brush", Tool.Blur),
+                        ToolItem("Spot _healing", Tool.Heal),
                         new Separator(),
                         new MenuItem
                         {
@@ -196,6 +198,10 @@ public sealed class MainWindow : Window
                                 Command("_Hardness…", () => _ = SetBrush(BrushSetting.Hardness)),
                                 Command("_Opacity…", () => _ = SetBrush(BrushSetting.Opacity)),
                                 Command("_Colour…", () => _ = SetBrush(BrushSetting.Colour)),
+                                new Separator(),
+                                Command("Spot healing: _Content-Aware", () => Heal(HealingMode.ContentAware)),
+                                Command("Spot healing: Create _Texture", () => Heal(HealingMode.CreateTexture)),
+                                Command("Spot healing: Proximity _Match", () => Heal(HealingMode.ProximityMatch)),
                             },
                         },
                     },
@@ -594,7 +600,7 @@ public sealed class MainWindow : Window
     {
         _tool = tool;
         _canvas.SampleSourceOnClick = tool == Tool.Clone;
-        _canvas.PaintEnabled = tool is Tool.Brush or Tool.Clone or Tool.Blur;
+        _canvas.PaintEnabled = tool is Tool.Brush or Tool.Clone or Tool.Blur or Tool.Heal;
         PushBrush();
         _canvas.MoveEnabled = tool == Tool.Move;
         _canvas.Selection = tool switch
@@ -616,6 +622,7 @@ public sealed class MainWindow : Window
                 ? "Clone stamp — Alt-click where it should copy from first"
                 : $"Clone stamp copying from {_cloneSource.Value.X:0},{_cloneSource.Value.Y:0} — drag on the canvas",
             Tool.Blur => $"Blur brush: {_brush.Diameter:0} pixels — drag over what should soften",
+            Tool.Heal => $"Spot healing ({_brush.Healing}): {_brush.Diameter:0} pixels — drag over what should go",
             Tool.Move => "Move — drag the selected layer",
             Tool.Marquee => "Marquee — drag a rectangle; Shift adds, Alt subtracts",
             Tool.Ellipse => "Elliptical marquee — drag an oval; Shift adds, Alt subtracts",
@@ -640,9 +647,18 @@ public sealed class MainWindow : Window
             {
                 Tool.Clone => BrushMode.Clone,
                 Tool.Blur => BrushMode.Blur,
+                Tool.Heal => BrushMode.Heal,
                 _ => BrushMode.Paint,
             },
         };
+
+    /// <summary>How Spot Healing works out what to put in the painted area.</summary>
+    private void Heal(HealingMode mode)
+    {
+        _brush = _brush with { Healing = mode };
+        PushBrush();
+        Say($"Spot healing: {mode}");
+    }
 
     /// <summary>Asks for one of the brush's settings and takes it, as an options bar would.</summary>
     private async Task SetBrush(BrushSetting which)
@@ -800,6 +816,7 @@ public sealed class MainWindow : Window
         {
             Tool.Clone => "Clone Stamp",
             Tool.Blur => "Blur",
+            Tool.Heal => "Spot Healing",
             _ => "Brush",
         };
         Edit(name, () =>

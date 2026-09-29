@@ -136,4 +136,87 @@ public class BrushModeTests
 
         Assert.Equal(new SKColor(0, 0, 255, 255), layer.Asset!.Image.GetPixel(30, 10));
     }
+
+    /// <summary>A field of one colour with a small blemish painted on it.</summary>
+    private static (CanvasDocument Document, ImageLayer Layer) Blemished(SKColor field, SKColor blemish)
+    {
+        var bitmap = new SKBitmap(Bitmaps.ColorInfo(60, 40));
+        using (var canvas = new SKCanvas(bitmap))
+        {
+            using var paint = new SKPaint { Color = field };
+            canvas.DrawRect(SKRect.Create(0, 0, 60, 40), paint);
+            paint.Color = blemish;
+            canvas.DrawRect(SKRect.Create(28, 18, 4, 4), paint);
+        }
+        var document = new CanvasDocument(Guid.NewGuid(), 60, 40);
+        var layer = new ImageLayer(Guid.NewGuid(), ImportedImage.Create(bitmap, "Field"),
+            new Model.LayerTransform(0, 0, 60, 40), "Field");
+        document.Layers.Add(layer);
+        return (document, layer);
+    }
+
+    [Fact]
+    public void SpotHealingRebuildsTheAreaFromItsSurroundings()
+    {
+        var (document, layer) = Blemished(new SKColor(40, 90, 180), new SKColor(240, 80, 40));
+        using var _ = document;
+        Assert.Equal(new SKColor(240, 80, 40, 255), layer.Asset!.Image.GetPixel(29, 19));
+
+        // A dab over the blemish, with a fixed seed so the result can be asserted.
+        var settings = new BrushSettings(Diameter: 14, Hardness: 1, Opacity: 1, Mode: BrushMode.Heal, Seed: 7);
+        Assert.True(BrushEdits.Paint(document, layer.ID, [new SKPoint(29.5f, 19.5f)], settings));
+
+        // The blemish has gone: the area now holds the colour around it, and so does its middle.
+        var healed = layer.Asset.Image.GetPixel(29, 19);
+        Assert.True(Math.Abs(healed.Red - 40) <= 6 && Math.Abs(healed.Green - 90) <= 6 && Math.Abs(healed.Blue - 180) <= 6,
+            $"the healed pixel is {healed}");
+        Assert.Equal(new SKColor(40, 90, 180, 255), layer.Asset.Image.GetPixel(29, 14));
+        // The field the dab did not reach is untouched.
+        Assert.Equal(new SKColor(40, 90, 180, 255), layer.Asset.Image.GetPixel(0, 0));
+        Assert.Equal(new SKColor(40, 90, 180, 255), layer.Asset.Image.GetPixel(59, 39));
+    }
+
+    [Fact]
+    public void SpotHealingLeavesTheRestOfTheLayerAlone()
+    {
+        var (document, layer) = Blemished(new SKColor(40, 90, 180), new SKColor(240, 80, 40));
+        using var _ = document;
+        var settings = new BrushSettings(Diameter: 10, Mode: BrushMode.Heal, Seed: 3);
+        Assert.True(BrushEdits.Paint(document, layer.ID, [new SKPoint(29.5f, 19.5f)], settings));
+
+        // A ring well outside the dab's reach is exactly as it was.
+        for (var x = 0; x < 60; x += 7)
+        {
+            Assert.Equal(new SKColor(40, 90, 180, 255), layer.Asset!.Image.GetPixel(x, 2));
+            Assert.Equal(new SKColor(40, 90, 180, 255), layer.Asset.Image.GetPixel(x, 37));
+        }
+    }
+
+    [Fact]
+    public void SpotHealingRespectsTheSelection()
+    {
+        var bitmap = new SKBitmap(Bitmaps.ColorInfo(60, 40));
+        using (var canvas = new SKCanvas(bitmap))
+        {
+            using var paint = new SKPaint { Color = new SKColor(40, 90, 180) };
+            canvas.DrawRect(SKRect.Create(0, 0, 60, 40), paint);
+            paint.Color = new SKColor(240, 80, 40);
+            canvas.DrawRect(SKRect.Create(28, 18, 4, 4), paint);
+        }
+        using var document = new CanvasDocument(Guid.NewGuid(), 60, 40);
+        var layer = new ImageLayer(Guid.NewGuid(), ImportedImage.Create(bitmap, "Field"),
+            new Model.LayerTransform(0, 0, 60, 40), "Field");
+        document.Layers.Add(layer);
+        // A selection that leaves the right half of the blemish out.
+        SelectionEdits.Select(document, SKRectI.Create(0, 0, 29, 40));
+
+        var settings = new BrushSettings(Diameter: 14, Mode: BrushMode.Heal, Seed: 5);
+        Assert.True(BrushEdits.Paint(document, layer.ID, [new SKPoint(29.5f, 19.5f)], settings));
+
+        // The half inside the selection is rebuilt — no longer the blemish it was — and the half outside it
+        // still holds the blemish exactly. What the rebuilt half comes out as is up to the kernel, which
+        // reads the surroundings, and those still hold the other half of the blemish.
+        Assert.NotEqual(new SKColor(240, 80, 40, 255), layer.Asset!.Image.GetPixel(28, 19));
+        Assert.Equal(new SKColor(240, 80, 40, 255), layer.Asset.Image.GetPixel(30, 19));
+    }
 }
