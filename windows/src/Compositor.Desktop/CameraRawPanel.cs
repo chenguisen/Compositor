@@ -46,6 +46,16 @@ internal sealed class CameraRawPanel
     private readonly CheckBox _highlightClip = new() { Content = "Clipped highlights" };
     private readonly CheckBox _sharpenMaskView = new() { Content = "Sharpening mask" };
 
+    /// <summary>The scope above the groups, and the readout of the pixel the pointer is over.</summary>
+    private readonly ScopesView _scopes = new() { Height = 110 };
+    private readonly TextBlock _readout = new()
+    {
+        Text = EmptyReadout,
+        FontSize = 11,
+        Foreground = Skin.SecondaryBrush,
+    };
+    private const string EmptyReadout = "R —   G —   B —";
+
     /// <summary>The body, for the window to dock at its right edge.</summary>
     public Control View { get; }
 
@@ -59,6 +69,40 @@ internal sealed class CameraRawPanel
 
     /// <summary>Asks for a picture of the amounts as they stand, without any of them having moved.</summary>
     public void Show() => RefreshPreview();
+
+    /// <summary>Shows the scope the last preview counted, which is the picture the canvas is drawing.</summary>
+    public void ShowScope(CameraRawScope? scope) => _scopes.Scope = scope;
+
+    /// <summary>
+    /// Shows the colour of the pixel the pointer is over, as the readout under the scope. Nothing is passed
+    /// when the pointer is off the picture, and the readout goes back to its dashes.
+    /// </summary>
+    public void ShowReadout((int Red, int Green, int Blue)? pixel) => _readout.Text = pixel is { } value
+        ? $"R {value.Red}   G {value.Green}   B {value.Blue}"
+        : EmptyReadout;
+
+    /// <summary>
+    /// Which of the two clipping views is on, so the caller knows what the triangles and the checkboxes agree
+    /// on. They are one switch each, whichever of the two is used to move them.
+    /// </summary>
+    public (bool Shadows, bool Highlights) Clipping =>
+        (_shadowClip.IsChecked == true, _highlightClip.IsChecked == true);
+
+    /// <summary>The two triangles lit as their checkboxes have them, which is what a tick of one changes.</summary>
+    private void RefreshClipping()
+    {
+        _scopes.ShowsShadows = _shadowClip.IsChecked == true;
+        _scopes.ShowsHighlights = _highlightClip.IsChecked == true;
+    }
+
+    /// <summary>Presses one of the scope's clipping triangles, and the switch it stands for goes with it.</summary>
+    internal void PressClippingTriangle(bool shadows) => _scopes.Press(shadows);
+
+    /// <summary>Asks for the other of the histogram and the vectorscope, as a right-click on the scope does.</summary>
+    internal void SwapScope() => _scopes.Swap();
+
+    /// <summary>Whether the density is being drawn rather than the three ribbons.</summary>
+    internal bool ShowingVectorscope => _scopes.Vectorscope;
 
     /// <summary>Writes the amounts as they stand into the layer. The buttons go through here, and so does the
     /// self check, so what it drives is the path a press takes.</summary>
@@ -117,13 +161,20 @@ internal sealed class CameraRawPanel
         var groups = new StackPanel { Margin = new Thickness(16), Spacing = 4 };
 
         // The overlays come first: they are shown over whatever the groups below are doing, and none of them
-        // is written into the layer when Apply is pressed.
+        // is written into the layer when Apply is pressed. The clipping triangles in the scope are the same two
+        // switches, so one setter drives both and neither can be lit while the other is not.
         var overlays = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12 };
         foreach (var box in new[] { _shadowClip, _highlightClip, _sharpenMaskView })
         {
-            box.Click += (_, _) => RefreshPreview();
+            box.IsCheckedChanged += (_, _) => { RefreshClipping(); RefreshPreview(); };
             overlays.Children.Add(box);
         }
+        _scopes.ClippingToggled += shadows =>
+        {
+            var box = shadows ? _shadowClip : _highlightClip;
+            box.IsChecked = box.IsChecked != true;
+        };
+        _scopes.ModeSwapped += () => _scopes.Vectorscope = !_scopes.Vectorscope;
         groups.Children.Add(overlays);
 
         groups.Children.Add(Heading("Light"));
@@ -301,6 +352,14 @@ internal sealed class CameraRawPanel
             Foreground = Skin.LabelBrush,
             FontWeight = FontWeight.SemiBold,
         };
+        // The scope sits above the groups and outside their scroll, so it stays in view while they are worked
+        // through — the Mac's panel puts its histogram in the same place.
+        var scope = new StackPanel
+        {
+            Margin = new Thickness(16, 0, 16, 6),
+            Spacing = 4,
+            Children = { _scopes, _readout },
+        };
         var buttons = new StackPanel
         {
             Orientation = Orientation.Horizontal,
@@ -311,8 +370,10 @@ internal sealed class CameraRawPanel
         };
         var dock = new DockPanel();
         DockPanel.SetDock(title, Dock.Top);
+        DockPanel.SetDock(scope, Dock.Top);
         DockPanel.SetDock(buttons, Dock.Bottom);
         dock.Children.Add(title);
+        dock.Children.Add(scope);
         dock.Children.Add(buttons);
         // The groups fill what is left, and scroll: the panel is the height of the window and they are not.
         dock.Children.Add(new ScrollViewer { Content = groups });

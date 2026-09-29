@@ -59,6 +59,24 @@ public readonly record struct LayerTransform(
     }
 
     /// <summary>
+    /// Where a document point falls in the box's own pixels — (0, 0) is the box's top left, so the point's
+    /// place is the pixel to read — or null when it is outside the box. This is the way back through what the
+    /// drawing does: the turn is undone, then the mirror, so a flipped layer reads the pixel that is shown
+    /// there rather than the one opposite it.
+    /// </summary>
+    public (double X, double Y)? InBox(SKPoint point)
+    {
+        var x = point.X - CenterX;
+        var y = point.Y - CenterY;
+        var cos = Math.Cos(Radians);
+        var sin = Math.Sin(Radians);
+        var across = (x * cos + y * sin) * (FlipX ? -1 : 1) + Width / 2;
+        var down = (-x * sin + y * cos) * (FlipY ? -1 : 1) + Height / 2;
+        if (across < 0 || across > Width || down < 0 || down > Height) return null;
+        return (across, down);
+    }
+
+    /// <summary>
     /// This placement mirrored across a vertical line at <paramref name="axis"/> — or, when
     /// <paramref name="horizontally"/> is false, a horizontal one: the picture flips, its angle turns the
     /// other way, and its middle crosses to the other side of the line.

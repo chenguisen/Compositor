@@ -47,6 +47,8 @@ public sealed class MainWindow : Window
     private CameraRawPanel? _cameraRaw;
     /// <summary>The layer the Camera Raw panel was opened on, so what Apply writes to does not follow the panel selection.</summary>
     private Guid? _cameraRawLayer;
+    /// <summary>The scope the last Camera Raw preview counted, for the panel to draw when that picture is shown.</summary>
+    private CameraRawScope? _cameraRawScope;
 
     /// <summary>One row, because what ⌘E does depends on the panel selection: it is named for it here.</summary>
     private readonly MenuItem _merge = new() { HotKey = new KeyGesture(Key.E, KeyModifiers.Control) };
@@ -812,6 +814,47 @@ public sealed class MainWindow : Window
             throw new InvalidOperationException("the preview reached the layer's own pixels");
         }
         report.Add("amounts moved: exposure 1.5 and contrast 40 are previewed, and the layer is untouched");
+
+        // The scope comes out of the same pass that made the picture, so it is there as soon as the preview is
+        // and it has to have moved with the grade rather than describe the layer as it was.
+        if (_cameraRawScope is not { } counted) throw new InvalidOperationException("the preview counted no scope");
+        report.Add($"scope: peak {counted.Peak:0.#}, vectorscope peak {counted.ScopePeak:0.#}, "
+            + $"busiest red bin {Array.IndexOf(counted.Red, counted.Red.Max())}");
+
+        // The readout names the pixel under the pointer out of the picture the panel is showing, so what it
+        // says is the grade and not the layer the grade came from.
+        var middle = new SKPoint((float)target.Transform.CenterX, (float)target.Transform.CenterY);
+        if (UnderCursor(middle) is not { } sampled) throw new InvalidOperationException("the readout found no pixel");
+        report.Add($"readout at the middle of the layer: R {sampled.Red}   G {sampled.Green}   B {sampled.Blue}");
+        if (sampled == (40, 70, 120)) throw new InvalidOperationException("the readout named the layer, not the grade");
+        if (UnderCursor(new SKPoint(-50, -50)) is not null)
+        {
+            throw new InvalidOperationException("the readout answered for a point outside the picture");
+        }
+
+        // The clipping triangles in the scope are the same two switches the panel's own checkboxes are.
+        if (panel.Clipping != (false, false)) throw new InvalidOperationException("a clipping view was already on");
+        panel.PressClippingTriangle(shadows: true);
+        if (panel.Clipping != (true, false)) throw new InvalidOperationException("the shadow triangle lit nothing");
+        panel.PressClippingTriangle(shadows: true);
+        if (panel.Clipping != (false, false)) throw new InvalidOperationException("the shadow triangle would not go out");
+        panel.PressClippingTriangle(shadows: false);
+        if (panel.Clipping != (false, true)) throw new InvalidOperationException("the highlight triangle lit nothing");
+        panel.PressClippingTriangle(shadows: false);
+        if (panel.Clipping != (false, false)) throw new InvalidOperationException("the triangles would not both clear");
+        // And each is its own switch: the scope draws its triangle the colour the checkbox has it.
+        panel.PressClippingTriangle(shadows: true);
+        if (panel.Clipping != (true, false)) throw new InvalidOperationException("the two clipping views moved together");
+        panel.PressClippingTriangle(shadows: true);
+        report.Add("clipping: each triangle lights and clears its own view, and neither moves the other");
+
+        // The right-click asks for the other of the histogram and the vectorscope.
+        if (panel.ShowingVectorscope) throw new InvalidOperationException("the scope started on the vectorscope");
+        panel.SwapScope();
+        if (!panel.ShowingVectorscope) throw new InvalidOperationException("the scope did not swap over");
+        panel.SwapScope();
+        if (panel.ShowingVectorscope) throw new InvalidOperationException("the scope did not swap back");
+        report.Add("scope: the histogram and the vectorscope swap over and back");
 
         // Apply writes them into the layer as one undo step, and puts the panel away with the Layers panel back.
         panel.Apply();
@@ -1713,6 +1756,9 @@ public sealed class MainWindow : Window
         _cameraRawHost.Child = panel.View;
         _cameraRawHost.IsVisible = true;
         _layersSide.IsVisible = false;
+        // The readout under the scope follows the pointer over the canvas, and is cleared when it leaves.
+        _canvas.PointerMovedAt = point => _cameraRaw?.ShowReadout(UnderCursor(point));
+        _canvas.PointerLeftCanvas = () => _cameraRaw?.ShowReadout(null);
         panel.Show();
         Say("Camera Raw: the panel is docked on the right and the canvas shows what it is doing");
     }
@@ -1720,12 +1766,30 @@ public sealed class MainWindow : Window
     /// <summary>
     /// Shows what the Camera Raw panel is asking for, over the layer it was opened on. The whole grade and the
     /// geometry are run, not just the grade, because the panel's scope is counted from the same pass — the
-    /// picture the scope describes is the picture the canvas draws.
+    /// picture the scope describes is the picture the canvas is given.
     /// </summary>
     private void PreviewCameraRaw(CameraRawSettings settings, bool shadows, bool highlights, bool mask)
     {
         if (_document is not { } document || _cameraRawLayer is not { } id) return;
-        RequestPreview(document => CameraRawEdits.Preview(document, id, settings, shadows, highlights, mask, out _));
+        RequestPreview(document =>
+        {
+            var shown = CameraRawEdits.Preview(document, id, settings, shadows, highlights, mask, out var scope);
+            _cameraRawScope = scope;
+            return shown;
+        });
+    }
+
+    /// <summary>
+    /// The colour of the pixel under a document point in the picture the panel is showing — the preview's own
+    /// copy of the layer, so what the readout names is what the pointer is over. Nothing when the pointer is
+    /// off the picture.
+    /// </summary>
+    private (int Red, int Green, int Blue)? UnderCursor(SKPoint point)
+    {
+        if (_preview?.Document is not { } shown || _cameraRawLayer is not { } id) return null;
+        return shown.Layers.FirstOrDefault(layer => layer.ID == id) is { } layer
+            ? CameraRawSample.Under(layer, point)
+            : null;
     }
 
     /// <summary>Writes the panel's amounts into the layer it was opened on, as one undo step.</summary>
@@ -1750,9 +1814,12 @@ public sealed class MainWindow : Window
         if (_cameraRaw is null) return;
         _cameraRaw = null;
         _cameraRawLayer = null;
+        _cameraRawScope = null;
         _cameraRawHost.Child = null;
         _cameraRawHost.IsVisible = false;
         _layersSide.IsVisible = true;
+        _canvas.PointerMovedAt = null;
+        _canvas.PointerLeftCanvas = null;
         StopPreview();
     }
 
@@ -2504,7 +2571,10 @@ public sealed class MainWindow : Window
     {
         _previewTimer?.Stop();
         if (_preview is not { } preview || _previewApply is not { } apply) return;
-        if (preview.Show(apply)) _canvas.InvalidateVisual();
+        if (!preview.Show(apply)) return;
+        // The panel's scope describes the picture the canvas has just been given, so the two are shown together.
+        if (_cameraRaw is { } panel) panel.ShowScope(_cameraRawScope);
+        _canvas.InvalidateVisual();
     }
 
     /// <summary>

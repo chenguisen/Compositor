@@ -79,6 +79,15 @@ public sealed class CanvasView : Control
     /// <summary>Handed a click of the wand, in document pixels.</summary>
     public Action<SKPoint, SelectionMode>? WandClicked { get; set; }
 
+    /// <summary>
+    /// Handed where the pointer is over the canvas, in document pixels, on every move over it — a panel that
+    /// reads a colour out of the picture follows the pointer with this.
+    /// </summary>
+    public Action<SKPoint>? PointerMovedAt { get; set; }
+
+    /// <summary>The pointer left the canvas, so a readout that was following it can be cleared.</summary>
+    public Action? PointerLeftCanvas { get; set; }
+
     /// <summary>When set, Alt-clicking reports where a Clone Stamp stroke should copy from.</summary>
     public bool SampleSourceOnClick { get; set; }
 
@@ -1203,9 +1212,18 @@ public sealed class CanvasView : Control
         base.OnPointerPressed(e);
     }
 
+    protected override void OnPointerExited(PointerEventArgs e)
+    {
+        PointerLeftCanvas?.Invoke();
+        base.OnPointerExited(e);
+    }
+
     protected override void OnPointerMoved(PointerEventArgs e)
     {
         var now = e.GetPosition(this);
+        // Every move is reported, whatever the drag in hand is, so a readout that follows the pointer does not
+        // stop while a stroke is being painted.
+        PointerMovedAt?.Invoke(ToDocument(now));
         if (_distortCorners is { } corners)
         {
             corners[_distortHandle] = ToDocument(now);
