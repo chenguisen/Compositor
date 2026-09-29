@@ -36,6 +36,8 @@ public sealed class MainWindow : Window
     /// <summary>The clipping, mask and visibility rows, whose names and availability follow the selection.</summary>
     private readonly MenuItem _visibility = new();
     private readonly MenuItem _showGrid = new();
+    private readonly MenuItem _recentMenu = new() { Header = "Open _Recent" };
+    private readonly RecentProjects _recent = new(RecentProjects.DefaultPath);
     private readonly MenuItem _snapToCanvas = new();
     private readonly MenuItem _snapToGuides = new();
     private readonly MenuItem _snapToLayers = new();
@@ -180,6 +182,7 @@ public sealed class MainWindow : Window
         BuildShapeKinds();
         BuildGradientMenu();
         BuildAdjustmentMenu();
+        RefreshRecent();
         _canvas.TextClicked = TypeHere;
         _canvas.TextTyped = TypedText;
         _canvas.TextBackspaced = BackspacedText;
@@ -227,6 +230,7 @@ public sealed class MainWindow : Window
                     Items =
                     {
                         Command("_Open project folder…", OpenProject),
+                        _recentMenu,
                         Command("_Import image…", () => _ = ImportImage()),
                         Command("_Save", Save, "Ctrl+S"),
                         Command("Save _As…", SaveAs),
@@ -507,6 +511,7 @@ public sealed class MainWindow : Window
         _document = snapshot.ToDocument();
         _canvas.Document = _document;
         _projectPath = path;
+        NoteRecent(path);
         // A fresh document starts with clean history, as reopening a file does.
         _history.Reset();
         ShowLayers(_document);
@@ -1601,6 +1606,54 @@ public sealed class MainWindow : Window
         else Say($"Trimmed to {current.Width} x {current.Height}");
     }
 
+    /// <summary>
+    /// File ▸ Open Recent: the projects opened or saved lately, and a row that forgets them. The list is read
+    /// back each time the menu is rebuilt, so a project that has since been moved or deleted is not offered.
+    /// </summary>
+    private void RefreshRecent()
+    {
+        _recentMenu.Items.Clear();
+        var projects = _recent.All();
+        foreach (var project in projects)
+        {
+            var path = project;
+            _recentMenu.Items.Add(Command(Path.GetFileName(path), () => OpenRecent(path)));
+        }
+        if (projects.Count == 0)
+        {
+            _recentMenu.Items.Add(new MenuItem { Header = "Nothing yet", IsEnabled = false });
+        }
+        _recentMenu.Items.Add(new Separator());
+        var clear = Command("_Clear Menu", () =>
+        {
+            _recent.Forgot();
+            RefreshRecent();
+        });
+        clear.IsEnabled = projects.Count > 0;
+        _recentMenu.Items.Add(clear);
+    }
+
+    /// <summary>Notes a project as one of the recent ones, as opening or saving it does.</summary>
+    private void NoteRecent(string path)
+    {
+        _recent.Note(path);
+        RefreshRecent();
+    }
+
+    /// <summary>Opens a project from the recent list; one that has gone says so rather than failing quietly.</summary>
+    private void OpenRecent(string path)
+    {
+        try
+        {
+            Open(path);
+        }
+        catch (Exception error)
+        {
+            Say($"Could not open {Path.GetFileName(path)}: {error.Message}");
+            RefreshRecent();
+        }
+    }
+
     /// <summary>The ratios the Crop tool offers, as the Mac build's ratio menu does.</summary>
     private void BuildCropRatios()
     {
@@ -2302,6 +2355,7 @@ public sealed class MainWindow : Window
             // The snapshot shares the document's pixels and only reads them, so it is not disposed here.
             ProjectStore.Save(ProjectSnapshot.FromDocument(document), path);
             _history.MarkSaved();
+            NoteRecent(path);
             Refresh();
             Say($"Saved {path}");
         }
