@@ -36,6 +36,10 @@ public sealed class MainWindow : Window
     /// <summary>The clipping, mask and visibility rows, whose names and availability follow the selection.</summary>
     private readonly MenuItem _visibility = new();
     private readonly MenuItem _showGrid = new();
+    private readonly MenuItem _snapToCanvas = new();
+    private readonly MenuItem _snapToGuides = new();
+    private readonly MenuItem _snapToLayers = new();
+    private SnapTo _snapTo = SnapTo.All;
     private LayoutGrid _grid = new();
     private bool _gridVisible;
     private readonly ComboBox _blend = new();
@@ -190,6 +194,14 @@ public sealed class MainWindow : Window
         _visibility.Click += (_, _) => ToggleVisibility();
         _showGrid.Header = "Show _Grid";
         _showGrid.Click += (_, _) => ShowGrid();
+        foreach (var (item, flag, label) in SnapRows())
+        {
+            // A tick box, so the three read as switches rather than as commands.
+            item.Header = label;
+            item.ToggleType = MenuItemToggleType.CheckBox;
+            item.IsChecked = true;
+            item.Click += (_, _) => ToggleSnapTo(flag, label);
+        }
         _clipping.Click += (_, _) => ToggleClipping();
         _maskToggle.Click += (_, _) => ToggleMask();
         _maskLink.Click += (_, _) => ToggleMaskLink();
@@ -394,6 +406,9 @@ public sealed class MainWindow : Window
                         new Separator(),
                         _showGrid,
                         Command("_Grid Settings…", () => _ = GridSettings()),
+                        _snapToCanvas,
+                        _snapToGuides,
+                        _snapToLayers,
                         new Separator(),
                         Command("New _Guide…", () => _ = NewGuide(), "Ctrl+OemSemicolon"),
                         Command("_Clear Guides", ClearGuides),
@@ -1493,6 +1508,26 @@ public sealed class MainWindow : Window
         Refresh();
     }
 
+    /// <summary>The three things a drag can line up with, as the View menu lists them.</summary>
+    private (MenuItem Item, SnapTo Flag, string Label)[] SnapRows() =>
+    [
+        (_snapToCanvas, SnapTo.Canvas, "Snap to Canvas"),
+        (_snapToGuides, SnapTo.Guides, "Snap to Guides"),
+        (_snapToLayers, SnapTo.Layers, "Snap to Layers"),
+    ];
+
+    /// <summary>View ▸ Snap to …: one kind of thing a drag lines up with, on or off.</summary>
+    private void ToggleSnapTo(SnapTo flag, string label)
+    {
+        _snapTo = _snapTo.HasFlag(flag) ? _snapTo & ~flag : _snapTo | flag;
+        var on = _snapTo.HasFlag(flag);
+        foreach (var (item, at, _) in SnapRows())
+        {
+            if (at == flag) item.IsChecked = on;
+        }
+        Say($"{label} {(on ? "on" : "off")}");
+    }
+
     /// <summary>View ▸ Show Grid: the layout grid on or off, which the canvas draws under everything else.</summary>
     private void ShowGrid()
     {
@@ -2080,7 +2115,7 @@ public sealed class MainWindow : Window
         if (_document is not { } document || _transforming is null) return;
         if (_transformBox is not { } from) return;
         var tolerance = TransformSnap.Distance / Math.Max(_canvas.Zoom, 0.0001);
-        var placed = TransformEdits.Snap(document, draft, _transformOriginals.Keys, tolerance, out var lineX, out var lineY);
+        var placed = TransformEdits.Snap(document, draft, _transformOriginals.Keys, tolerance, out var lineX, out var lineY, _snapTo);
         _canvas.SnapLines = (lineX, lineY);
         // Every layer is carried along by the box's own move, so several keep the shape they had.
         TransformEdits.Carry(document, _transformOriginals, from, placed);

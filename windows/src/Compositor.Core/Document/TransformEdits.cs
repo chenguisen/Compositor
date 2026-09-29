@@ -6,6 +6,27 @@ using LayerTransform = Compositor.Core.Model.LayerTransform;
 namespace Compositor.Core.Document;
 
 /// <summary>The eight scale handles around a box, and the grip that turns it.</summary>
+/// <summary>
+/// What a moving or cropped thing lines up with, one switch each, as the View menu offers them. None of it
+/// turns the snapping off; it takes away the things to snap to.
+/// </summary>
+[Flags]
+public enum SnapTo
+{
+    None = 0,
+
+    /// <summary>The canvas' own edges and middle.</summary>
+    Canvas = 1,
+
+    /// <summary>The guides put on the canvas.</summary>
+    Guides = 2,
+
+    /// <summary>The boxes of the other layers that hold pixels.</summary>
+    Layers = 4,
+
+    All = Canvas | Guides | Layers,
+}
+
 public enum TransformHandle
 {
     TopLeft,
@@ -342,25 +363,37 @@ public static class TransformEdits
 
     /// <summary>
     /// What a moving layer lines up with: the canvas edges and middle, the canvas guides, and the boxes of
-    /// the other layers that hold pixels.
+    /// the other layers that hold pixels. Which of the three is asked for is the View menu's business, so
+    /// each can be switched off on its own.
     /// </summary>
     public static (List<double> Xs, List<double> Ys) SnapTargets(CanvasDocument document,
-        IReadOnlyCollection<Guid> moving)
+        IReadOnlyCollection<Guid> moving, SnapTo snapTo = SnapTo.All)
     {
-        var xs = new List<double> { 0, document.Width, document.Width / 2.0 };
-        var ys = new List<double> { 0, document.Height, document.Height / 2.0 };
-        foreach (var guide in document.Guides)
+        var xs = new List<double>();
+        var ys = new List<double>();
+        if (snapTo.HasFlag(SnapTo.Canvas))
         {
-            if (guide.Axis == GuideAxis.Vertical) xs.Add(guide.Position);
-            else ys.Add(guide.Position);
+            xs.AddRange([0, document.Width, document.Width / 2.0]);
+            ys.AddRange([0, document.Height, document.Height / 2.0]);
         }
-        var visible = document.EffectiveVisibleIDs();
-        foreach (var layer in document.Layers)
+        if (snapTo.HasFlag(SnapTo.Guides))
         {
-            if (layer.IsGroup || layer.Asset is null || moving.Contains(layer.ID) || !visible.Contains(layer.ID)) continue;
-            var box = Bounds(layer.Transform);
-            xs.AddRange([Math.Round(box.Left), Math.Round(box.MidX), Math.Round(box.Right)]);
-            ys.AddRange([Math.Round(box.Top), Math.Round(box.MidY), Math.Round(box.Bottom)]);
+            foreach (var guide in document.Guides)
+            {
+                if (guide.Axis == GuideAxis.Vertical) xs.Add(guide.Position);
+                else ys.Add(guide.Position);
+            }
+        }
+        if (snapTo.HasFlag(SnapTo.Layers))
+        {
+            var visible = document.EffectiveVisibleIDs();
+            foreach (var layer in document.Layers)
+            {
+                if (layer.IsGroup || layer.Asset is null || moving.Contains(layer.ID) || !visible.Contains(layer.ID)) continue;
+                var box = Bounds(layer.Transform);
+                xs.AddRange([Math.Round(box.Left), Math.Round(box.MidX), Math.Round(box.Right)]);
+                ys.AddRange([Math.Round(box.Top), Math.Round(box.MidY), Math.Round(box.Bottom)]);
+            }
         }
         return (xs, ys);
     }
@@ -371,9 +404,9 @@ public static class TransformEdits
     /// draw along.
     /// </summary>
     public static LayerTransform Snap(CanvasDocument document, LayerTransform draft, IReadOnlyCollection<Guid> moving,
-        double tolerance, out double? lineX, out double? lineY)
+        double tolerance, out double? lineX, out double? lineY, SnapTo snapTo = SnapTo.All)
     {
-        var (xs, ys) = SnapTargets(document, moving);
+        var (xs, ys) = SnapTargets(document, moving, snapTo);
         var snap = TransformSnap.Offset(Bounds(draft), xs, ys, tolerance);
         lineX = snap.LineX;
         lineY = snap.LineY;
