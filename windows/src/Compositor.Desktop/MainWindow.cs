@@ -25,7 +25,8 @@ public sealed class MainWindow : Window
     private static readonly IBrush Ink = new SolidColorBrush(Color.FromRgb(0xE6, 0xE8, 0xEB));
 
     private readonly CanvasView _canvas = new();
-    private readonly ListBox _layers = new();
+    /// <summary>The layers panel: several rows may be selected, and the current row is the one an edit acts on.</summary>
+    private readonly ListBox _layers = new() { SelectionMode = Avalonia.Controls.SelectionMode.Multiple };
     private readonly TextBlock _status = new() { Margin = new Thickness(10, 3, 10, 3), Foreground = Ink };
     private readonly DocumentHistory _history = new();
 
@@ -120,6 +121,10 @@ public sealed class MainWindow : Window
 
     /// <summary>The layer a transform drag is editing, while the pointer is down.</summary>
     private Guid? _transforming;
+
+    /// <summary>What the box was when the drag began, and where every layer it moves was.</summary>
+    private LayerTransform? _transformBox;
+    private Dictionary<Guid, LayerTransform> _transformOriginals = [];
 
     /// <summary>The brush's settings, as the options bar would hold them, and where Clone Stamp copies from.</summary>
     private BrushSettings _brush = new();
@@ -401,11 +406,26 @@ public sealed class MainWindow : Window
             $"{_document.Layers.Count} layers, {_document.Resolution:0} pixels per inch");
     }
 
-    /// <summary>The layer the panel has selected, or the top one when nothing is.</summary>
+    /// <summary>The layer the panel has selected, or the top one when nothing is: what an edit acts on.</summary>
     private Guid? Selected =>
         _layers.SelectedIndex >= 0 && _layers.SelectedIndex < _rows.Count ? _rows[_layers.SelectedIndex]
         : _rows.Count > 0 ? _rows[^1]
         : null;
+
+    /// <summary>
+    /// Every layer the panel has selected, which is more than one when several rows are: what the verbs that
+    /// can act on several at once — flip, delete, merge, group and the transform box — work from.
+    /// </summary>
+    private List<Guid> SelectedLayers
+    {
+        get
+        {
+            var chosen = _layers.SelectedItems?.OfType<ListBoxItem>()
+                .Select(item => item.Tag).OfType<Guid>().ToList() ?? [];
+            if (chosen.Count > 0) return chosen;
+            return Selected is { } one ? [one] : [];
+        }
+    }
 
     /// <summary>One edit, wrapped in the history so it undoes in a single step.</summary>
     private void Edit(string name, Func<bool> change)
@@ -449,7 +469,7 @@ public sealed class MainWindow : Window
             item.IsEnabled = document is not null && layer is not null && ready(document, layer);
         }
 
-        var plan = document is not null && layer is not null ? LayerMerge.Plan(document, [layer.ID], layer.ID) : null;
+        var plan = document is not null && layer is not null ? LayerMerge.Plan(document, SelectedLayers, layer.ID) : null;
         _merge.Header = "_" + (plan?.Action ?? "Merge Down");
         _merge.IsEnabled = plan is not null;
         _visibility.Header = layer?.IsVisible == false ? "_Show Layer" : "_Hide Layer";
@@ -494,17 +514,22 @@ public sealed class MainWindow : Window
     /// </summary>
     private void DeleteLayer()
     {
-        if (_document is not { } document || Selected is not { } id) return;
-        // What to select afterwards: whatever takes its place in the stack, as the Mac build does.
-        var index = document.Layers.FindIndex(layer => layer.ID == id);
-        _history.Begin("Delete Layer", document, id);
-        var deleted = LayerEdits.Delete(document, id);
-        _history.End(document, id);
-        if (!deleted)
+        if (_document is not { } document) return;
+        var ids = SelectedLayers;
+        if (ids.Count == 0) return;
+        // What to select afterwards: whatever takes the place of the one an edit acts on, as the Mac build
+        // does. Several go as one step, each with its contents.
+        var anchor = Selected ?? ids[0];
+        var index = document.Layers.FindIndex(layer => layer.ID == anchor);
+        _history.Begin(ids.Count > 1 ? "Delete Layers" : "Delete Layer", document, anchor);
+        var refused = 0;
+        foreach (var id in ids) if (!LayerEdits.Delete(document, id)) refused++;
+        _history.End(document, anchor);
+        if (refused > 0)
         {
-            Say("That layer supplies a live mask; macOS offers to bake or unlink it and this build cannot yet");
-            return;
+            Say("A layer that stayed is clipped to one that went; macOS offers to bake or unlink it and this build cannot yet");
         }
+        if (refused == ids.Count) return;
         var left = document.Layers;
         Reselect(left.Count == 0 ? null : left[Math.Clamp(index, 0, left.Count - 1)].ID);
     }
@@ -567,11 +592,13 @@ public sealed class MainWindow : Window
     /// <summary>Wraps the selected layer in a folder.</summary>
     private void GroupSelected()
     {
-        if (_document is not { } document || Selected is not { } id) return;
-        _history.Begin("Group Layers", document, id);
-        var folder = LayerPlacement.GroupSelected(document, [id]);
-        _history.End(document, id);
-        if (folder is null) { Say("That layer could not be wrapped in a folder."); return; }
+        if (_document is not { } document) return;
+        var ids = SelectedLayers;
+        if (ids.Count == 0) return;
+        _history.Begin("Group Layers", document, Selected);
+        var folder = LayerPlacement.GroupSelected(document, ids);
+        _history.End(document, Selected);
+        if (folder is null) { Say("Those layers could not be wrapped in a folder."); return; }
         Reselect(folder);
     }
 
@@ -630,10 +657,12 @@ public sealed class MainWindow : Window
     /// </summary>
     private void MergeLayers()
     {
-        if (_document is not { } document || Selected is not { } id) return;
-        if (LayerMerge.Plan(document, [id], id) is not { } plan) return;
+        if (_document is not { } document) return;
+        var ids = SelectedLayers;
+        if (ids.Count == 0 || Selected is not { } id) return;
+        if (LayerMerge.Plan(document, ids, id) is not { } plan) return;
         _history.Begin(plan.Action, document, id);
-        var made = LayerMerge.Merge(document, [id], id);
+        var made = LayerMerge.Merge(document, ids, id);
         _history.End(document, id);
         if (made is not { } merged)
         {
@@ -643,8 +672,11 @@ public sealed class MainWindow : Window
         Reselect(merged);
     }
 
-    private void Flip(bool horizontal, bool canvas)    {
-        if (_document is not { } document || Selected is not { } id) return;
+    private void Flip(bool horizontal, bool canvas)
+    {
+        if (_document is not { } document) return;
+        var ids = SelectedLayers;
+        if (ids.Count == 0) return;
         Edit(canvas ? $"Flip Canvas {(horizontal ? "Horizontal" : "Vertical")}" : $"Flip {(horizontal ? "Horizontal" : "Vertical")}",
             () =>
             {
@@ -653,7 +685,7 @@ public sealed class MainWindow : Window
                     LayerEdits.FlipCanvas(document, horizontal);
                     return true;
                 }
-                return LayerEdits.Flip(document, [id], horizontal);
+                return LayerEdits.Flip(document, ids, horizontal);
             });
     }
 
@@ -1326,22 +1358,28 @@ public sealed class MainWindow : Window
     /// </summary>
     private void ShowTransformBox()
     {
-        if (_tool != Tool.Move || _document is not { } document || Selected is not { } id)
+        if (_tool != Tool.Move || _document is not { } document)
         {
             _canvas.TransformBox = null;
             return;
         }
-        _canvas.TransformBox = document.Layers.FirstOrDefault(layer => layer.ID == id) is { IsGroup: false, Asset: not null } layer
-            ? layer.Transform
-            : null;
+        // One box around everything the transform moves, which for one layer is its own.
+        _canvas.TransformBox = TransformEdits.GroupBox(document, SelectedLayers);
     }
 
-    /// <summary>The pointer took hold of the box: the whole drag is one step in the history.</summary>
+    /// <summary>
+    /// The pointer took hold of the box: the whole drag is one step in the history, and the layers it moves
+    /// are remembered as they are now, so every step of the drag is measured from where it began.
+    /// </summary>
     private void TransformStarted()
     {
         if (_document is not { } document || Selected is not { } id) return;
+        if (TransformEdits.GroupBox(document, SelectedLayers) is not { } box) return;
         _transforming = id;
-        _history.Begin("Transform", document, id);
+        _transformBox = box;
+        _transformOriginals = TransformEdits.GroupMembers(document, SelectedLayers)
+            .ToDictionary(layer => layer.ID, layer => layer.Transform);
+        _history.Begin(_transformOriginals.Count > 1 ? "Transform Layers" : "Transform", document, id);
     }
 
     /// <summary>
@@ -1350,11 +1388,13 @@ public sealed class MainWindow : Window
     /// </summary>
     private void TransformChanged(LayerTransform draft)
     {
-        if (_document is not { } document || _transforming is not { } id) return;
+        if (_document is not { } document || _transforming is null) return;
+        if (_transformBox is not { } from) return;
         var tolerance = TransformSnap.Distance / Math.Max(_canvas.Zoom, 0.0001);
-        var placed = TransformEdits.Snap(document, draft, [id], tolerance, out var lineX, out var lineY);
+        var placed = TransformEdits.Snap(document, draft, _transformOriginals.Keys, tolerance, out var lineX, out var lineY);
         _canvas.SnapLines = (lineX, lineY);
-        LayerEdits.SetTransform(document, id, placed);
+        // Every layer is carried along by the box's own move, so several keep the shape they had.
+        TransformEdits.Carry(document, _transformOriginals, from, placed);
         _canvas.TransformBox = placed;
         Refresh();
     }
@@ -1363,6 +1403,8 @@ public sealed class MainWindow : Window
     {
         if (_document is not { } document || _transforming is not { } id) return;
         _transforming = null;
+        _transformBox = null;
+        _transformOriginals.Clear();
         _canvas.SnapLines = (null, null);
         _history.End(document, id);
         ShowTransformBox();
@@ -1397,6 +1439,8 @@ public sealed class MainWindow : Window
             if (record.MaskSourceID is not null) notes.Add("clipped");
             rows.Add(new ListBoxItem
             {
+                // The row carries the layer it stands for, so a multi-selection can be read back.
+                Tag = record.ID,
                 Content = new TextBlock
                 {
                     Text = new string(' ', entry.Depth * 3) + record.Name +

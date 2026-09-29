@@ -221,6 +221,126 @@ public static class TransformEdits
     }
 
     /// <summary>
+    /// What a group transform moves: every visible layer that holds pixels and is either selected or inside a
+    /// folder that is. A folder is not moved itself — its rectangle is only what a mask covers.
+    /// </summary>
+    public static List<ImageLayer> GroupMembers(CanvasDocument document, IReadOnlyCollection<Guid> ids)
+    {
+        var wanted = ids.ToHashSet();
+        var visible = document.EffectiveVisibleIDs();
+        return document.Layers.Where(layer => layer.Asset is not null && !layer.IsGroup && visible.Contains(layer.ID))
+            .Where(layer => Inside(document, layer, wanted))
+            .ToList();
+    }
+
+    /// <summary>
+    /// The upright box around a group's members, which is the rectangle the handles sit on and the one a drag
+    /// takes from where it was to where it goes. Null when nothing is being transformed.
+    /// </summary>
+    public static LayerTransform? GroupBox(CanvasDocument document, IReadOnlyCollection<Guid> ids)
+    {
+        var members = GroupMembers(document, ids);
+        if (members.Count == 0) return null;
+        double minX = double.MaxValue, minY = double.MaxValue, maxX = double.MinValue, maxY = double.MinValue;
+        foreach (var member in members)
+        {
+            var box = Bounds(member.Transform);
+            minX = Math.Min(minX, box.Left);
+            minY = Math.Min(minY, box.Top);
+            maxX = Math.Max(maxX, box.Right);
+            maxY = Math.Max(maxY, box.Bottom);
+        }
+        return new LayerTransform(minX, minY, Math.Max(1, maxX - minX), Math.Max(1, maxY - minY));
+    }
+
+    /// <summary>
+    /// A layer carried along as the box it sits in moves from one place to another: a plain move shifts it,
+    /// and a scale or a turn puts it through the same mapping, so a group keeps the shape it had. This is
+    /// what makes several layers transform together rather than each about its own middle.
+    /// </summary>
+    public static LayerTransform Following(LayerTransform layer, LayerTransform from, LayerTransform to)
+    {
+        if (from == to) return layer;
+        if (from.Width == to.Width && from.Height == to.Height && from.Rotation == to.Rotation
+            && from.FlipX == to.FlipX && from.FlipY == to.FlipY)
+        {
+            // A plain move carries exactly, without going near the matrix.
+            var moved = layer with { X = layer.X + (to.X - from.X), Y = layer.Y + (to.Y - from.Y) };
+            return moved.IsValid ? moved : layer;
+        }
+        if (!Unit(from).TryInvert(out var inverse)) return layer;
+        // The box's own mapping, applied to this layer: the layer into the box's units, through the box's
+        // own move, and back out where the box is now.
+        var placed = Placing(layer, Compose(Unit(to), Compose(inverse, Unit(layer))));
+        return placed.IsValid ? placed : layer;
+    }
+
+    /// <summary>
+    /// Carries a whole group along with its box, from what each layer was when the drag began. Nothing is
+    /// moved when the box has not.
+    /// </summary>
+    public static bool Carry(CanvasDocument document, IReadOnlyDictionary<Guid, LayerTransform> originals,
+        LayerTransform from, LayerTransform to)
+    {
+        if (from == to) return false;
+        var changed = false;
+        foreach (var (id, original) in originals)
+        {
+            if (document.Layers.FirstOrDefault(layer => layer.ID == id) is not { } layer) continue;
+            layer.Transform = Following(original, from, to);
+            changed = true;
+        }
+        return changed;
+    }
+
+    /// <summary>The unit square placed on the document as this transform places a layer.</summary>
+    private static SKMatrix Unit(LayerTransform transform) => BrushEdits.PixelToDocument(transform, 1, 1);
+
+    /// <summary>
+    /// A transform placing the unit square the way a mapping does — a turned, maybe flipped rectangle. A
+    /// shear, which only an uneven scale of something already turned makes, is dropped, as the Mac build
+    /// drops it. The rotation nearest this one's is kept, so the numbers stay familiar.
+    /// </summary>
+    private static LayerTransform Placing(LayerTransform current, SKMatrix map)
+    {
+        var sign = current.FlipX ? -1.0 : 1.0;
+        var angle = Math.Atan2(map.SkewY * sign, map.ScaleX * sign);
+        var along = -map.SkewX * Math.Sin(angle) + map.ScaleY * Math.Cos(angle);
+        var middle = map.MapPoint(0.5f, 0.5f);
+        var width = Math.Sqrt((double)map.ScaleX * map.ScaleX + (double)map.SkewY * map.SkewY);
+        var height = Math.Abs(along);
+        var degrees = angle * 180 / Math.PI;
+        var placed = current with
+        {
+            Width = Math.Max(1, width),
+            Height = Math.Max(1, height),
+            Rotation = degrees + Math.Round((current.Rotation - degrees) / 360) * 360,
+            FlipY = along < 0,
+            X = middle.X - width / 2,
+            Y = middle.Y - height / 2,
+        };
+        return placed;
+    }
+
+    /// <summary>
+    /// Two mappings in one: <paramref name="before"/> is applied first, then <paramref name="after"/>. Named
+    /// this way round because Skia's own concatenation reads backwards from what it looks like.
+    /// </summary>
+    private static SKMatrix Compose(SKMatrix after, SKMatrix before) => SKMatrix.Concat(after, before);
+
+    /// <summary>Whether a layer is one of the named layers or sits inside one of them.</summary>
+    private static bool Inside(CanvasDocument document, ImageLayer layer, HashSet<Guid> ids)
+    {
+        var current = (Guid?)layer.ID;
+        for (var depth = 0; current is { } id && depth < 64; depth++)
+        {
+            if (ids.Contains(id)) return true;
+            current = document.Layers.FirstOrDefault(candidate => candidate.ID == id)?.ParentID;
+        }
+        return false;
+    }
+
+    /// <summary>
     /// What a moving layer lines up with: the canvas edges and middle, the canvas guides, and the boxes of
     /// the other layers that hold pixels.
     /// </summary>

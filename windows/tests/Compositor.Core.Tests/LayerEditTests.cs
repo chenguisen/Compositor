@@ -214,4 +214,35 @@ public class LayerEditTests
         Assert.True(LayerEdits.Delete(document, folder.ID));
         Assert.Empty(document.Layers);
     }
+
+    [Fact]
+    public void FlippingSeveralLayersTurnsThemAboutTheBoxAroundThem()
+    {
+        var one = Patch(SKColors.Blue, 0, 0, 20, 20, "One");
+        var two = Patch(SKColors.Green, 100, 0, 20, 20, "Two");
+        using var document = Doc(200, 200, one, two);
+
+        // The box around the pair is 0 to 120, so its middle is 60: each crosses to the other side.
+        Assert.True(LayerEdits.Flip(document, [one.ID, two.ID], horizontally: true));
+        Assert.Equal(100, one.Transform.X);
+        Assert.Equal(0, two.Transform.X);
+        Assert.Equal(20, one.Transform.Width);
+        Assert.Equal(20, two.Transform.Width);
+    }
+
+    [Fact]
+    public void DeletingSeveralLayersTakesEachWithWhatItHolds()
+    {
+        var one = Patch(SKColors.Blue, 0, 0, 20, 20, "One");
+        var folder = Folder("Folder");
+        var inside = Patch(SKColors.Green, 40, 0, 20, 20, "Inside");
+        inside.ParentID = folder.ID;
+        var stays = Patch(SKColors.Red, 80, 0, 20, 20, "Stays");
+        using var document = Doc(200, 200, one, folder, inside, stays);
+
+        // What the app does for a multi-selection: one step, a delete each, a folder taking its contents.
+        Assert.True(LayerEdits.Delete(document, one.ID));
+        Assert.True(LayerEdits.Delete(document, folder.ID));
+        Assert.Equal(new[] { stays.ID }, document.Layers.Select(layer => layer.ID));
+    }
 }
