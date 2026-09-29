@@ -148,8 +148,9 @@ public static class FillEdits
     /// <summary>
     /// The selection's coverage over the document, or null when the whole document is open to the edit. The
     /// region it was taken over comes back with it, since that is what a document place is looked up in.
+    /// <para>Shared with the pixels a selection moves, which weigh what they lift and put down the same way.</para>
     /// </summary>
-    private static SKBitmap? Coverage(CanvasDocument document, out SKRectI region)
+    internal static SKBitmap? Coverage(CanvasDocument document, out SKRectI region)
     {
         region = SKRectI.Create(0, 0, 0, 0);
         if (document.Selection.Path is null) return null;
@@ -165,7 +166,7 @@ public static class FillEdits
     }
 
     /// <summary>How much of a document place the selection covers: nothing outside it, all of it well inside.</summary>
-    private static double Amount(SKBitmap? coverage, SKRectI region, SKPoint at)
+    internal static double Amount(SKBitmap? coverage, SKRectI region, SKPoint at)
     {
         if (coverage is null) return 1;
         var column = (int)Math.Floor(at.X) - region.Left;

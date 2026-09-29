@@ -1043,6 +1043,8 @@ public sealed class MainWindow : Window
         {
             When($"Nudge {direction} 1 px", () => Nudge(dx, dy), Shortcuts.Canvas);
             When($"Nudge {direction} 10 px", () => Nudge(dx * 10, dy * 10), Shortcuts.Canvas);
+            When($"Move selected pixels {direction} 1 px", () => MovePixels(dx, dy), Shortcuts.Canvas);
+            When($"Move selected pixels {direction} 10 px", () => MovePixels(dx * 10, dy * 10), Shortcuts.Canvas);
         }
         When("Apply Canvas Operation",
             () => { if (_cropFrame is null) return false; ApplyCrop(); return true; }, Shortcuts.Canvas);
@@ -1074,6 +1076,17 @@ public sealed class MainWindow : Window
         }
         if (_tool != Tool.Move || Selected is not { } id) return false;
         return Edit("Move Layer", () => LayerEdits.Move(document, id, dx, dy));
+    }
+
+    /// <summary>
+    /// The pixels inside the selection move by whole document pixels, one undo step a press, which is the Mac
+    /// build's own Command-with-an-arrow: what the plain arrows do to a layer, this does to what is selected.
+    /// </summary>
+    private bool MovePixels(double dx, double dy)
+    {
+        if (_document is not { } document || Selected is not { } id) return false;
+        return Edit("Move Pixels",
+            () => SelectionEdits.MovePixels(document, id, (int)Math.Round(dx), (int)Math.Round(dy)));
     }
 
     /// <summary>Steps the selected layer's blend mode, as the Mac build's own Shift-minus and Shift-equals do.</summary>

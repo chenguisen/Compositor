@@ -75,6 +75,89 @@ public static class SelectionEdits
     public static bool SelectLasso(CanvasDocument document, IReadOnlyList<SKPoint> points, bool antialiased = true) =>
         points.Count < 3 ? Deselect(document) : Adopt(document, Lasso(points), antialiased);
 
+    /// <summary>
+    /// Moves the pixels inside the selection by whole document pixels, leaving the hole they came out of, and
+    /// takes the outline along with them. This is the Mac build's own nudgePixels: what Command with an arrow key
+    /// does, and what dragging a selection's contents does there.
+    /// <para>
+    /// Whole pixels on purpose. Pressing it again lifts and puts down the same pixels on the grid they are
+    /// already on, so a long walk across the canvas never resamples them; a move of half a pixel would blur and
+    /// a second one would blur again.
+    /// </para>
+    /// </summary>
+    public static bool MovePixels(CanvasDocument document, Guid layerID, int dx, int dy)
+    {
+        if ((dx == 0 && dy == 0) || document.Selection.Path is not { IsEmpty: false }) return false;
+        if (document.Layers.FirstOrDefault(layer => layer.ID == layerID) is not { IsGroup: false, Asset: { } asset } layer)
+        {
+            return false;
+        }
+        var width = asset.Width;
+        var height = asset.Height;
+        if (width <= 0 || height <= 0) return false;
+        var toDocument = BrushEdits.PixelToDocument(layer.Transform, width, height);
+        if (!toDocument.TryInvert(out var toPixel)) return false;
+        // The move is asked for in document pixels and the pixels live on the layer's own grid, so the offset is
+        // carried into that grid — for a layer turned on the canvas those are not the same offset at all.
+        var carried = toPixel.MapVector(new SKPoint(dx, dy));
+        var across = (int)Math.Round(carried.X);
+        var down = (int)Math.Round(carried.Y);
+
+        using var coverage = FillEdits.Coverage(document, out var region);
+        // The layer's own pixels, which are handed over at the end rather than disposed with: the layer keeps
+        // whatever bitmap it is given, so this one is only let go of on the way out of a move that moved nothing.
+        var painted = Bitmaps.Allocate(Bitmaps.ColorInfo(width, height));
+        using (var canvas = new SKCanvas(painted))
+        {
+            using var paint = new SKPaint { BlendMode = SKBlendMode.Src };
+            canvas.DrawBitmap(asset.Image, SKRect.Create(0, 0, width, height),
+                new SKSamplingOptions(SKFilterMode.Nearest), paint);
+        }
+        using var lifted = Bitmaps.Allocate(Bitmaps.ColorInfo(width, height));
+        using (var canvas = new SKCanvas(lifted))
+        {
+            using var paint = new SKPaint { BlendMode = SKBlendMode.Src };
+            canvas.DrawBitmap(asset.Image, SKRect.Create(0, 0, width, height),
+                new SKSamplingOptions(SKFilterMode.Nearest), paint);
+        }
+        // What is being moved is kept aside at its share of the coverage, and taken out of the layer by the rest
+        // of it: a feathered outline lifts and leaves a soft edge, a hard one lifts whole pixels and no others.
+        var kept = lifted.GetPixelSpan();
+        var left = painted.GetPixelSpan();
+        var moved = 0;
+        for (var y = 0; y < height; y++)
+        {
+            for (var x = 0; x < width; x++)
+            {
+                var at = y * painted.RowBytes + x * 4;
+                var amount = FillEdits.Amount(coverage, region, toDocument.MapPoint(x + 0.5f, y + 0.5f));
+                if (amount <= 0 || left[at + 3] == 0) continue;
+                moved++;
+                for (var channel = 0; channel < 4; channel++)
+                {
+                    kept[at + channel] = (byte)Math.Clamp(
+                        Math.Round(kept[at + channel] * amount, MidpointRounding.AwayFromZero), 0, 255);
+                    left[at + channel] = (byte)Math.Clamp(
+                        Math.Round(left[at + channel] * (1 - amount), MidpointRounding.AwayFromZero), 0, 255);
+                }
+            }
+        }
+        if (moved == 0)
+        {
+            painted.Dispose();
+            return false;
+        }
+        using (var canvas = new SKCanvas(painted))
+        {
+            using var paint = new SKPaint { BlendMode = SKBlendMode.SrcOver };
+            canvas.DrawBitmap(lifted, new SKPoint(across, down),
+                new SKSamplingOptions(SKFilterMode.Nearest), paint);
+        }
+        layer.Asset = ImportedImage.Create(painted, asset.Name);
+        document.Selection = document.Selection.Translated(dx, dy);
+        return true;
+    }
+
     /// <summary>The outline a lasso would close, for the tool to draw while it is still being dragged.</summary>
     public static SKPath Lasso(IReadOnlyList<SKPoint> points)
     {
