@@ -1912,6 +1912,36 @@ public sealed class MainWindow : Window
         }
         if (_history.UndoName != "Crop") throw new InvalidOperationException($"the crop made a \"{_history.UndoName}\" step");
 
+        // The Layers panel's blend pop-up: a click opens it, and a click elsewhere closes it. A pop-up is a
+        // window of its own rather than part of this one, which is why nothing else here touches it.
+        Reselect(target.ID);
+        if (_blend.TranslatePoint(new Point(_blend.Bounds.Width / 2, _blend.Bounds.Height / 2), this) is not { } popup)
+        {
+            throw new InvalidOperationException("the blend pop-up is not in the window");
+        }
+        Click(popup);
+        var opened = _blend.IsDropDownOpen;
+        Click(Aim(new SKPoint(200, 140)));      // anywhere else, which light-dismisses it
+        report.Add($"the blend pop-up: opened {opened}, and closed {!_blend.IsDropDownOpen}");
+        if (!opened) throw new InvalidOperationException("the blend pop-up did not open");
+        if (_blend.IsDropDownOpen) throw new InvalidOperationException("the blend pop-up did not close");
+
+        // The tool rail, clicked rather than invoked: the rail sits in a scroll view, which is the one place a
+        // drawn control might be visible and still not reachable.
+        SetTool(Tool.Pan);
+        if (_rail.ButtonFor(Tool.Brush)?.TranslatePoint(
+                new Point(_rail.ButtonFor(Tool.Brush)!.Bounds.Width / 2,
+                    _rail.ButtonFor(Tool.Brush)!.Bounds.Height / 2), this) is not { } railBrush)
+        {
+            throw new InvalidOperationException("the rail has no button for the Brush");
+        }
+        Click(railBrush);
+        report.Add($"the rail's Brush button clicked: the tool is {_tool} and the rail marks {_rail.Marked}");
+        if (_tool != Tool.Brush || _rail.Marked != Tool.Brush)
+        {
+            throw new InvalidOperationException($"clicking the rail's Brush gave {_tool}");
+        }
+
         // The eyedropper's Sample Ring: press and drag on the picture and the ring follows the pointer, naming
         // the colour under it across its top half and the colour being replaced across its bottom. This is the
         // last step and the pointer is left down, so the frame the caller photographs has the ring in it — a

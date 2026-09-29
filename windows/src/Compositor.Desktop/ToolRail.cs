@@ -73,6 +73,12 @@ internal sealed class ToolRail : Grid
     /// <summary>The button the rail has marked, which is what the self check reads to see the two agree.</summary>
     internal Tool Marked => _marked;
 
+    /// <summary>
+    /// The button a tool is picked by, which the checks press with a pointer: the rail is inside a scroll view,
+    /// so a click on it is the one thing that proves the marks are not merely drawn but reachable.
+    /// </summary>
+    internal Button? ButtonFor(Tool tool) => _buttons.TryGetValue(tool, out var button) ? button : null;
+
     /// <summary>Shows the two colours, as a swatch each.</summary>
     public void ShowColours(SKColor foreground, SKColor background)
     {
