@@ -1,4 +1,5 @@
 using Compositor.Core.Format;
+using SkiaSharp;
 
 namespace Compositor.Core.Model;
 
@@ -32,6 +33,29 @@ public readonly record struct LayerTransform(
         var width = pixelWidth * percent / 100;
         var height = pixelHeight * percent / 100;
         return this with { Width = width, Height = height, X = CenterX - width / 2, Y = CenterY - height / 2 };
+    }
+
+    /// <summary>
+    /// A point in the box, given in units of its width and height — (0, 0) is the top left of the unrotated
+    /// box and (1, 1) the bottom right — placed on the document, so it turns with the box.
+    /// </summary>
+    public SKPoint Point(double unitX, double unitY)
+    {
+        var x = (unitX - 0.5) * Width;
+        var y = (unitY - 0.5) * Height;
+        var cos = Math.Cos(Radians);
+        var sin = Math.Sin(Radians);
+        return new SKPoint((float)(CenterX + x * cos - y * sin), (float)(CenterY + x * sin + y * cos));
+    }
+
+    /// <summary>Whether a document point is inside the box.</summary>
+    public bool Contains(SKPoint point)
+    {
+        var x = point.X - CenterX;
+        var y = point.Y - CenterY;
+        var cos = Math.Cos(Radians);
+        var sin = Math.Sin(Radians);
+        return Math.Abs(x * cos + y * sin) <= Width / 2 && Math.Abs(-x * sin + y * cos) <= Height / 2;
     }
 
     /// <summary>

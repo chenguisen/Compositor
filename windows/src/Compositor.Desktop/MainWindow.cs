@@ -10,6 +10,7 @@ using Compositor.Core.IO;
 using Compositor.Core.Model;
 using Compositor.Core.Rendering;
 using SkiaSharp;
+using LayerTransform = Compositor.Core.Model.LayerTransform;
 using SelectionMode = Compositor.Core.Document.SelectionMode;
 
 namespace Compositor.Desktop;
@@ -89,8 +90,8 @@ public sealed class MainWindow : Window
     private readonly Dictionary<Tool, MenuItem> _toolItems = [];
     private Tool _tool = Tool.Pan;
 
-    /// <summary>The layer a move gesture is moving, while the pointer is down.</summary>
-    private Guid? _moving;
+    /// <summary>The layer a transform drag is editing, while the pointer is down.</summary>
+    private Guid? _transforming;
 
     /// <summary>The brush's settings, as the options bar would hold them, and where Clone Stamp copies from.</summary>
     private BrushSettings _brush = new();
@@ -104,14 +105,14 @@ public sealed class MainWindow : Window
         Height = 820;
         Background = new SolidColorBrush(Color.FromRgb(0x18, 0x1A, 0x1E));
         _canvas.StrokeFinished = Painted;
-        _canvas.MoveStarted = MoveStarted;
-        _canvas.MoveChanged = MoveChanged;
-        _canvas.MoveFinished = MoveFinished;
         _canvas.MarqueeFinished = (box, mode) => MarqueeFinished(box, mode, _tool == Tool.Ellipse);
         _canvas.LassoFinished = (points, mode) => LassoFinished(points, mode, _tool == Tool.Polygon);
         _canvas.WandClicked = WandClicked;
         _canvas.CloneSourceClicked = CloneSourceChosen;
         _canvas.EyedropperClicked = Picked;
+        _canvas.TransformStarted = TransformStarted;
+        _canvas.TransformChanged = TransformChanged;
+        _canvas.TransformFinished = TransformFinished;
         _paintOnMask.Click += (_, _) => SetPaintingMask(!_paintingMask);
         _eraseToggle.Click += (_, _) => SetErasing(!_erasing);
         _merge.Click += (_, _) => MergeLayers();
@@ -627,9 +628,10 @@ public sealed class MainWindow : Window
         _tool = tool;
         _canvas.SampleSourceOnClick = tool == Tool.Clone;
         _canvas.EyedropperOnClick = tool == Tool.Eyedropper;
+        _canvas.TransformEnabled = tool == Tool.Move;
+        ShowTransformBox();
         _canvas.PaintEnabled = tool is Tool.Brush or Tool.Clone or Tool.Blur or Tool.Heal;
         PushBrush();
-        _canvas.MoveEnabled = tool == Tool.Move;
         _canvas.Selection = tool switch
         {
             Tool.Marquee => SelectionTool.Rectangle,
@@ -651,7 +653,7 @@ public sealed class MainWindow : Window
             Tool.Blur => $"Blur brush: {_brush.Diameter:0} pixels — drag over what should soften",
             Tool.Heal => $"Spot healing ({_brush.Healing}): {_brush.Diameter:0} pixels — drag over what should go",
             Tool.Eyedropper => "Eyedropper — click the canvas to take its colour",
-            Tool.Move => "Move — drag the selected layer",
+            Tool.Move => "Move — drag the layer, or a handle to scale and turn it",
             Tool.Marquee => "Marquee — drag a rectangle; Shift adds, Alt subtracts",
             Tool.Ellipse => "Elliptical marquee — drag an oval; Shift adds, Alt subtracts",
             Tool.Lasso => "Lasso — drag round a shape; Shift adds, Alt subtracts",
@@ -941,28 +943,51 @@ public sealed class MainWindow : Window
     }
 
     /// <summary>
-    /// A drag of the move tool. The edit is opened when the pointer goes down and closed when it comes up,
-    /// so the whole drag is a single step in the history rather than one per mouse move.
+    /// The transform handles follow the selected layer: the tool shows its box while nothing is being
+    /// dragged, and nothing at all when there is no layer with pixels to transform.
     /// </summary>
-    private void MoveStarted()
+    private void ShowTransformBox()
     {
-        if (_document is not { } document || Selected is not { } id) return;
-        _moving = id;
-        _history.Begin("Move", document, id);
+        if (_tool != Tool.Move || _document is not { } document || Selected is not { } id)
+        {
+            _canvas.TransformBox = null;
+            return;
+        }
+        _canvas.TransformBox = document.Layers.FirstOrDefault(layer => layer.ID == id) is { IsGroup: false, Asset: not null } layer
+            ? layer.Transform
+            : null;
     }
 
-    private void MoveChanged(SKPoint delta)
+    /// <summary>The pointer took hold of the box: the whole drag is one step in the history.</summary>
+    private void TransformStarted()
     {
-        if (_document is not { } document || _moving is not { } id) return;
-        LayerEdits.Move(document, id, delta.X, delta.Y);
+        if (_document is not { } document || Selected is not { } id) return;
+        _transforming = id;
+        _history.Begin("Transform", document, id);
+    }
+
+    /// <summary>
+    /// A drag under way: the box the handles worked out goes on the layer, snapped to whatever is nearby,
+    /// and the lines it snapped to are drawn along.
+    /// </summary>
+    private void TransformChanged(LayerTransform draft)
+    {
+        if (_document is not { } document || _transforming is not { } id) return;
+        var tolerance = TransformSnap.Distance / Math.Max(_canvas.Zoom, 0.0001);
+        var placed = TransformEdits.Snap(document, draft, [id], tolerance, out var lineX, out var lineY);
+        _canvas.SnapLines = (lineX, lineY);
+        LayerEdits.SetTransform(document, id, placed);
+        _canvas.TransformBox = placed;
         Refresh();
     }
 
-    private void MoveFinished()
+    private void TransformFinished()
     {
-        if (_document is not { } document || _moving is not { } id) return;
-        _moving = null;
+        if (_document is not { } document || _transforming is not { } id) return;
+        _transforming = null;
+        _canvas.SnapLines = (null, null);
         _history.End(document, id);
+        ShowTransformBox();
         Refresh();
     }
 
@@ -971,6 +996,7 @@ public sealed class MainWindow : Window
     {
         _canvas.InvalidateVisual();
         UpdateLayerMenu();
+        if (_transforming is null) ShowTransformBox();
         var undo = _history.CanUndo ? $"Undo {_history.UndoName}" : "";
         var redo = _history.CanRedo ? $"Redo {_history.RedoName}" : "";
         var edited = _history.IsModified ? "edited" : "";

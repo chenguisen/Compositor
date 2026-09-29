@@ -8,6 +8,7 @@ using Compositor.Core.Document;
 using Compositor.Core.Model;
 using Compositor.Core.Rendering;
 using SkiaSharp;
+using LayerTransform = Compositor.Core.Model.LayerTransform;
 using SelectionMode = Compositor.Core.Document.SelectionMode;
 
 namespace Compositor.Desktop;
@@ -39,6 +40,12 @@ public sealed class CanvasView : Control
     private static readonly IBrush Backdrop = new SolidColorBrush(Color.FromRgb(0x18, 0x1A, 0x1E));
     private static readonly IBrush Paper = new SolidColorBrush(Color.FromRgb(0x2A, 0x2D, 0x33));
 
+    /// <summary>The transform box: solid white, so it reads against any picture.</summary>
+    private static readonly Pen TransformPen = new() { Brush = Brushes.White, Thickness = 1 };
+
+    /// <summary>A line a drag has snapped to: cyan, as Photoshop shows them.</summary>
+    private static readonly Pen SnapPen = new() { Brush = Brushes.Cyan, Thickness = 1 };
+
     private CanvasDocument? _document;
     private SKPoint _origin;
     private double _zoom = 1;
@@ -50,9 +57,6 @@ public sealed class CanvasView : Control
 
     /// <summary>When set, dragging paints instead of panning.</summary>
     public bool PaintEnabled { get; set; }
-
-    /// <summary>When set, dragging moves the selected layer instead of panning.</summary>
-    public bool MoveEnabled { get; set; }
 
     /// <summary>Which selection tool the pointer is holding; None leaves it panning.</summary>
     public SelectionTool Selection { get; set; }
@@ -78,6 +82,31 @@ public sealed class CanvasView : Control
     /// <summary>Handed the point the eyedropper was clicked at, in document pixels.</summary>
     public Action<SKPoint>? EyedropperClicked { get; set; }
 
+    /// <summary>When set, the box below is drawn with its handles and can be dragged about.</summary>
+    public bool TransformEnabled { get; set; }
+
+    /// <summary>The box the transform handles sit around, in document pixels.</summary>
+    public LayerTransform? TransformBox { get; set; }
+
+    /// <summary>Whether a scale drag keeps the sides in proportion unless Shift says otherwise.</summary>
+    public bool TransformLockRatio { get; set; }
+
+    /// <summary>The pointer took hold of the box: the whole drag is one undo step.</summary>
+    public Action? TransformStarted { get; set; }
+
+    /// <summary>The box a drag has worked out, for the app to put on the layer.</summary>
+    public Action<LayerTransform>? TransformChanged { get; set; }
+
+    public Action? TransformFinished { get; set; }
+
+    /// <summary>Lines to draw along while a drag is snapped to something.</summary>
+    public (double? X, double? Y) SnapLines { get; set; }
+
+    private TransformHandle? _handle;
+    private LayerTransform _dragOriginal;
+    private SKPoint _dragStart;
+
+    private bool _transformDragging;
     private bool _selecting;
     private SKPoint _selectionAnchor;
     private SKRectI? _selectionBox;
@@ -93,17 +122,6 @@ public sealed class CanvasView : Control
 
     /// <summary>Handed the finished stroke, in document pixels.</summary>
     public Action<IReadOnlyList<SKPoint>>? StrokeFinished { get; set; }
-
-    /// <summary>A move gesture, so the whole drag is one undo step: the app opens an edit on
-    /// <see cref="MoveStarted"/>, applies each delta, and closes it on <see cref="MoveFinished"/>.</summary>
-    public Action? MoveStarted { get; set; }
-
-    public Action<SKPoint>? MoveChanged { get; set; }
-
-    public Action? MoveFinished { get; set; }
-
-    private SKPoint _moveAnchor;
-    private bool _moving;
 
     public CanvasView()
     {
@@ -208,6 +226,22 @@ public sealed class CanvasView : Control
         InvalidateVisual();
     }
 
+    /// <summary>
+    /// Takes hold of a handle, or of the box itself, if the click landed on one. The drag is measured from
+    /// where it began rather than compounded, so the app can hold the box it started with.
+    /// </summary>
+    private bool beginTransformDrag(LayerTransform box, SKPoint point, KeyModifiers modifiers)
+    {
+        var handle = TransformEdits.HandleAt(box, point, TransformEdits.Grab / _zoom, TransformEdits.RotateGrip / _zoom);
+        if (handle is null && !box.Contains(point)) return false;
+        _transformDragging = true;
+        _handle = handle;
+        _dragOriginal = box;
+        _dragStart = point;
+        TransformStarted?.Invoke();
+        return true;
+    }
+
     /// <summary>Closes an open polygonal lasso and hands it to the app.</summary>
     private void CompleteSelection()
     {
@@ -256,6 +290,7 @@ public sealed class CanvasView : Control
             DashStyle = new DashStyle([4.0, 4.0], 0),
         };
         DrawDraft(context, pen);
+        DrawTransform(context);
         if (_document?.Selection.Path is not { } path || path.IsEmpty) return;
         foreach (var contour in Contours(path))
         {
@@ -263,6 +298,38 @@ public sealed class CanvasView : Control
             {
                 context.DrawLine(pen, ToScreen(contour[index - 1]), ToScreen(contour[index]));
             }
+        }
+    }
+
+    /// <summary>The transform box: its outline, its eight handles, the grip that turns it, and the lines a
+    /// drag has snapped to.</summary>
+    private void DrawTransform(DrawingContext context)
+    {
+        if (SnapLines is ({ } lineX, _))
+        {
+            var top = ToScreen(new SKPoint((float)lineX, 0));
+            context.DrawLine(SnapPen, top, new Point(top.X, Bounds.Height));
+        }
+        if (SnapLines is (_, { } lineY))
+        {
+            var left = ToScreen(new SKPoint(0, (float)lineY));
+            context.DrawLine(SnapPen, left, new Point(Bounds.Width, left.Y));
+        }
+        if (!TransformEnabled || TransformBox is not { } box) return;
+        var corners = TransformEdits.Corners(box);
+        for (var index = 0; index < corners.Length; index++)
+        {
+            context.DrawLine(TransformPen, ToScreen(corners[index]),
+                ToScreen(corners[(index + 1) % corners.Length]));
+        }
+        foreach (var handle in Enum.GetValues<TransformHandle>())
+        {
+            var at = handle == TransformHandle.Rotate
+                ? TransformEdits.RotatePosition(box, TransformEdits.RotateGrip / _zoom)
+                : TransformEdits.Position(box, handle);
+            var centre = ToScreen(at);
+            context.DrawRectangle(null, TransformPen,
+                new Rect(centre.X - 3, centre.Y - 3, 6, 6));
         }
     }
 
@@ -385,6 +452,13 @@ public sealed class CanvasView : Control
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
+        if (TransformEnabled && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed
+            && TransformBox is { } box && beginTransformDrag(box, ToDocument(e.GetPosition(this)), e.KeyModifiers))
+        {
+            e.Pointer.Capture(this);
+            e.Handled = true;
+            return;
+        }
         if (EyedropperOnClick && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
         {
             e.Handled = true;
@@ -405,15 +479,6 @@ public sealed class CanvasView : Control
             _stroke.Add(ToDocument(e.GetPosition(this)));
             e.Pointer.Capture(this);
             InvalidateVisual();
-            e.Handled = true;
-            return;
-        }
-        if (MoveEnabled && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
-        {
-            _moving = true;
-            _moveAnchor = ToDocument(e.GetPosition(this));
-            e.Pointer.Capture(this);
-            MoveStarted?.Invoke();
             e.Handled = true;
             return;
         }
@@ -470,12 +535,19 @@ public sealed class CanvasView : Control
             base.OnPointerMoved(e);
             return;
         }
-        if (_moving)
+        if (_dragOriginal.IsValid && TransformBox is not null && _transformDragging)
         {
             var point = ToDocument(now);
-            var delta = new SKPoint(point.X - _moveAnchor.X, point.Y - _moveAnchor.Y);
-            _moveAnchor = point;
-            if (delta.X != 0 || delta.Y != 0) MoveChanged?.Invoke(delta);
+            var shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+            var option = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
+            var draft = _handle switch
+            {
+                TransformHandle.Rotate => TransformEdits.Rotate(_dragOriginal, _dragStart, point, steps: shift),
+                null => TransformEdits.Move(_dragOriginal, point.X - _dragStart.X, point.Y - _dragStart.Y, axisLock: shift),
+                var handle => TransformEdits.Resize(_dragOriginal, handle.Value, _dragStart, point,
+                    lockRatio: TransformLockRatio != shift, fromCentre: option),
+            };
+            TransformChanged?.Invoke(draft);
             base.OnPointerMoved(e);
             return;
         }
@@ -522,11 +594,14 @@ public sealed class CanvasView : Control
             e.Pointer.Capture(null);
             return;
         }
-        if (_moving)
+        if (_transformDragging)
         {
-            _moving = false;
+            _transformDragging = false;
+            _handle = null;
+            SnapLines = (null, null);
             e.Pointer.Capture(null);
-            MoveFinished?.Invoke();
+            InvalidateVisual();
+            TransformFinished?.Invoke();
             return;
         }
         if (_selecting)
