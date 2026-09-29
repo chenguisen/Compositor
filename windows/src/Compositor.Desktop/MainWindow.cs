@@ -181,6 +181,7 @@ public sealed class MainWindow : Window
         _canvas.GradientStarted = GradientStarted;
         _canvas.GradientChanged = GradientChanged;
         _canvas.DistortStarted = DistortStarted;
+        _canvas.DistortChanged = DistortChanged;
         _canvas.DistortFinished = DistortFinished;
         _canvas.GuideDragStarted = GuideDragStarted;
         _canvas.GuideMoved = GuideMoved;
@@ -1562,8 +1563,18 @@ public sealed class MainWindow : Window
     /// <summary>A distortion has been taken hold of: one undo step for the whole drag, as a slider drag gets.</summary>
     private void DistortStarted()
     {
-        if (_document is not { } document) return;
+        if (_document is not { } document || Selected is not { } id) return;
         _history.Begin("Distort", document, Selected);
+        StartPreview(document, id);
+    }
+
+    /// <summary>
+    /// A corner has moved: the layer is resampled into the shape the corners make in the preview, so the
+    /// distortion can be seen while it is being made rather than only after it is let go.
+    /// </summary>
+    private void DistortChanged(IReadOnlyList<SKPoint> corners)
+    {
+        RequestPreview((target, layer) => DistortEdits.Distort(target, layer, corners));
     }
 
     /// <summary>
@@ -1574,6 +1585,7 @@ public sealed class MainWindow : Window
     private void DistortFinished(IReadOnlyList<SKPoint> corners)
     {
         if (_document is not { } document || Selected is not { } id) return;
+        StopPreview();
         if (!DistortEdits.Distort(document, id, corners)) Say("That shape cannot be made");
         _history.End(document, Selected);
         Reselect(id);
