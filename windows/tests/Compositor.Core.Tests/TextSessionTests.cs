@@ -2,6 +2,7 @@ using Compositor.Core.Document;
 using Compositor.Core.Format;
 using Compositor.Core.Model;
 using SkiaSharp;
+using LayerTransform = Compositor.Core.Model.LayerTransform;
 
 namespace Compositor.Core.Tests;
 
@@ -20,6 +21,110 @@ public class TextSessionTests
         Green = 0,
         Blue = 0,
     };
+
+    [Fact]
+    public void TheCaretStartsAfterWhatIsAlreadyThere()
+    {
+        using var document = new CanvasDocument(Guid.NewGuid(), 400, 200);
+        // A session that is typed into rather than clicked into adds to the end, as it always has.
+        var fresh = TextSession.New(Style(), new SKPoint(0, 0));
+        Assert.Equal(0, fresh.CaretIndex);
+        var layer = LayerWith(document, "Hello");
+        var joined = TextSession.Editing(layer);
+        Assert.Equal("Hello".Length, joined.CaretIndex);
+    }
+
+    [Fact]
+    public void TypingInTheMiddleOfTheWordsPutsTheCharactersThere()
+    {
+        using var document = new CanvasDocument(Guid.NewGuid(), 400, 200);
+        var session = TextSession.Editing(LayerWith(document, "Hllo"));
+        Assert.Equal(4, session.CaretIndex);
+        // Back to just after the H, and type the e that was left out.
+        Assert.True(session.MoveCaret(TextSession.TextMove.Left));
+        Assert.True(session.MoveCaret(TextSession.TextMove.Left));
+        Assert.True(session.MoveCaret(TextSession.TextMove.Left));
+        Assert.Equal(1, session.CaretIndex);
+        Assert.True(session.Type(document, "e"));
+        Assert.Equal("Hello", session.Content);
+        Assert.Equal(2, session.CaretIndex);
+        Assert.Equal("Hello", document.Layers.Single().LiveText!.Content);
+    }
+
+    [Fact]
+    public void BackspaceAndDeleteTakeTheCharactersEitherSideOfTheCaret()
+    {
+        using var document = new CanvasDocument(Guid.NewGuid(), 400, 200);
+        var session = TextSession.Editing(LayerWith(document, "Helo"));
+        // The caret sits at the end: backspace takes the o.
+        Assert.True(session.Backspace(document));
+        Assert.Equal("Hel", session.Content);
+        Assert.Equal(3, session.CaretIndex);
+        // Delete has nothing after it to take.
+        Assert.False(session.Delete(document));
+        // Move back one and delete takes the l that is now in front of the caret.
+        Assert.True(session.MoveCaret(TextSession.TextMove.Left));
+        Assert.Equal(2, session.CaretIndex);
+        Assert.True(session.Delete(document));
+        Assert.Equal("He", session.Content);
+        Assert.Equal(2, session.CaretIndex);
+        // Nothing happens at the start of the words.
+        Assert.True(session.MoveCaret(TextSession.TextMove.Home));
+        Assert.False(session.Backspace(document));
+        Assert.Equal("He", session.Content);
+    }
+
+    [Fact]
+    public void TheCaretWalksTheLinesAndTheEndsOfThem()
+    {
+        using var document = new CanvasDocument(Guid.NewGuid(), 400, 200);
+        var session = TextSession.Editing(LayerWith(document, "one" + Environment.NewLine + "three"));
+        // The first line is three characters, and the second starts after the newline whatever it is made of.
+        var firstLineEnd = 3;
+        var secondStart = firstLineEnd + Environment.NewLine.Length;
+        // Up from the end of the second line lands at the end of the shorter first line.
+        Assert.True(session.MoveCaret(TextSession.TextMove.Up));
+        Assert.Equal(firstLineEnd, session.CaretIndex);
+        Assert.True(session.MoveCaret(TextSession.TextMove.Home));
+        Assert.Equal(0, session.CaretIndex);
+        Assert.True(session.MoveCaret(TextSession.TextMove.Down));
+        Assert.Equal(secondStart, session.CaretIndex);
+        Assert.True(session.MoveCaret(TextSession.TextMove.End));
+        Assert.Equal(session.Content.Length, session.CaretIndex);
+        // The ends of the words are as far as each direction goes.
+        Assert.False(session.MoveCaret(TextSession.TextMove.Right));
+        // Home goes to the start of the line the caret is on, not to the start of everything.
+        Assert.True(session.MoveCaret(TextSession.TextMove.Home));
+        Assert.Equal(secondStart, session.CaretIndex);
+        // From there, up is the same place along the line above — which is its start, and the very beginning.
+        Assert.True(session.MoveCaret(TextSession.TextMove.Up));
+        Assert.Equal(0, session.CaretIndex);
+        Assert.False(session.MoveCaret(TextSession.TextMove.Left));
+        Assert.False(session.MoveCaret(TextSession.TextMove.Up));
+    }
+
+    [Fact]
+    public void AClickInTheMiddleOfTheWordsPutsTheCaretThere()
+    {
+        using var document = new CanvasDocument(Guid.NewGuid(), 400, 200);
+        var session = TextSession.Editing(LayerWith(document, "Hello"));
+        var box = session.Box(document);
+        // A click a little way in from the left of the text, on its own line.
+        var caret = TextEdits.Caret(session.Style, 2);
+        var point = new SKPoint(box.Left + caret.X + 1, box.Top + caret.Y);
+        Assert.True(session.PlaceCaret(document, point));
+        Assert.Equal(2, session.CaretIndex);
+    }
+
+    /// <summary>A text layer in the document, so a session can join it.</summary>
+    private static ImageLayer LayerWith(CanvasDocument document, string content)
+    {
+        var style = Style(content);
+        var id = TextEdits.Add(document, style, new SKPoint(30, 40))!.Value;
+        var layer = document.Layers.First(entry => entry.ID == id);
+        Assert.NotNull(layer.Text);
+        return layer;
+    }
 
     [Fact]
     public void NothingIsAddedUntilACharacterIsTyped()

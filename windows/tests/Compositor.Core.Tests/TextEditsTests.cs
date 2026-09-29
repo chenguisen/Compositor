@@ -273,6 +273,63 @@ public class TextEditsTests : IDisposable
     }
 
     [Fact]
+    public void TheCaretSitsWhereTheCharactersInFrontOfItEnd()
+    {
+        var style = Style("Hello");
+        // The very start is at the left of the text, and each character moves it right by that character.
+        var start = TextEdits.Caret(style, 0);
+        var after = TextEdits.Caret(style, style.Content.Length);
+        Assert.True(start.X < after.X, $"{start.X} is not left of {after.X}");
+        for (var index = 1; index <= style.Content.Length; index++)
+        {
+            Assert.True(TextEdits.Caret(style, index).X > TextEdits.Caret(style, index - 1).X,
+                $"the caret did not move at {index}");
+        }
+        // Asking for the end is the same as asking for the words themselves.
+        Assert.Equal(TextEdits.Caret(style), after);
+        // And past the end is the end.
+        Assert.Equal(after, TextEdits.Caret(style, 99));
+        Assert.Equal(start, TextEdits.Caret(style, -3));
+    }
+
+    [Fact]
+    public void TheCaretFollowsTheLineTheIndexFallsOn()
+    {
+        var style = Style("Hello" + Environment.NewLine + "Hi");
+        var endOfFirst = TextEdits.Caret(style, 5);
+        var startOfSecond = TextEdits.Caret(style, 5 + Environment.NewLine.Length);
+        // A line lower, and back at the left of the box: both ends of a newline.
+        Assert.True(startOfSecond.Y > endOfFirst.Y, $"{startOfSecond.Y} is not below {endOfFirst.Y}");
+        Assert.Equal(style.LineHeight, startOfSecond.Y - endOfFirst.Y, 2);
+        Assert.True(startOfSecond.X < endOfFirst.X, $"{startOfSecond.X} is not left of {endOfFirst.X}");
+        Assert.Equal(TextEdits.Padding, startOfSecond.X, 2);
+    }
+
+    [Fact]
+    public void TheCaretOnAWrappedLineSitsAtTheEndOfTheLineBefore()
+    {
+        // A paragraph box narrow enough that "Hello there" wraps: the space it breaks at is left out of the
+        // drawing, so a caret on it belongs at the end of the first line.
+        var style = Style("Hello there");
+        style.BoxSize = new JsonSize { Width = 120, Height = 0 };
+        var atSpace = TextEdits.Caret(style, 5);
+        var firstLine = TextEdits.Caret(style, 4);
+        Assert.Equal(firstLine.Y, atSpace.Y, 2);
+        Assert.True(atSpace.X > firstLine.X, "the caret at the space is not at the end of the line");
+        // The character after it starts the next line.
+        var nextLine = TextEdits.Caret(style, 6);
+        Assert.True(nextLine.Y > atSpace.Y, $"{nextLine.Y} is not below {atSpace.Y}");
+    }
+
+    [Fact]
+    public void AnEmptyTextHasItsCaretInsideThePadding()
+    {
+        var caret = TextEdits.Caret(Style(""), 0);
+        Assert.Equal(TextEdits.Padding, caret.X, 2);
+        Assert.True(caret.Y > TextEdits.Padding, $"the caret is at {caret.Y}");
+    }
+
+    [Fact]
     public void TrackingMovesTheCaretWithTheLetters()
     {
         var plain = TextEdits.Caret(Style("Hello"));

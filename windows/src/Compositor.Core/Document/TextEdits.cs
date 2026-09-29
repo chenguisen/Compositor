@@ -118,13 +118,29 @@ public static class TextEdits
     /// Where the caret sits when the text ends: after the last character of the last line, and on the first
     /// line's baseline when there is no text yet. Relative to the layer's own top left, in layer pixels.
     /// </summary>
-    public static SKPoint Caret(LayerTextStyle style)
+    public static SKPoint Caret(LayerTextStyle style) => Caret(style, (style.Content ?? "").Length);
+
+    /// <summary>
+    /// Where the caret sits with <paramref name="index"/> characters in front of it: at the place the text
+    /// before it ends, on the line that falls on. An index past the end is the end, and one on a character
+    /// that a line break left out — the space a wrapped line breaks at — sits at the end of the line before.
+    /// </summary>
+    public static SKPoint Caret(LayerTextStyle style, int index)
     {
-        var pieces = Layout(style, out _, out _);
-        if (pieces.Count == 0) return new SKPoint((float)Padding, (float)(Padding + Baseline(style)));
-        var last = pieces[^1];
-        return new SKPoint(last.X + (float)Advance(last.Text, last.Typeface, style), last.Y);
+        var stops = new List<Stop>();
+        Layout(style, out _, out _, stops);
+        if (stops.Count == 0) return new SKPoint((float)Padding, (float)(Padding + Baseline(style)));
+        var at = Math.Clamp(index, 0, (style.Content ?? "").Length);
+        foreach (var stop in stops)
+        {
+            if (stop.Index >= at) return new SKPoint(stop.X, stop.Y);
+        }
+        var last = stops[^1];
+        return new SKPoint(last.X, last.Y);
     }
+
+    /// <summary>A place the caret can sit: how far into the words, and where that is drawn.</summary>
+    private readonly record struct Stop(int Index, float X, float Y);
 
     /// <summary>How far below the top of a line its writing sits.</summary>
     private static double Baseline(LayerTextStyle style)
@@ -152,7 +168,8 @@ public static class TextEdits
     /// The text laid out: every character with its place, and how big the whole paragraph came out. Lines
     /// break where the content says so, and, in a paragraph box, wherever the next word would not fit.
     /// </summary>
-    private static List<Piece> Layout(LayerTextStyle style, out double measuredWidth, out double measuredHeight)
+    private static List<Piece> Layout(LayerTextStyle style, out double measuredWidth, out double measuredHeight,
+        List<Stop>? stops = null)
     {
         var pieces = new List<Piece>();
         var content = style.Content ?? "";
@@ -172,21 +189,32 @@ public static class TextEdits
                 var width = 0.0;
                 var index = from;
                 var first = pieces.Count;
+                var firstStop = stops?.Count ?? 0;
+                var y = (float)(Padding + line * lineHeight + baseline);
                 while (index < to)
                 {
                     var text = NextElement(content, index, to, out var taken);
                     var typeface = fonts[index];
-                    pieces.Add(new Piece(text, typeface, colours[index], (float)width,
-                        (float)(Padding + line * lineHeight + baseline)));
+                    pieces.Add(new Piece(text, typeface, colours[index], (float)width, y));
+                    stops?.Add(new Stop(index, (float)width, y));
                     width += Advance(text, typeface, style);
                     index += taken;
                 }
+                stops?.Add(new Stop(to, (float)width, y));
                 // The line is aligned inside the paragraph's box, which point text does not have: its box
                 // is what it measures, so there is nothing to shift within.
                 var offset = AlignmentOffset(style.Alignment, limit, width);
+                var shift = (float)(Padding + offset);
                 for (var at = first; at < pieces.Count; at++)
                 {
-                    pieces[at] = pieces[at] with { X = pieces[at].X + (float)(Padding + offset) };
+                    pieces[at] = pieces[at] with { X = pieces[at].X + shift };
+                }
+                if (stops is not null)
+                {
+                    for (var at = firstStop; at < stops.Count; at++)
+                    {
+                        stops[at] = stops[at] with { X = stops[at].X + shift };
+                    }
                 }
                 measuredWidth = Math.Max(measuredWidth, width);
                 line++;

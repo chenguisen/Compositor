@@ -22,6 +22,9 @@ public sealed class TextSession
         _original = original;
         _origin = origin;
         LayerID = layer;
+        // The caret starts after whatever is already there, so a session that is typed into rather than
+        // clicked into adds to the end — which is where it has always gone.
+        CaretIndex = style.Content?.Length ?? 0;
     }
 
     /// <summary>The layer the words are on, once they have one: a session with no characters has no layer.</summary>
@@ -29,6 +32,9 @@ public sealed class TextSession
 
     /// <summary>What has been typed so far.</summary>
     public string Content => _style.Content;
+
+    /// <summary>How many characters are in front of the caret, from 0 to the length of the words.</summary>
+    public int CaretIndex { get; private set; }
 
     /// <summary>The style the words are being drawn with, as they stand.</summary>
     public LayerTextStyle Style => _style;
@@ -50,33 +56,132 @@ public sealed class TextSession
     }
 
     /// <summary>
-    /// Adds what was typed — a character, or a newline — and draws the layer again. False when the text
-    /// cannot be drawn at all, which leaves the session as it was.
+    /// Adds what was typed — a character, or a newline — where the caret is, and draws the layer again.
+    /// False when the text cannot be drawn at all, which leaves the session as it was.
     /// </summary>
     public bool Type(CanvasDocument document, string typed)
     {
+        if (typed.Length == 0) return false;
+        return Splice(document, CaretIndex, 0, typed);
+    }
+
+    /// <summary>
+    /// The backspace key: the character before the caret goes, which for a surrogate pair is both of its
+    /// halves. Nothing happens at the start of the words.
+    /// </summary>
+    public bool Backspace(CanvasDocument document)
+    {
+        if (CaretIndex == 0) return false;
+        var length = char.IsLowSurrogate(_style.Content[CaretIndex - 1]) && CaretIndex >= 2
+            && char.IsHighSurrogate(_style.Content[CaretIndex - 2]) ? 2 : 1;
+        return Splice(document, CaretIndex - length, length, "");
+    }
+
+    /// <summary>The delete key: the character after the caret goes. Nothing happens at the end.</summary>
+    public bool Delete(CanvasDocument document)
+    {
+        if (CaretIndex >= _style.Content.Length) return false;
+        var length = char.IsHighSurrogate(_style.Content[CaretIndex]) && CaretIndex + 1 < _style.Content.Length
+            && char.IsLowSurrogate(_style.Content[CaretIndex + 1]) ? 2 : 1;
+        return Splice(document, CaretIndex, length, "");
+    }
+
+    /// <summary>
+    /// Moves the caret through the words, and answers whether it went anywhere. Up and down move it a line,
+    /// keeping its place along the line as far as that line reaches — counted by characters rather than by
+    /// what is drawn, so on a wrapped line it can land a character or two from where the eye expects.
+    /// </summary>
+    public bool MoveCaret(TextMove move)
+    {
+        var content = _style.Content;
+        var wanted = move switch
+        {
+            TextMove.Left => CaretIndex > 0 ? CaretIndex - (PairBefore(content, CaretIndex) ? 2 : 1) : 0,
+            TextMove.Right => CaretIndex < content.Length ? CaretIndex + (PairAt(content, CaretIndex) ? 2 : 1) : content.Length,
+            TextMove.Home => StartOfLine(content, CaretIndex),
+            TextMove.End => EndOfLine(content, CaretIndex),
+            TextMove.Up => NeighbouringLine(content, CaretIndex, -1),
+            _ => NeighbouringLine(content, CaretIndex, 1),
+        };
+        if (wanted == CaretIndex) return false;
+        CaretIndex = Math.Clamp(wanted, 0, content.Length);
+        return true;
+    }
+
+    /// <summary>Where a click puts the caret: at the nearest place on the line it was clicked on.</summary>
+    public bool PlaceCaret(CanvasDocument document, SKPoint point)
+    {
+        var box = Box(document);
+        var best = CaretIndex;
+        var nearest = double.MaxValue;
+        for (var index = 0; index <= _style.Content.Length; index++)
+        {
+            var at = TextEdits.Caret(_style, index);
+            // Only the lines the click is on are in the running, so the nearest place is measured across.
+            if (Math.Abs(box.Top + at.Y - point.Y) > _style.LineHeight) continue;
+            var distance = Math.Abs(box.Left + at.X - point.X);
+            if (distance >= nearest) continue;
+            nearest = distance;
+            best = index;
+        }
+        if (best == CaretIndex) return false;
+        CaretIndex = best;
+        return true;
+    }
+
+    /// <summary>Takes characters out and puts others in their place, and draws the layer again.</summary>
+    private bool Splice(CanvasDocument document, int at, int remove, string insert)
+    {
         var next = Copy(_style);
-        next.Content += typed;
+        next.Content = next.Content.Remove(at, remove).Insert(at, insert);
         var before = _style;
+        var caret = CaretIndex;
         _style = next;
+        CaretIndex = at + insert.Length;
         if (Draw(document)) return true;
         _style = before;
+        CaretIndex = caret;
         return false;
     }
 
-    /// <summary>The delete key: the last character goes, which for a surrogate pair is both of its halves.</summary>
-    public bool Backspace(CanvasDocument document)
+    private static bool PairAt(string content, int index) =>
+        index + 1 < content.Length && char.IsHighSurrogate(content[index]) && char.IsLowSurrogate(content[index + 1]);
+
+    private static bool PairBefore(string content, int index) =>
+        index >= 2 && char.IsLowSurrogate(content[index - 1]) && char.IsHighSurrogate(content[index - 2]);
+
+    private static int StartOfLine(string content, int index)
     {
-        if (_style.Content.Length == 0) return false;
-        var length = char.IsLowSurrogate(_style.Content[^1]) && _style.Content.Length >= 2
-            && char.IsHighSurrogate(_style.Content[^2]) ? 2 : 1;
-        var next = Copy(_style);
-        next.Content = next.Content[..^length];
-        var before = _style;
-        _style = next;
-        if (Draw(document)) return true;
-        _style = before;
-        return false;
+        var at = content.LastIndexOf('\n', Math.Max(0, Math.Min(index, content.Length) - 1));
+        return at < 0 ? 0 : at + 1;
+    }
+
+    /// <summary>Where a line's text ends: before its newline, and before the carriage return of a CR-LF.</summary>
+    private static int EndOfLine(string content, int index)
+    {
+        var at = content.IndexOf('\n', Math.Min(index, content.Length));
+        if (at < 0) return content.Length;
+        return at > 0 && content[at - 1] == '\r' ? at - 1 : at;
+    }
+
+    /// <summary>
+    /// The caret's place on the line above or below: the same distance along that line, or its end when the
+    /// caret was further along than that line reaches.
+    /// </summary>
+    private static int NeighbouringLine(string content, int index, int direction)
+    {
+        var line = StartOfLine(content, index);
+        var column = index - line;
+        if (direction < 0)
+        {
+            if (line == 0) return index;
+            var above = StartOfLine(content, line - 1);
+            return Math.Min(above + column, EndOfLine(content, above));
+        }
+        var breakAt = content.IndexOf('\n', Math.Min(index, content.Length));
+        if (breakAt < 0) return index;
+        var below = breakAt + 1;
+        return Math.Min(below + column, EndOfLine(content, below));
     }
 
     /// <summary>
@@ -117,11 +222,11 @@ public sealed class TextSession
     public bool Contains(CanvasDocument document, SKPoint point) =>
         Box(document).Contains(new SKPointI((int)Math.Floor(point.X), (int)Math.Floor(point.Y)));
 
-    /// <summary>The caret, in document pixels: a thin box where the text ends, as tall as the type.</summary>
+    /// <summary>The caret, in document pixels: a thin box where it sits, as tall as the type.</summary>
     public SKRect Caret(CanvasDocument document)
     {
         var box = Box(document);
-        var caret = TextEdits.Caret(_style);
+        var caret = TextEdits.Caret(_style, CaretIndex);
         var size = (float)_style.FontSize;
         return SKRect.Create(box.Left + caret.X, box.Top + caret.Y - size * 0.8f, 2, size);
     }
@@ -136,6 +241,17 @@ public sealed class TextSession
         if (_style.Content.Length == 0) return true;
         LayerID = TextEdits.Add(document, _style, _origin);
         return LayerID is not null;
+    }
+
+    /// <summary>Which way an editing key sends the caret.</summary>
+    public enum TextMove
+    {
+        Left,
+        Right,
+        Up,
+        Down,
+        Home,
+        End,
     }
 
     /// <summary>A copy, so that editing a session does not change the layer it came from.</summary>

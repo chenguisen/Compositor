@@ -165,6 +165,12 @@ public sealed class CanvasView : Control
     /// <summary>The delete key.</summary>
     public Action? TextBackspaced { get; set; }
 
+    /// <summary>The delete key while text is being typed: the character after the caret goes.</summary>
+    public Action? TextDeleted { get; set; }
+
+    /// <summary>An arrow or Home or End: which way the caret goes through the words.</summary>
+    public Action<TextSession.TextMove>? TextMoved { get; set; }
+
     /// <summary>Ctrl and Enter, or a click outside the text.</summary>
     public Action? TextCommitted { get; set; }
 
@@ -290,6 +296,24 @@ public sealed class CanvasView : Control
                     return;
                 case Key.Back:
                     TextBackspaced?.Invoke();
+                    e.Handled = true;
+                    return;
+                case Key.Delete:
+                    TextDeleted?.Invoke();
+                    e.Handled = true;
+                    return;
+                case Key.Left or Key.Right or Key.Up or Key.Down or Key.Home or Key.End:
+                    // With Shift held these would take a selection; there is none inside the text yet.
+                    if (e.KeyModifiers.HasFlag(KeyModifiers.Shift)) break;
+                    TextMoved?.Invoke(e.Key switch
+                    {
+                        Key.Left => TextSession.TextMove.Left,
+                        Key.Right => TextSession.TextMove.Right,
+                        Key.Up => TextSession.TextMove.Up,
+                        Key.Down => TextSession.TextMove.Down,
+                        Key.Home => TextSession.TextMove.Home,
+                        _ => TextSession.TextMove.End,
+                    });
                     e.Handled = true;
                     return;
             }

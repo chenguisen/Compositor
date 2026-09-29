@@ -183,6 +183,8 @@ public sealed class MainWindow : Window
         _canvas.TextClicked = TypeHere;
         _canvas.TextTyped = TypedText;
         _canvas.TextBackspaced = BackspacedText;
+        _canvas.TextDeleted = DeletedText;
+        _canvas.TextMoved = MovedTextCaret;
         _canvas.TextCommitted = CommitText;
         _canvas.TextCancelled = CancelText;
         _canvas.TransformStarted = TransformStarted;
@@ -1701,8 +1703,13 @@ public sealed class MainWindow : Window
     private void TypeHere(SKPoint origin)
     {
         if (_document is not { } document) return;
-        // A click inside the text already being typed stays in that session.
-        if (_text?.Contains(document, origin) == true) return;
+        // A click inside the text already being typed stays in that session, and puts the caret where it
+        // was clicked rather than at the end.
+        if (_text is { } session && session.Contains(document, origin))
+        {
+            if (session.PlaceCaret(document, origin)) ShowTextCaret();
+            return;
+        }
         CommitText();
         if (document.Layers.FirstOrDefault(layer => layer.Transform.Contains(origin) && layer.Text is not null)
             is { } target)
@@ -1749,6 +1756,20 @@ public sealed class MainWindow : Window
     {
         if (_document is not { } document || _text is not { } session) return;
         if (session.Backspace(document)) ShowText();
+    }
+
+    /// <summary>The delete key: the character after the caret goes, which does not change the layer's size.</summary>
+    private void DeletedText()
+    {
+        if (_document is not { } document || _text is not { } session) return;
+        if (session.Delete(document)) ShowText();
+    }
+
+    /// <summary>An arrow or Home or End: the caret moves through the words, and is drawn where it lands.</summary>
+    private void MovedTextCaret(TextSession.TextMove move)
+    {
+        if (_text is not { } session) return;
+        if (session.MoveCaret(move)) ShowTextCaret();
     }
 
     /// <summary>Puts the caret where the text ends and keeps the panel on the layer being typed on.</summary>
