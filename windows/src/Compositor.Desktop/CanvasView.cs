@@ -55,6 +55,9 @@ public sealed class CanvasView : Control
     /// <summary>A line a drag has snapped to: cyan, as Photoshop shows them.</summary>
     private static readonly Pen SnapPen = new() { Brush = Brushes.Cyan, Thickness = 1 };
 
+    private static readonly Pen FineGridPen = new() { Brush = new SolidColorBrush(Color.FromRgb(0x70, 0x70, 0x70), 0.5), Thickness = 1 };
+    private static readonly Pen MajorGridPen = new() { Brush = new SolidColorBrush(Color.FromRgb(0xA0, 0xA0, 0xA0), 0.7), Thickness = 1 };
+
     /// <summary>Guides are drawn in the blue Photoshop uses for them, so they do not read as part of the picture.</summary>
     private static readonly Pen GuidePen = new() { Brush = new SolidColorBrush(Color.FromRgb(0x33, 0x99, 0xFF)), Thickness = 1 };
 
@@ -293,6 +296,9 @@ public sealed class CanvasView : Control
 
     public double Zoom => _zoom;
 
+    /// <summary>The layout grid drawn under the guides and everything else, or null when it is off.</summary>
+    public LayoutGrid? Grid { get; set; }
+
     /// <summary>Whether the view had to stop zooming out because one screenful would be too big to draw.</summary>
     public bool ZoomedOutAsFarAsItGoes { get; private set; }
 
@@ -367,9 +373,21 @@ public sealed class CanvasView : Control
             region.Height * _zoom);
         context.DrawRectangle(Paper, null, destination);
         context.DrawImage(image, destination);
+        DrawGrid(context, document);
         DrawGuides(context, document);
         DrawSelection(context);
         DrawStroke(context);
+    }
+
+    /// <summary>The layout grid, drawn over the picture as Photoshop draws it and under everything else.</summary>
+    private void DrawGrid(DrawingContext context, CanvasDocument document)
+    {
+        if (Grid is not { } grid) return;
+        var lines = grid.Lines(document.Width, document.Height, _zoom, _origin.X, _origin.Y);
+        foreach (var x in lines.VerticalFine) context.DrawLine(FineGridPen, new Point(x, 0), new Point(x, Bounds.Height));
+        foreach (var y in lines.HorizontalFine) context.DrawLine(FineGridPen, new Point(0, y), new Point(Bounds.Width, y));
+        foreach (var x in lines.VerticalMajor) context.DrawLine(MajorGridPen, new Point(x, 0), new Point(x, Bounds.Height));
+        foreach (var y in lines.HorizontalMajor) context.DrawLine(MajorGridPen, new Point(0, y), new Point(Bounds.Width, y));
     }
 
     /// <summary>The alignment guides, across the whole canvas at the place each one sits.</summary>

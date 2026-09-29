@@ -35,6 +35,9 @@ public sealed class MainWindow : Window
 
     /// <summary>The clipping, mask and visibility rows, whose names and availability follow the selection.</summary>
     private readonly MenuItem _visibility = new();
+    private readonly MenuItem _showGrid = new();
+    private LayoutGrid _grid = new();
+    private bool _gridVisible;
     private readonly ComboBox _blend = new();
     private readonly Slider _opacity = new() { Minimum = 0, Maximum = 100, Width = 130 };
     private readonly TextBlock _opacityReadout = new() { Width = 40, VerticalAlignment = VerticalAlignment.Center };
@@ -182,6 +185,8 @@ public sealed class MainWindow : Window
         _eraseToggle.Click += (_, _) => SetErasing(!_erasing);
         _merge.Click += (_, _) => MergeLayers();
         _visibility.Click += (_, _) => ToggleVisibility();
+        _showGrid.Header = "Show _Grid";
+        _showGrid.Click += (_, _) => ShowGrid();
         _clipping.Click += (_, _) => ToggleClipping();
         _maskToggle.Click += (_, _) => ToggleMask();
         _maskLink.Click += (_, _) => ToggleMaskLink();
@@ -383,6 +388,9 @@ public sealed class MainWindow : Window
                         Command("Zoom _out", () => { _canvas.ZoomBy(1 / 1.25); Say(); }),
                         Command("_Fit on screen", () => { _canvas.Fit(); Say(); }),
                         Command("Actual _pixels", () => { _canvas.ActualSize(); Say(); }),
+                        new Separator(),
+                        _showGrid,
+                        Command("_Grid Settings…", () => _ = GridSettings()),
                         new Separator(),
                         Command("New _Guide…", () => _ = NewGuide(), "Ctrl+OemSemicolon"),
                         Command("_Clear Guides", ClearGuides),
@@ -1447,6 +1455,26 @@ public sealed class MainWindow : Window
         }
         _canvas.Fit();
         Say($"Image is now {asked.Width} x {asked.Height} at {asked.Resolution:0.##} per inch");
+    }
+
+    /// <summary>View ▸ Show Grid: the layout grid on or off, which the canvas draws under everything else.</summary>
+    private void ShowGrid()
+    {
+        _gridVisible = !_gridVisible;
+        _canvas.Grid = _gridVisible ? _grid : null;
+        _showGrid.Header = _gridVisible ? "_Hide Grid" : "Show _Grid";
+        _canvas.InvalidateVisual();
+        Say(_gridVisible ? $"Grid every {_grid.Spacing} pixels" : "Grid hidden");
+    }
+
+    /// <summary>View ▸ Grid Settings: how far apart the lines are and how finely each square is split.</summary>
+    private async Task GridSettings()
+    {
+        if (await GridSettingsDialog.Ask(this, _grid) is not { } asked) return;
+        _grid = asked;
+        if (_gridVisible) _canvas.Grid = _grid;
+        _canvas.InvalidateVisual();
+        Say($"Grid every {_grid.Spacing} pixels, split {_grid.Subdivisions} ways");
     }
 
     /// <summary>View ▸ New Guide: a line across the canvas to line things up against.</summary>
