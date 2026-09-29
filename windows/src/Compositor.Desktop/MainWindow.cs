@@ -1942,6 +1942,34 @@ public sealed class MainWindow : Window
             throw new InvalidOperationException($"clicking the rail's Brush gave {_tool}");
         }
 
+        // The Camera Raw panel's own amounts, clicked rather than driven through the panel's API: the panel is
+        // docked in this window and its amounts are inside a scroll view, which is where a control can be drawn
+        // and still not reachable.
+        CameraRawFilter();
+        if (_cameraRaw is not { } raw) throw new InvalidOperationException("the Camera Raw panel did not open");
+        // The panel's amounts are inside a scroll view, whose content is only attached when a layout pass runs —
+        // so without this the sliders are built, docked, and still nowhere a pointer can reach.
+        UpdateLayout();
+        if (raw.Amount("Exposure, stops") is not { } exposure)
+        {
+            throw new InvalidOperationException("the panel has no Exposure amount to click");
+        }
+        var exposureWas = raw.Current().Exposure;
+        if (exposure.TranslatePoint(new Point(exposure.Bounds.Width * 0.8, exposure.Bounds.Height / 2), this)
+            is not { } onSlider)
+        {
+            throw new InvalidOperationException("the panel's Exposure slider is not in the window");
+        }
+        Click(onSlider);
+        var exposureNow = raw.Current().Exposure;
+        report.Add($"the Camera Raw panel's Exposure slider clicked near its top: "
+            + $"{exposureWas:0.00} → {exposureNow:0.00}");
+        if (Math.Abs(exposureNow - exposureWas) < 0.1)
+        {
+            throw new InvalidOperationException("clicking the panel's own slider changed nothing");
+        }
+        CloseCameraRaw();
+
         // The eyedropper's Sample Ring: press and drag on the picture and the ring follows the pointer, naming
         // the colour under it across its top half and the colour being replaced across its bottom. This is the
         // last step and the pointer is left down, so the frame the caller photographs has the ring in it — a

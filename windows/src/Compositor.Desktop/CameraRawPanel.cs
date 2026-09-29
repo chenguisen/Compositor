@@ -173,6 +173,13 @@ internal sealed class CameraRawPanel
     /// <summary>Asks for the other of the histogram and the vectorscope, as a right-click on the scope does.</summary>
     internal void SwapScope() => _scopes.Swap();
 
+    /// <summary>
+    /// One of the panel's amounts, for the checks: a slider is the one control a pointer can be aimed at, and the
+    /// panel's amounts are inside a scroll view — the place this port's notes warn that a control can be drawn and
+    /// still not reachable, so a click on one is the only thing that proves it.
+    /// </summary>
+    internal Slider? Amount(string label) => _labelled.TryGetValue(label, out var slider) ? slider : null;
+
     /// <summary>Presses the Draw Guides button, which asks the canvas to take lines or lets it go.</summary>
     internal void PressDrawGuides() => SetDrawing(!_drawing);
 
