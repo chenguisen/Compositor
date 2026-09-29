@@ -143,6 +143,9 @@ public sealed class MainWindow : Window
 
     /// <summary>Where this project was opened from, so Save writes back to it.</summary>
     private string? _projectPath;
+    /// <summary>The project's folder watched for someone else writing it, and the timer that asks about it.</summary>
+    private ProjectWatch? _watch;
+    private DispatcherTimer? _watchTimer;
 
     /// <summary>Which pointer tool is in hand, and the menu rows that show it.</summary>
     private enum Tool
@@ -597,6 +600,7 @@ public sealed class MainWindow : Window
         _document = snapshot.ToDocument();
         _canvas.Document = _document;
         _projectPath = path;
+        WatchProject();
         NoteRecent(path);
         // A fresh document starts with clean history, as reopening a file does.
         _history.Reset();
@@ -1762,6 +1766,66 @@ public sealed class MainWindow : Window
     }
 
     /// <summary>
+    /// Starts watching the project that is open, so a copy of it written by something else — an editor beside
+    /// this window — is taken up. Nothing is watched when no project has been saved yet, since there is no
+    /// folder to watch.
+    /// </summary>
+    private void WatchProject()
+    {
+        _watch = ProjectWatch.For(_projectPath);
+        if (_watch is null)
+        {
+            _watchTimer?.Stop();
+            return;
+        }
+        _watchTimer ??= new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _watchTimer.Tick -= ProjectWritten;
+        _watchTimer.Tick += ProjectWritten;
+        _watchTimer.Start();
+    }
+
+    /// <summary>
+    /// The project on disk has been written by something else. What it holds now is put in place of what is
+    /// open, with the view and the selection kept, which is how the canvas takes a change an editor outside
+    /// made. A document with changes of its own is never thrown away for it: it is only said that the project
+    /// has moved on, and the person's own work waits until they save or reopen.
+    /// </summary>
+    private void ProjectWritten(object? sender, EventArgs e)
+    {
+        if (_watch?.Changed() is not true) return;
+        if (_document is not { } document || _projectPath is not { } path) return;
+        if (_history.IsModified)
+        {
+            Say("The project has been written by something else — save or reopen to take the change up");
+            return;
+        }
+        ProjectSnapshot snapshot;
+        try
+        {
+            snapshot = ProjectStore.Load(path);
+        }
+        catch (ProjectException)
+        {
+            Say("The project has been written by something else, and what is there now cannot be read");
+            return;
+        }
+        var viewport = _canvas.Viewport;
+        var selected = SelectedLayers;
+        // As in Open: the document takes the snapshot's pixel references, so the snapshot is left alone rather
+        // than disposed — disposing it would free the pixels the document is holding.
+        _document = snapshot.ToDocument();
+        _canvas.Document = _document;
+        _canvas.RestoreViewport(viewport);
+        document.Dispose();
+        _history.Reset();
+        ShowLayers(_document);
+        var again = selected.FirstOrDefault(id => _document.Layers.Any(layer => layer.ID == id));
+        if (again != Guid.Empty) Reselect(again);
+        Refresh();
+        Say($"{Path.GetFileName(path)} — taken up again, {_document.Layers.Count} layers");
+    }
+
+    /// <summary>
     /// The strips numbered the way the canvas is scrolled and zoomed: the same zoom and the same document
     /// place at the top left corner, so a tick lines up with what it measures.
     /// </summary>
@@ -2664,6 +2728,8 @@ public sealed class MainWindow : Window
                 _document = ImageImporter.NewDocument(image);
                 _canvas.Document = _document;
                 _projectPath = null;
+                // Nothing is saved yet, so there is no folder to watch.
+                WatchProject();
                 _history.Reset();
                 ShowLayers(_document);
                 Say($"{Path.GetFileName(path)} — {_document.Width} by {_document.Height}, " +
@@ -2734,6 +2800,9 @@ public sealed class MainWindow : Window
             // The snapshot shares the document's pixels and only reads them, so it is not disposed here.
             ProjectStore.Save(ProjectSnapshot.FromDocument(document), path);
             _history.MarkSaved();
+            // A save is the app's own writing, so the watch takes what is on disk now as what it holds: the
+            // folder is only worth watching for what someone else writes afterwards.
+            WatchProject();
             NoteRecent(path);
             Refresh();
             Say($"Saved {path}");

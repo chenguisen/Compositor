@@ -380,6 +380,17 @@ public sealed class CanvasView : Control
     /// </summary>
     public Action? ViewportChanged { get; set; }
 
+    /// <summary>Where the view sits over the document now, which a reload puts back afterwards.</summary>
+    public (double Zoom, double OriginX, double OriginY) Viewport => (_zoom, _origin.X, _origin.Y);
+
+    /// <summary>Puts the view back where it was, for a document that has been swapped underneath it.</summary>
+    public void RestoreViewport((double Zoom, double OriginX, double OriginY) viewport)
+    {
+        _zoom = Math.Clamp(viewport.Zoom, 0.01, 32);
+        _origin = new SKPoint((float)viewport.OriginX, (float)viewport.OriginY);
+        Moved();
+    }
+
     /// <summary>The layout grid drawn under the guides and everything else, or null when it is off.</summary>
     public LayoutGrid? Grid { get; set; }
 
