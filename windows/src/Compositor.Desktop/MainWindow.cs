@@ -37,7 +37,18 @@ public sealed class MainWindow : Window
         Margin = new Thickness(10, 3, 10, 3),
         Foreground = Skin.SecondaryBrush,
         FontSize = 11,
+        TextAlignment = Avalonia.Media.TextAlignment.Right,
     };
+    /// <summary>What the picture is — its zoom, its size and its colour space — as the Mac's own line has.</summary>
+    private readonly TextBlock _statusInfo = new()
+    {
+        Margin = new Thickness(10, 3, 10, 3),
+        Foreground = Skin.SecondaryBrush,
+        FontSize = 11,
+    };
+
+    /// <summary>The rail of tools down the left of the canvas, as the Mac keeps its own.</summary>
+    private readonly ToolRail _rail = new();
 
     /// <summary>The Layers panel's own column, which steps aside while the Camera Raw panel has the right edge.</summary>
     private readonly Border _layersSide = new() { Width = 280, Background = Panel };
@@ -220,28 +231,6 @@ public sealed class MainWindow : Window
     }
 
     /// <summary>Which pointer tool is in hand, and the menu rows that show it.</summary>
-    private enum Tool
-    {
-        Pan,
-        Move,
-        Marquee,
-        Ellipse,
-        Lasso,
-        Polygon,
-        Wand,
-        Brush,
-        Clone,
-        Blur,
-        Liquify,
-        Smudge,
-        Heal,
-        Eyedropper,
-        Type,
-        Crop,
-        Shape,
-        Gradient,
-    }
-
     private readonly Dictionary<Tool, MenuItem> _toolItems = [];
     private Tool _tool = Tool.Pan;
 
@@ -301,6 +290,12 @@ public sealed class MainWindow : Window
         _canvas.TransformFinished = TransformFinished;
         _paintOnMask.Click += (_, _) => SetPaintingMask(!_paintingMask);
         _eraseToggle.Click += (_, _) => SetErasing(!_erasing);
+        // The rail is the same set of tools the Tools menu has: picking either marks both.
+        _rail.Chosen += SetTool;
+        _rail.ColoursSwapped += SwapColours;
+        _rail.ColoursReset += ResetColours;
+        _rail.ColourChosen += which => _ = ChooseColour(which);
+        _rail.ShowColours(BrushColour(), BackgroundColour());
         _merge.Click += (_, _) => MergeLayers();
         _visibility.Click += (_, _) => ToggleVisibility();
         // The View switches open where they were left last time, as the Mac build's tool defaults keep them.
@@ -606,14 +601,22 @@ public sealed class MainWindow : Window
         layers.Children.Add(new ScrollViewer { Content = _layers });
         _layersSide.Child = layers;
 
-        var statusBar = new Border { Height = 28, Background = Panel, Child = _status };
+        var statusBar = new Border
+        {
+            Height = 28,
+            Background = Panel,
+            Child = new DockPanel { Children = { _statusInfo, _status } },
+        };
+        DockPanel.SetDock(_statusInfo, Dock.Left);
 
         var root = new DockPanel();
+        // The strip under the menu bar: the New canvas button, the project's tabs, and the view's own zoom
+        // controls, which is what the Mac puts in its window toolbar.
         var tabs = new Border
         {
             Background = Panel,
             Padding = new Thickness(8, 4, 8, 4),
-            Child = _tabStrip,
+            Child = Toolbar(),
         };
         DockPanel.SetDock(menu, Dock.Top);
         DockPanel.SetDock(tabs, Dock.Top);
@@ -627,8 +630,60 @@ public sealed class MainWindow : Window
         root.Children.Add(_cameraRawHost);
         root.Children.Add(_layersSide);
         root.Children.Add(statusBar);
-        root.Children.Add(Views());
+        // The rail runs down the left of the canvas, as the Mac's does, and the canvas takes the rest.
+        var body = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*") };
+        var views = Views();
+        Grid.SetColumn(_rail, 0);
+        Grid.SetColumn(views, 1);
+        body.Children.Add(_rail);
+        body.Children.Add(views);
+        root.Children.Add(body);
         return root;
+    }
+
+    /// <summary>
+    /// The strip under the menu bar: the New canvas button, the project's tabs, and the view's own controls —
+    /// Fit, actual pixels and the two zoom steps — which are the same commands the View menu has.
+    /// </summary>
+    private Control Toolbar()
+    {
+        var add = new Button { Content = "＋", Padding = new Thickness(8, 0, 8, 0) };
+        ToolTip.SetTip(add, "New canvas");
+        add.Click += (_, _) => _ = NewProject();
+        var zooms = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 4,
+            Children =
+            {
+                ViewButton("Fit", "Fit the canvas in the window", () => _canvas.Fit()),
+                ViewButton("100%", "Show the canvas at actual pixels", () => _canvas.ActualSize()),
+                ViewButton("−", "Zoom out", () => _canvas.ZoomBy(1 / 1.25)),
+                ViewButton("＋", "Zoom in", () => _canvas.ZoomBy(1.25)),
+            },
+        };
+        var bar = new DockPanel();
+        DockPanel.SetDock(add, Dock.Left);
+        DockPanel.SetDock(zooms, Dock.Right);
+        bar.Children.Add(add);
+        bar.Children.Add(zooms);
+        // The tab strip fills what is left. It is not put in a scroll view: a bitmap does not lay one out, and
+        // the tab strip is one of the things --tabs draws.
+        bar.Children.Add(_tabStrip);
+        return bar;
+    }
+
+    /// <summary>A button of the toolbar: the same command a View menu row is, with the status line refreshed.</summary>
+    private Button ViewButton(string text, string hint, Action act)
+    {
+        var button = new Button { Content = text, Padding = new Thickness(8, 2, 8, 2) };
+        ToolTip.SetTip(button, hint);
+        button.Click += (_, _) =>
+        {
+            act();
+            Say();
+        };
+        return button;
     }
 
     /// <summary>
@@ -895,6 +950,73 @@ public sealed class MainWindow : Window
         report.Add("left open with exposure 0.8 and clarity 30, for the drawing");
         return string.Join(Environment.NewLine, report);
     }
+
+    /// <summary>
+    /// The tool rail and the window's toolbar driven without a pointer, for the self check: every tool is
+    /// picked in turn and the rail, the Tools menu and the status line are read back, then the two colours are
+    /// swapped and put back, then the toolbar's zoom is stepped. It answers with what it found, one line a
+    /// step, and throws when a step is wrong.
+    /// </summary>
+    internal string ToolsSelfCheck(string project)
+    {
+        var report = new List<string>();
+        Open(project);
+        if (_document is not { } document) throw new InvalidOperationException("the project did not open");
+        report.Add($"open {System.IO.Path.GetFileName(project)}: {document.Width}x{document.Height}");
+
+        var marks = new List<string>();
+        foreach (var tool in Enum.GetValues<Tool>())
+        {
+            SetTool(tool);
+            if (_rail.Marked != tool) throw new InvalidOperationException($"the rail did not mark {tool}");
+            // One row lit in the Tools menu, and it is the same tool: the two are built from one list.
+            var lit = _toolItems.Where(entry => entry.Value.IsChecked).Select(entry => entry.Key).ToList();
+            if (lit.Count != 1 || lit[0] != tool)
+            {
+                throw new InvalidOperationException(
+                    $"the Tools menu marked {string.Join(", ", lit)} rather than {tool}");
+            }
+            if (_message.Length == 0) throw new InvalidOperationException($"{tool} left the status line empty");
+            marks.Add($"  {tool}: {_message}");
+        }
+        report.Add($"{marks.Count} tools picked; the rail and the Tools menu marked the same one each time");
+        report.AddRange(marks);
+        report.Add($"the picture: {_statusInfo.Text}");
+
+        // The swatches show the brush's colour and the background's, and swap and reset move both.
+        var before = _rail.Palette;
+        SwapColours();
+        var after = _rail.Palette;
+        if (after.Foreground != before.Background || after.Background != before.Foreground)
+        {
+            throw new InvalidOperationException("the swap did not carry both colours across");
+        }
+        if (BrushColour() != after.Foreground) throw new InvalidOperationException("the swap left the brush behind");
+        ResetColours();
+        if (BrushColour() != new SKColor(0, 0, 0) || BackgroundColour() != new SKColor(255, 255, 255))
+        {
+            throw new InvalidOperationException("the reset did not put the colours back to black and white");
+        }
+        report.Add($"colours: {Spell(before.Foreground)}/{Spell(before.Background)} swapped to " +
+            $"{Spell(after.Foreground)}/{Spell(after.Background)}, and reset to black over white");
+
+        // The toolbar's zoom controls are the View menu's own commands, so the status line has to follow them.
+        var start = _canvas.Zoom;
+        _canvas.ZoomBy(1.25);
+        if (Math.Abs(_canvas.Zoom - start * 1.25) > 1e-9) throw new InvalidOperationException("zoom in did not zoom in");
+        _canvas.ActualSize();
+        if (Math.Abs(_canvas.Zoom - 1) > 1e-9) throw new InvalidOperationException("actual pixels is not one to one");
+        Say();
+        report.Add($"toolbar: {start * 100:0}% in a step to {start * 1.25 * 100:0}%, then actual pixels, " +
+            $"with the status line at {_statusInfo.Text}");
+
+        // Left with a tool from the middle of the rail, so the drawing shows one marked.
+        SetTool(Tool.Brush);
+        return string.Join(Environment.NewLine, report);
+    }
+
+    /// <summary>A colour as the status line names one.</summary>
+    private static string Spell(SKColor colour) => $"{colour.Red},{colour.Green},{colour.Blue}";
 
     /// <summary>
     /// The tab the next project goes into: the empty one when the tab in front holds nothing, and a new one
@@ -1484,6 +1606,7 @@ public sealed class MainWindow : Window
         // An outline that is half drawn is let go when the tool changes, rather than left hanging.
         _canvas.CancelDraft();
         foreach (var (which, item) in _toolItems) item.IsChecked = which == tool;
+        _rail.Mark(tool);
         Say(tool switch
         {
             Tool.Brush => $"Brush: {_brush.Diameter:0} pixels, {Spell(_brush)} — drag on the canvas",
@@ -1515,8 +1638,10 @@ public sealed class MainWindow : Window
         (brush.Opacity < 1 ? $", {brush.Opacity * 100:0}%" : "") +
         $", colour {brush.Red * 255:0},{brush.Green * 255:0},{brush.Blue * 255:0}";
 
-    /// <summary>Puts the current brush, with the mode the tool in hand calls for, on the canvas.</summary>
-    private void PushBrush() =>
+    /// <summary>Puts the current brush, with the mode the tool in hand calls for, on the canvas. The rail's
+    /// foreground swatch is the same colour, so it is shown whenever the brush moves.</summary>
+    private void PushBrush()
+    {
         _canvas.Brush = _brush with
         {
             Erasing = _erasing,
@@ -1528,6 +1653,38 @@ public sealed class MainWindow : Window
                 _ => BrushMode.Paint,
             },
         };
+        ShowColours();
+    }
+
+    /// <summary>The rail's two swatches as the brush and the background have them.</summary>
+    private void ShowColours() => _rail.ShowColours(BrushColour(), BackgroundColour());
+
+    /// <summary>Swaps the foreground and background colours, as the Mac's palette does with X.</summary>
+    private void SwapColours()
+    {
+        var (red, green, blue) = _gradientBackground;
+        _gradientBackground = (_brush.Red, _brush.Green, _brush.Blue);
+        _brush = _brush with { Red = red, Green = green, Blue = blue };
+        PushBrush();
+        Say("Swapped the foreground and background colours");
+    }
+
+    /// <summary>Puts the colours back to black and white, as the Mac's palette does with D.</summary>
+    private void ResetColours()
+    {
+        _brush = _brush with { Red = 0, Green = 0, Blue = 0 };
+        _gradientBackground = (1, 1, 1);
+        PushBrush();
+        Say("Foreground black and background white");
+    }
+
+    /// <summary>Asks for one of the two colours, as clicking its swatch in the rail does.</summary>
+    private async Task ChooseColour(bool foreground)
+    {
+        if (foreground) await SetBrush(BrushSetting.Colour);
+        else await SetGradientBackground();
+        ShowColours();
+    }
 
     /// <summary>The Gradient tool's options, as the Mac build's gradient bar has them.</summary>
     private void BuildGradientMenu()
@@ -3585,12 +3742,17 @@ public sealed class MainWindow : Window
 
     private string _message = "";
 
-    /// <summary>Puts a message on the status line; an empty one just refreshes the zoom reading.</summary>
+    /// <summary>
+    /// Puts a message or the tool's own line on the right of the status bar, and refreshes what the picture is
+    /// on the left: an empty message leaves the last one standing.
+    /// </summary>
     private void Say(string message = "")
     {
         if (message.Length > 0) _message = message;
-        var zoom = _document is null ? "" : $"{_canvas.Zoom * 100:0}%";
-        var limit = _canvas.ZoomedOutAsFarAsItGoes ? "as far out as one screenful can be drawn" : "";
-        _status.Text = string.Join("    ", new[] { _message, zoom, limit }.Where(part => part.Length > 0));
+        _status.Text = _message;
+        var limit = _canvas.ZoomedOutAsFarAsItGoes ? "    as far out as one screenful can be drawn" : "";
+        _statusInfo.Text = _document is not { } document
+            ? "Ready when you are"
+            : $"{_canvas.Zoom * 100:0}%    {document.Width} × {document.Height} px    sRGB · Transparent{limit}";
     }
 }

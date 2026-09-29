@@ -68,6 +68,10 @@ internal static class Program
         // preview run, then Apply and Cancel — and draws the window with the panel still up, which is the only
         // way to look at the panel docked at the window's right edge.
         if (args is ["--camera-raw", var rawOutput]) return CameraRaw(rawOutput);
+        // `--tools` drives the tool rail and the window's toolbar without a pointer: every tool is picked in
+        // turn, the colours are swapped and reset, and the zoom is stepped. The window is drawn at the end, so
+        // what the rail looks like is in the PNG beside the report.
+        if (args is ["--tools", var toolsOutput]) return Tools(toolsOutput);
         // `--updates` reads the app's real update feed and says what it makes of it, which is the whole check
         // short of the dialog: off the network it prints that the feed could not be reached instead.
         if (args is ["--updates"]) return Updates();
@@ -329,6 +333,50 @@ internal static class Program
             target.Render(content);
             target.Save(output, new PngBitmapEncoderOptions());
             Console.WriteLine($"wrote {output}: the window with the Camera Raw panel docked");
+            return 0;
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+        }
+    }
+
+    /// <summary>
+    /// The tool rail and the window's toolbar driven without a pointer, then drawn. The rail's marks are drawn
+    /// shapes rather than a font, so the only way to look at them is a picture of the window — which can be
+    /// drawn because the rail is part of the window's own content rather than a body on its own.
+    /// </summary>
+    private static int Tools(string output)
+    {
+        Build().SetupWithoutStarting();
+        var folder = Path.Combine(Path.GetTempPath(), "compositor-tools-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            var project = Path.Combine(folder, "tools.comp");
+            using (var document = Demo()) ProjectStore.Save(ProjectSnapshot.FromDocument(document), project);
+            var window = new MainWindow();
+            Console.WriteLine(window.ToolsSelfCheck(project));
+            var content = (Control)window.Content!;
+            content.Measure(new Size(1280, 820));
+            content.Arrange(new Rect(0, 0, 1280, 820));
+            content.UpdateLayout();
+            using var target = new RenderTargetBitmap(new PixelSize(1280, 820));
+            target.Render(content);
+            target.Save(output, new PngBitmapEncoderOptions());
+            Console.WriteLine($"wrote {output}: the window with the rail and the toolbar");
+            // The rail's own marks are inside a scroll view, which a bitmap does not lay out, so the column is
+            // drawn on its own as well: that is the picture the marks can be looked at in.
+            var rail = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(output))!, "tools-rail.png");
+            Draw("the tool rail", rail, 56, new ToolRail().TakeTools());
+            Console.WriteLine("the rail's column scrolls, and a bitmap does not lay a scroll view out, so the "
+                + "window's own drawing leaves it blank: the marks are in tools-rail.png");
             return 0;
         }
         finally
