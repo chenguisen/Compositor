@@ -65,6 +65,7 @@ public sealed class CanvasView : Control
     private SKPoint _origin;
     private double _zoom = 1;
     private Point? _dragging;
+    private Guid? _guideDrag;
 
     /// <summary>The stroke being drawn, in document pixels, until the pointer comes back up.</summary>
     private readonly List<SKPoint> _stroke = [];
@@ -175,6 +176,18 @@ public sealed class CanvasView : Control
 
     /// <summary>When set, the box below is drawn with its handles and can be dragged about.</summary>
     public bool TransformEnabled { get; set; }
+
+    /// <summary>Whether a guide can be taken hold of and dragged, which the Move tool allows.</summary>
+    public bool GuidesDraggable { get; set; }
+
+    /// <summary>A guide has been taken hold of: the window begins one undo step here.</summary>
+    public Action? GuideDragStarted { get; set; }
+
+    /// <summary>The guide being dragged has been put at a document position.</summary>
+    public Action<Guid, double>? GuideMoved { get; set; }
+
+    /// <summary>The drag has ended; the window decides whether a guide left off the canvas is taken away.</summary>
+    public Action? GuideDragFinished { get; set; }
 
     /// <summary>The box the transform handles sit around, in document pixels.</summary>
     public LayerTransform? TransformBox { get; set; }
@@ -380,6 +393,18 @@ public sealed class CanvasView : Control
     }
 
     /// <summary>The layout grid, drawn over the picture as Photoshop draws it and under everything else.</summary>
+    /// <summary>
+    /// The guide within reach of a click, if any: a guide is a line, so what is near it is a click whose
+    /// crossways coordinate is within a handle's grab of it.
+    /// </summary>
+    private Guid? GuideAt(SKPoint point)
+    {
+        if (_document is not { } document || document.Guides.Count == 0) return null;
+        var tolerance = TransformEdits.Grab / _zoom;
+        return GuideEdits.At(document, Format.GuideAxis.Vertical, point.X, tolerance)
+            ?? GuideEdits.At(document, Format.GuideAxis.Horizontal, point.Y, tolerance);
+    }
+
     private void DrawGrid(DrawingContext context, CanvasDocument document)
     {
         if (Grid is not { } grid) return;
@@ -732,6 +757,16 @@ public sealed class CanvasView : Control
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
+        if (GuidesDraggable && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed
+            && GuideAt(ToDocument(e.GetPosition(this))) is { } guide)
+        {
+            _guideDrag = guide;
+            GuideDragStarted?.Invoke();
+            e.Pointer.Capture(this);
+            e.Handled = true;
+            InvalidateVisual();
+            return;
+        }
         if (TransformEnabled && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed
             && TransformBox is { } box && beginTransformDrag(box, ToDocument(e.GetPosition(this)), e.KeyModifiers))
         {
@@ -860,6 +895,14 @@ public sealed class CanvasView : Control
     protected override void OnPointerMoved(PointerEventArgs e)
     {
         var now = e.GetPosition(this);
+        if (_guideDrag is { } moved && _document is { } document
+            && document.Guides.FirstOrDefault(entry => entry.ID == moved) is { } guide)
+        {
+            var point = ToDocument(now);
+            GuideMoved?.Invoke(moved, guide.Axis == Format.GuideAxis.Vertical ? point.X : point.Y);
+            e.Handled = true;
+            return;
+        }
         if (_painting)
         {
             var point = ToDocument(now);
@@ -959,6 +1002,14 @@ public sealed class CanvasView : Control
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
+        if (_guideDrag is not null)
+        {
+            _guideDrag = null;
+            e.Pointer.Capture(null);
+            GuideDragFinished?.Invoke();
+            e.Handled = true;
+            return;
+        }
         if (_painting)
         {
             _painting = false;

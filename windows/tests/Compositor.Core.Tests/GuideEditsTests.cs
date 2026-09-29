@@ -136,6 +136,23 @@ public class GuideEditsTests
     }
 
     [Fact]
+    public void AGuideIsMeasuredAgainstTheSideOfTheCanvasItsAxisRunsAlong()
+    {
+        using var document = Document(100, 80);
+        var acrossID = GuideEdits.Add(document, GuideAxis.Horizontal, 80)!.Value;
+        var downID = GuideEdits.Add(document, GuideAxis.Vertical, 80)!.Value;
+        var across = document.Guides.First(entry => entry.ID == acrossID);
+        var down = document.Guides.First(entry => entry.ID == downID);
+        // 80 is the bottom edge for a horizontal guide and inside the canvas for a vertical one.
+        Assert.True(GuideEdits.OnCanvas(document, across));
+        Assert.True(GuideEdits.OnCanvas(document, down));
+        Assert.True(GuideEdits.Move(document, down.ID, 120));
+        Assert.False(GuideEdits.OnCanvas(document, down));
+        Assert.True(GuideEdits.Move(document, down.ID, -1));
+        Assert.False(GuideEdits.OnCanvas(document, down));
+    }
+
+    [Fact]
     public void GuidesMoveWithTheLayersWhenTheCanvasChanges()
     {
         using var document = Document(100, 80);

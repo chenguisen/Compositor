@@ -167,6 +167,9 @@ public sealed class MainWindow : Window
         _canvas.EyedropperClicked = Picked;
         _canvas.ShapeFinished = ShapeFinished;
         _canvas.GradientFinished = GradientFinished;
+        _canvas.GuideDragStarted = GuideDragStarted;
+        _canvas.GuideMoved = GuideMoved;
+        _canvas.GuideDragFinished = GuideDragFinished;
         _canvas.CropChanged = CropChanged;
         _canvas.CropCommitted = ApplyCrop;
         BuildCropRatios();
@@ -899,6 +902,7 @@ public sealed class MainWindow : Window
         if (tool != Tool.Crop) _cropFrame = null;
         ShowCropBox();
         _canvas.TransformEnabled = tool == Tool.Move;
+        _canvas.GuidesDraggable = tool == Tool.Move;
         ShowTransformBox();
         _canvas.PaintEnabled = tool is Tool.Brush or Tool.Clone or Tool.Blur or Tool.Heal;
         PushBrush();
@@ -1455,6 +1459,38 @@ public sealed class MainWindow : Window
         }
         _canvas.Fit();
         Say($"Image is now {asked.Width} x {asked.Height} at {asked.Resolution:0.##} per inch");
+    }
+
+    /// <summary>A guide has been taken hold of: one undo step for the whole drag, as a slider drag gets.</summary>
+    private void GuideDragStarted()
+    {
+        if (_document is not { } document) return;
+        _history.Begin("Move Guide", document, Selected);
+    }
+
+    /// <summary>The guide follows the pointer; the history step was begun when it was taken hold of.</summary>
+    private void GuideMoved(Guid id, double position)
+    {
+        if (_document is not { } document) return;
+        if (!GuideEdits.Move(document, id, position)) return;
+        _canvas.InvalidateVisual();
+        Say($"Guide at {position:0.#}");
+    }
+
+    /// <summary>
+    /// The drag has ended. A guide left off the canvas is taken away, as Photoshop takes it away — which is
+    /// how a guide is got rid of without a menu.
+    /// </summary>
+    private void GuideDragFinished()
+    {
+        if (_document is not { } document) return;
+        if (document.Guides.FirstOrDefault(guide => !GuideEdits.OnCanvas(document, guide)) is { } away)
+        {
+            GuideEdits.Remove(document, away.ID);
+            Say("Guide taken away");
+        }
+        _history.End(document, Selected);
+        Refresh();
     }
 
     /// <summary>View ▸ Show Grid: the layout grid on or off, which the canvas draws under everything else.</summary>

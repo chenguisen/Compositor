@@ -43,6 +43,16 @@ public static class GuideEdits
     }
 
     /// <summary>
+    /// Whether a guide is still over the canvas, along the axis it is measured on. A guide left off the
+    /// canvas is one that has been dragged away, which is how one is got rid of without a menu.
+    /// </summary>
+    public static bool OnCanvas(CanvasDocument document, CanvasGuide guide)
+    {
+        var extent = guide.Axis == GuideAxis.Vertical ? document.Width : document.Height;
+        return guide.Position >= 0 && guide.Position <= extent;
+    }
+
+    /// <summary>
     /// The guide on this axis nearest to a position and no further off than <paramref name="tolerance"/>
     /// document units, or null — how a click finds the guide it is on.
     /// </summary>
