@@ -108,9 +108,9 @@ Nothing on this list is hidden in the code — each is either a deliberate refus
 
 - **No color picker**: a color is three or four RGB numbers or sliders, where the Mac opens the system picker.
   Every value is reachable, and tools that only have a few colors get swatches.
-- The **Dither** panel's tone heading says "Levels" where the Mac says "Tones"; the panel does not retain its
-  look when reopened; and the blend-mode menu has no rules between its groups where the Mac's draws them (the
-  order is the same).
+- The **Dither** panel names its tone control "Tones", as the Mac's sheet does, but it does not retain its look when
+  reopened, and the blend-mode list has no rules between its groups where the Mac's menu draws them (the order is
+  the same, and a list of choices is what the port has instead of a menu).
 - **Bloom / Glow** is a take on the look, not Core Image's arithmetic, and the code says so where a reader will
   look. Every other filter and adjustment is a port of the Mac's own kernel or operator.
 - **Updates**: the feed both builds read publishes a macOS `.dmg`, so Help ▸ Check for Updates reports the news
