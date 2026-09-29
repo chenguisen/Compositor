@@ -42,6 +42,12 @@ public sealed class MainWindow : Window
     /// <summary>The rest of the Layer menu, so all of it can go dead together when nothing is selected.</summary>
     private readonly List<MenuItem> _layerItems = [];
 
+    /// <summary>The crop frame's shape: the canvas's own, or one of the fixed ratios.</summary>
+    private readonly MenuItem _cropRatios = new() { Header = "Crop _ratio" };
+
+    /// <summary>The crop frame while the Crop tool is in hand; null is the whole canvas.</summary>
+    private SKRectI? _cropFrame;
+
     /// <summary>Whether a brush stroke goes on the active layer's mask instead of its pixels.</summary>
     private readonly MenuItem _paintOnMask = new()
     {
@@ -86,6 +92,7 @@ public sealed class MainWindow : Window
         Heal,
         Eyedropper,
         Type,
+        Crop,
     }
 
     private readonly Dictionary<Tool, MenuItem> _toolItems = [];
@@ -111,6 +118,9 @@ public sealed class MainWindow : Window
         _canvas.WandClicked = WandClicked;
         _canvas.CloneSourceClicked = CloneSourceChosen;
         _canvas.EyedropperClicked = Picked;
+        _canvas.CropChanged = CropChanged;
+        _canvas.CropCommitted = ApplyCrop;
+        BuildCropRatios();
         _canvas.TextClicked = TypeHere;
         _canvas.TransformStarted = TransformStarted;
         _canvas.TransformChanged = TransformChanged;
@@ -216,6 +226,9 @@ public sealed class MainWindow : Window
                         ToolItem("Spot _healing", Tool.Heal),
                         ToolItem("_Eyedropper (click the canvas)", Tool.Eyedropper),
                         ToolItem("_Type (click where the text goes)", Tool.Type),
+                        ToolItem("_Crop (drag a frame, then apply it)", Tool.Crop),
+                        new Separator(),
+                        _cropRatios,
                         new Separator(),
                         _paintOnMask,
                         _eraseToggle,
@@ -633,6 +646,10 @@ public sealed class MainWindow : Window
         _canvas.SampleSourceOnClick = tool == Tool.Clone;
         _canvas.EyedropperOnClick = tool == Tool.Eyedropper;
         _canvas.TypeOnClick = tool == Tool.Type;
+        _canvas.CropEnabled = tool == Tool.Crop;
+        // A crop frame belongs to the tool: leaving the tool lets go of it.
+        if (tool != Tool.Crop) _cropFrame = null;
+        ShowCropBox();
         _canvas.TransformEnabled = tool == Tool.Move;
         ShowTransformBox();
         _canvas.PaintEnabled = tool is Tool.Brush or Tool.Clone or Tool.Blur or Tool.Heal;
@@ -659,6 +676,7 @@ public sealed class MainWindow : Window
             Tool.Heal => $"Spot healing ({_brush.Healing}): {_brush.Diameter:0} pixels — drag over what should go",
             Tool.Eyedropper => "Eyedropper — click the canvas to take its colour",
             Tool.Type => "Type — click where the text goes, then type it",
+            Tool.Crop => "Crop — drag a frame, Alt to grow it from the middle, then Crop ▸ Apply",
             Tool.Move => "Move — drag the layer, or a handle to scale and turn it",
             Tool.Marquee => "Marquee — drag a rectangle; Shift adds, Alt subtracts",
             Tool.Ellipse => "Elliptical marquee — drag an oval; Shift adds, Alt subtracts",
@@ -688,6 +706,96 @@ public sealed class MainWindow : Window
                 _ => BrushMode.Paint,
             },
         };
+
+    /// <summary>The ratios the Crop tool offers, as the Mac build's ratio menu does.</summary>
+    private void BuildCropRatios()
+    {
+        foreach (var (label, ratio) in new (string Label, double? Ratio)[]
+                 {
+                     ("_Free", null), ("_Original", -1), ("1:_1", 1), ("4:_3", 4.0 / 3), ("3:_4", 3.0 / 4),
+                     ("16:_9", 16.0 / 9), ("9:1_6", 9.0 / 16),
+                 })
+        {
+            _cropRatios.Items.Add(Command(label, () => SetCropRatio(ratio)));
+        }
+        _cropRatios.Items.Add(new Separator());
+        _cropRatios.Items.Add(Command("_Apply", ApplyCrop, "Ctrl+Return"));
+        _cropRatios.Items.Add(Command("_Cancel", CancelCrop));
+    }
+
+    /// <summary>Holds the crop frame to a ratio from now on, and shapes the frame it has to it.</summary>
+    private void SetCropRatio(double? ratio)
+    {
+        _canvas.CropRatio = ratio;
+        if (_document is not { } document) return;
+        if (ratio is null)
+        {
+            Say("Crop: any shape");
+            return;
+        }
+        var wanted = ratio == -1 ? CropEdits.OriginalRatio(document) : ratio.Value;
+        var frame = _cropFrame ?? CropEdits.Snapped(SKRect.Create(0, 0, document.Width, document.Height));
+        _cropFrame = CropEdits.ApplyRatio(frame, wanted);
+        ShowCropBox();
+        Refresh();
+        Say($"Crop: {wanted:0.##} to 1");
+    }
+
+    /// <summary>The crop frame follows the tool: the whole canvas until it is dragged.</summary>
+    private void ShowCropBox()
+    {
+        if (_tool != Tool.Crop || _document is not { } document)
+        {
+            _canvas.CropBox = null;
+            return;
+        }
+        _canvas.CropBox = _cropFrame ?? SKRectI.Create(0, 0, document.Width, document.Height);
+    }
+
+    /// <summary>
+    /// A crop drag: the frame is snapped to whatever edge is nearby — a frame being moved by its nearest
+    /// edge, so it keeps its size, and one being shaped by the edge the pointer is on.
+    /// </summary>
+    private void CropChanged(SKRectI frame, SKPoint pointer)
+    {
+        if (_document is not { } document || _tool != Tool.Crop) return;
+        var tolerance = TransformSnap.Distance / Math.Max(_canvas.Zoom, 0.0001);
+        double? lineX, lineY;
+        var middle = new SKPoint((float)frame.MidX, (float)frame.MidY);
+        var snapped = _canvas.CropMoving
+            ? CropEdits.SnapMove(document, frame, tolerance, out lineX, out lineY)
+            : CropEdits.Snap(document, frame, pointer, middle, symmetric: false, tolerance, out lineX, out lineY);
+        _cropFrame = CropEdits.Valid(snapped) ? snapped : frame;
+        _canvas.SnapLines = (lineX, lineY);
+        _canvas.CropBox = _cropFrame;
+        Refresh();
+    }
+
+    /// <summary>Takes the crop, as one undo step, and lets the frame go.</summary>
+    private void ApplyCrop()
+    {
+        if (_document is not { } document) return;
+        if (_cropFrame is not { } frame)
+        {
+            Say("Drag a frame first");
+            return;
+        }
+        if (!CropEdits.Valid(frame)) { Say("That frame is not one the canvas can be cropped to"); return; }
+        _canvas.SnapLines = (null, null);
+        Edit("Crop", () => CanvasEdits.Crop(document, frame));
+        _cropFrame = null;
+        ShowCropBox();
+    }
+
+    /// <summary>Lets the crop frame go, leaving the canvas as it is.</summary>
+    private void CancelCrop()
+    {
+        _cropFrame = null;
+        _canvas.SnapLines = (null, null);
+        ShowCropBox();
+        Refresh();
+        Say("Crop: let go");
+    }
 
     /// <summary>
     /// The Type tool: a click says where the text goes, and the dialog says what it says. A text layer is

@@ -59,13 +59,23 @@ public static class TransformEdits
     }
 
     /// <summary>
+    /// Which of the eight handles a click takes hold of, ignoring the turning grip — for a frame that is
+    /// dragged about but not turned, as a crop is.
+    /// </summary>
+    public static TransformHandle? HandleAt(LayerTransform box, SKPoint point, double tolerance)
+    {
+        var found = HandleAt(box, point, tolerance, double.NaN);
+        return found == TransformHandle.Rotate ? null : found;
+    }
+
+    /// <summary>
     /// Which handle a click takes hold of, within <paramref name="tolerance"/> document pixels: a handle
     /// first, then the edge between two of them — which is that edge's middle handle, so the whole side can
     /// be dragged.
     /// </summary>
     public static TransformHandle? HandleAt(LayerTransform box, SKPoint point, double tolerance, double grip)
     {
-        if (Near(point, RotatePosition(box, grip), tolerance)) return TransformHandle.Rotate;
+        if (!double.IsNaN(grip) && Near(point, RotatePosition(box, grip), tolerance)) return TransformHandle.Rotate;
         for (var index = 0; index < Units.Length; index++)
         {
             if (Near(point, Position(box, (TransformHandle)index), tolerance)) return (TransformHandle)index;

@@ -43,6 +43,9 @@ public sealed class CanvasView : Control
     /// <summary>The transform box: solid white, so it reads against any picture.</summary>
     private static readonly Pen TransformPen = new() { Brush = Brushes.White, Thickness = 1 };
 
+    /// <summary>What a crop is about to take away.</summary>
+    private static readonly IBrush DimBrush = new SolidColorBrush(Color.FromArgb(150, 0, 0, 0));
+
     /// <summary>A line a drag has snapped to: cyan, as Photoshop shows them.</summary>
     private static readonly Pen SnapPen = new() { Brush = Brushes.Cyan, Thickness = 1 };
 
@@ -81,6 +84,31 @@ public sealed class CanvasView : Control
 
     /// <summary>Handed the point the eyedropper was clicked at, in document pixels.</summary>
     public Action<SKPoint>? EyedropperClicked { get; set; }
+
+    /// <summary>When set, the crop frame below is drawn and can be dragged about.</summary>
+    public bool CropEnabled { get; set; }
+
+    /// <summary>The crop frame, in document pixels; null leaves the whole canvas as the frame.</summary>
+    public SKRectI? CropBox { get; set; }
+
+    /// <summary>The frame a crop drag has worked out, and where the pointer is, for the app to snap.</summary>
+    public Action<SKRectI, SKPoint>? CropChanged { get; set; }
+
+    /// <summary>A double-click inside the frame asks for the crop to be made.</summary>
+    public Action? CropCommitted { get; set; }
+
+    private enum CropDrag
+    {
+        None,
+        Create,
+        Move,
+        Resize,
+    }
+
+    private CropDrag _cropDragging;
+    private TransformHandle? _cropHandle;
+    private SKRectI _cropOriginal;
+    private SKPoint _cropStart;
 
     /// <summary>When set, clicking reports where a new text layer should go.</summary>
     public bool TypeOnClick { get; set; }
@@ -224,6 +252,23 @@ public sealed class CanvasView : Control
         DrawStroke(context);
     }
 
+    /// <summary>Whether a crop drag is under way, so the tool is not reset under it.</summary>
+    public bool CropDragging => _cropDragging is not CropDrag.None;
+
+    /// <summary>Whether the crop frame is being moved whole rather than by an edge, which snaps differently.</summary>
+    public bool CropMoving => _cropDragging == CropDrag.Move;
+
+    /// <summary>The ratio a crop drag is held to, or null for a free frame; the app sets it.</summary>
+    public double? CropRatio { get; set; }
+
+    private SKRectI WholeCanvas() => _document is { } document
+        ? SKRectI.Create(0, 0, document.Width, document.Height)
+        : SKRectI.Create(0, 0, 1, 1);
+
+    /// <summary>Whether a document point is inside a frame, which is what tells a move from a new frame.</summary>
+    private static bool Inside(SKRectI frame, SKPoint point) =>
+        point.X >= frame.Left && point.X < frame.Right && point.Y >= frame.Top && point.Y < frame.Bottom;
+
     /// <summary>Lets go of an outline that is being drawn, as Escape does in the Mac build.</summary>
     public void CancelDraft()
     {
@@ -296,6 +341,7 @@ public sealed class CanvasView : Control
             DashStyle = new DashStyle([4.0, 4.0], 0),
         };
         DrawDraft(context, pen);
+        DrawCrop(context);
         DrawTransform(context);
         if (_document?.Selection.Path is not { } path || path.IsEmpty) return;
         foreach (var contour in Contours(path))
@@ -304,6 +350,42 @@ public sealed class CanvasView : Control
             {
                 context.DrawLine(pen, ToScreen(contour[index - 1]), ToScreen(contour[index]));
             }
+        }
+    }
+
+    /// <summary>
+    /// The crop frame: what will be kept is left clear, what will go is dimmed, and the eight handles say
+    /// where it can be dragged.
+    /// </summary>
+    private void DrawCrop(DrawingContext context)
+    {
+        if (!CropEnabled || _document is not { } document) return;
+        var frame = CropBox ?? WholeCanvas();
+        var pen = new Pen { Brush = Brushes.White, Thickness = 1 };
+        var corner = ToScreen(new SKPoint(frame.Left, frame.Top));
+        var right = corner.X + frame.Width * _zoom;
+        var bottom = corner.Y + frame.Height * _zoom;
+        // What goes is dimmed, in four bands around what stays.
+        var canvas = new Rect(0, 0, Bounds.Width, Bounds.Height);
+        foreach (var band in new[]
+                 {
+                     new Rect(canvas.X, canvas.Y, canvas.Width, Math.Max(0, corner.Y - canvas.Y)),
+                     new Rect(canvas.X, bottom, canvas.Width, Math.Max(0, canvas.Bottom - bottom)),
+                     new Rect(canvas.X, corner.Y, Math.Max(0, corner.X - canvas.X), Math.Max(0, bottom - corner.Y)),
+                     new Rect(right, corner.Y, Math.Max(0, canvas.Right - right), Math.Max(0, bottom - corner.Y)),
+                 })
+        {
+            context.FillRectangle(DimBrush, band);
+        }
+        context.DrawRectangle(null, pen, new Rect(corner.X, corner.Y, frame.Width * _zoom, frame.Height * _zoom));
+        foreach (var handle in new[]
+                 {
+                     TransformHandle.TopLeft, TransformHandle.Top, TransformHandle.TopRight, TransformHandle.Right,
+                     TransformHandle.BottomRight, TransformHandle.Bottom, TransformHandle.BottomLeft, TransformHandle.Left,
+                 })
+        {
+            var at = ToScreen(TransformEdits.Position(CropEdits.Box(frame), handle));
+            context.DrawRectangle(null, pen, new Rect(at.X - 3, at.Y - 3, 6, 6));
         }
     }
 
@@ -465,6 +547,36 @@ public sealed class CanvasView : Control
             e.Handled = true;
             return;
         }
+        if (CropEnabled && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+        {
+            var point = ToDocument(e.GetPosition(this));
+            var frame = CropBox ?? WholeCanvas();
+            if (e.ClickCount > 1 && Inside(frame, point))
+            {
+                e.Handled = true;
+                CropCommitted?.Invoke();
+                return;
+            }
+            _cropStart = point;
+            _cropOriginal = frame;
+            _cropHandle = null;
+            if (TransformEdits.HandleAt(CropEdits.Box(frame), point, TransformEdits.Grab / _zoom) is { } handle)
+            {
+                _cropHandle = handle;
+                _cropDragging = CropDrag.Resize;
+            }
+            else if (Inside(frame, point))
+            {
+                _cropDragging = CropDrag.Move;
+            }
+            else
+            {
+                _cropDragging = CropDrag.Create;
+            }
+            e.Pointer.Capture(this);
+            e.Handled = true;
+            return;
+        }
         if (TypeOnClick && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
         {
             e.Handled = true;
@@ -547,6 +659,23 @@ public sealed class CanvasView : Control
             base.OnPointerMoved(e);
             return;
         }
+        if (_cropDragging is not CropDrag.None)
+        {
+            var point = ToDocument(now);
+            var ratio = CropRatio;
+            var symmetric = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
+            var frame = _cropDragging switch
+            {
+                CropDrag.Create => CropEdits.Create(_cropStart, point, ratio, symmetric),
+                CropDrag.Move => CropEdits.Move(_cropOriginal, _cropStart, point),
+                _ => _cropHandle is { } grabbed
+                    ? CropEdits.Resize(_cropOriginal, grabbed, _cropStart, point, ratio, symmetric)
+                    : _cropOriginal,
+            };
+            CropChanged?.Invoke(frame, point);
+            base.OnPointerMoved(e);
+            return;
+        }
         if (_dragOriginal.IsValid && TransformBox is not null && _transformDragging)
         {
             var point = ToDocument(now);
@@ -604,6 +733,13 @@ public sealed class CanvasView : Control
             InvalidateVisual();
             if (stroke.Count > 0) StrokeFinished?.Invoke(stroke);
             e.Pointer.Capture(null);
+            return;
+        }
+        if (_cropDragging is not CropDrag.None)
+        {
+            _cropDragging = CropDrag.None;
+            e.Pointer.Capture(null);
+            InvalidateVisual();
             return;
         }
         if (_transformDragging)
