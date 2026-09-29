@@ -146,6 +146,8 @@ public sealed class MainWindow : Window
         Brush,
         Clone,
         Blur,
+        Liquify,
+        Smudge,
         Heal,
         Eyedropper,
         Type,
@@ -379,6 +381,8 @@ public sealed class MainWindow : Window
                         ToolItem("_Brush", Tool.Brush),
                         ToolItem("_Clone stamp (Alt-click a source first)", Tool.Clone),
                         ToolItem("Blur brush", Tool.Blur),
+                        ToolItem("_Liquify brush (push the pixels around)", Tool.Liquify),
+                        ToolItem("S_mudge brush (drag the colour along)", Tool.Smudge),
                         ToolItem("Spot _healing", Tool.Heal),
                         ToolItem("_Eyedropper (click the canvas)", Tool.Eyedropper),
                         ToolItem("_Type (click where the text goes)", Tool.Type),
@@ -955,7 +959,7 @@ public sealed class MainWindow : Window
         _canvas.ShapePreviewFor = tool == Tool.Shape ? dragged => ShapePlan(dragged) : null;
         _canvas.GuidesDraggable = tool == Tool.Move;
         ShowTransformBox();
-        _canvas.PaintEnabled = tool is Tool.Brush or Tool.Clone or Tool.Blur or Tool.Heal;
+        _canvas.PaintEnabled = tool is Tool.Brush or Tool.Clone or Tool.Blur or Tool.Liquify or Tool.Smudge or Tool.Heal;
         PushBrush();
         _canvas.Selection = tool switch
         {
@@ -976,6 +980,8 @@ public sealed class MainWindow : Window
                 ? "Clone stamp — Alt-click where it should copy from first"
                 : $"Clone stamp copying from {_cloneSource.Value.X:0},{_cloneSource.Value.Y:0} — drag on the canvas",
             Tool.Blur => $"Blur brush: {_brush.Diameter:0} pixels — drag over what should soften",
+            Tool.Liquify => $"Liquify brush: {_brush.Diameter:0} pixels — drag the pixels where they should go",
+            Tool.Smudge => $"Smudge brush: {_brush.Diameter:0} pixels — drag the colour along",
             Tool.Heal => $"Spot healing ({_brush.Healing}): {_brush.Diameter:0} pixels — drag over what should go",
             Tool.Eyedropper => "Eyedropper — click the canvas to take its colour",
             Tool.Type => "Type — click where the text goes, then type it",
@@ -2365,6 +2371,8 @@ public sealed class MainWindow : Window
         {
             Tool.Clone => "Clone Stamp",
             Tool.Blur => "Blur",
+            Tool.Liquify => "Liquify",
+            Tool.Smudge => "Smudge",
             Tool.Heal => "Spot Healing",
             _ => "Brush",
         };
@@ -2378,11 +2386,19 @@ public sealed class MainWindow : Window
                 return BrushEdits.PaintMask(document, id,
                     stroke, settings with { Red = value, Green = value, Blue = value, Erasing = false });
             }
+            // Liquify and Smudge work on pixels that are already there: a blank layer has nothing to push.
+            if (_tool is Tool.Liquify or Tool.Smudge)
+            {
+                return WarpEdits.Warp(document, id, stroke, Warp(_tool), settings);
+            }
             // A blank layer gets its pixels on the first paint, as the Mac build does.
             BrushEdits.EnsurePixels(document, id);
             return BrushEdits.Paint(document, id, stroke, settings);
         });
     }
+
+    /// <summary>Which of the two push modes the tool in hand is.</summary>
+    private static WarpMode Warp(Tool tool) => tool == Tool.Smudge ? WarpMode.Smudge : WarpMode.Liquify;
 
     /// <summary>
     /// The brush a stroke should be painted with. A Clone Stamp stroke needs a source, and its offset is

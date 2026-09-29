@@ -31,6 +31,7 @@ internal static class Program
                 "crop" => Crop(args),
                 "guide" => Guide(args),
                 "distort" => Distort(args),
+                "warp" => Warp(args),
                 "canvas" => Canvas(args),
                 "resize" => Resize(args),
                 "trim" => Trim(args),
@@ -62,8 +63,9 @@ internal static class Program
                                               move a layer's four corners (top left, top right,
                                               bottom right, bottom left) and resample it;
                                               comma-separate layer names to distort several together
-          canvas <in> <out> w h [anchor]      resize the canvas, moving content
-          resize <in> <out> w h [dpi]         resample the image and every layer
+          warp   <in> <out> <layer> smudge|liquify x1 y1 x2 y2 [diameter] [strength]
+                                              drag the layer's pixels along a stroke
+          canvas <in> <out> w h [anchor]      resize the canvas, moving content          resize <in> <out> w h [dpi]         resample the image and every layer
           trim   <in> <out> [tolerance]       crop the canvas to what is drawn on it
           merge  <in> <out> <layer>           merge a layer into what lies beneath it
           type   <in> <out> <text> [size]     add a text layer
@@ -290,6 +292,45 @@ internal static class Program
         ProjectStore.Save(ProjectSnapshot.FromDocument(document), args[2]);
         var names = string.Join(", ", ids.Select(id => document.Layers.First(layer => layer.ID == id).Name));
         Console.WriteLine($"wrote {args[2]} (distorted {names})");
+        return 0;
+    }
+
+    private static int Warp(string[] args)
+    {
+        if (args.Length is < 9 or > 11)
+        {
+            return Fail("warp needs an input, an output, a layer, a mode and two points, with a diameter and a strength if you want them.");
+        }
+        var mode = args[4].ToLowerInvariant() switch
+        {
+            "smudge" => WarpMode.Smudge,
+            "liquify" => WarpMode.Liquify,
+            _ => (WarpMode?)null,
+        };
+        if (mode is not { } kind) return Fail("warp's mode is 'smudge' or 'liquify'.");
+        var numbers = new float[4];
+        for (var index = 0; index < 4; index++)
+        {
+            if (!float.TryParse(args[index + 5], out numbers[index])) return Fail("A point is a pair of numbers.");
+        }
+        var diameter = 40.0;
+        var strength = 1.0;
+        if (args.Length >= 9 && !double.TryParse(args[9], out diameter)) return Fail("The diameter is a number of pixels.");
+        if (args.Length >= 10 && !double.TryParse(args[10], out strength)) return Fail("The strength is a number from 0 to 1.");
+        using var snapshot = ProjectStore.Load(args[1]);
+        using var document = snapshot.ToDocument();
+        var matches = document.Layers
+            .Where(layer => string.Equals(layer.Name, args[3], StringComparison.OrdinalIgnoreCase)).ToList();
+        if (matches.Count == 0) return Fail($"No layer in that project is called '{args[3]}'.");
+        if (matches.Count > 1) return Fail($"{matches.Count} layers are called '{args[3]}'; rename one of them first.");
+        var points = new[] { new SKPoint(numbers[0], numbers[1]), new SKPoint(numbers[2], numbers[3]) };
+        if (!WarpEdits.Warp(document, matches[0].ID, points, kind, new BrushSettings(Diameter: diameter, Opacity: strength)))
+        {
+            return Fail("The stroke was refused: the layer holds no pixels, or the stroke never reached them.");
+        }
+        ProjectStore.Save(ProjectSnapshot.FromDocument(document), args[2]);
+        var layer = document.Layers.First(entry => entry.ID == matches[0].ID);
+        Console.WriteLine($"wrote {args[2]} ({kind} over '{layer.Name}' at {layer.Asset!.Width}x{layer.Asset.Height})");
         return 0;
     }
 
