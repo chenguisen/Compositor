@@ -120,6 +120,16 @@ public sealed class CanvasView : Control
     /// <summary>Handed the drag's start, the box it made and where a line ended, in document pixels.</summary>
     public Action<SKPoint, SKRectI, SKPoint>? ShapeFinished { get; set; }
 
+    /// <summary>When set, dragging paints a gradient between where it began and where it ended.</summary>
+    public bool GradientEnabled { get; set; }
+
+    /// <summary>Handed the two ends of a gradient drag, in document pixels.</summary>
+    public Action<SKPoint, SKPoint>? GradientFinished { get; set; }
+
+    private bool _gradientDrag;
+    private SKPoint _gradientStart;
+    private SKPoint _gradientEnd;
+
     private bool _shaping;
     private SKPoint _shapeAnchor;
     private SKRectI _shapeBox;
@@ -267,6 +277,21 @@ public sealed class CanvasView : Control
         DrawStroke(context);
     }
 
+    /// <summary>The gradient line being dragged, with a cross at each end as Photoshop draws it.</summary>
+    private void DrawGradient(DrawingContext context)
+    {
+        if (!_gradientDrag) return;
+        var pen = new Pen { Brush = Brushes.White, Thickness = 1 };
+        var from = ToScreen(_gradientStart);
+        var to = ToScreen(_gradientEnd);
+        context.DrawLine(pen, from, to);
+        foreach (var end in new[] { from, to })
+        {
+            context.DrawLine(pen, new Point(end.X - 4, end.Y), new Point(end.X + 4, end.Y));
+            context.DrawLine(pen, new Point(end.X, end.Y - 4), new Point(end.X, end.Y + 4));
+        }
+    }
+
     /// <summary>The shape being dragged right now, drawn as an outline until the drag ends.</summary>
     private void DrawShape(DrawingContext context)
     {
@@ -371,6 +396,7 @@ public sealed class CanvasView : Control
             Thickness = 1,
             DashStyle = new DashStyle([4.0, 4.0], 0),
         };
+        DrawGradient(context);
         DrawShape(context);
         DrawDraft(context, pen);
         DrawCrop(context);
@@ -609,6 +635,15 @@ public sealed class CanvasView : Control
             e.Handled = true;
             return;
         }
+        if (GradientEnabled && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+        {
+            _gradientDrag = true;
+            _gradientStart = ToDocument(e.GetPosition(this));
+            _gradientEnd = _gradientStart;
+            e.Pointer.Capture(this);
+            e.Handled = true;
+            return;
+        }
         if (ShapeEnabled && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
         {
             var point = ToDocument(e.GetPosition(this));
@@ -703,6 +738,13 @@ public sealed class CanvasView : Control
             base.OnPointerMoved(e);
             return;
         }
+        if (_gradientDrag)
+        {
+            _gradientEnd = ToDocument(now);
+            InvalidateVisual();
+            base.OnPointerMoved(e);
+            return;
+        }
         if (_shaping)
         {
             var point = ToDocument(now);
@@ -791,6 +833,14 @@ public sealed class CanvasView : Control
             InvalidateVisual();
             if (stroke.Count > 0) StrokeFinished?.Invoke(stroke);
             e.Pointer.Capture(null);
+            return;
+        }
+        if (_gradientDrag)
+        {
+            _gradientDrag = false;
+            e.Pointer.Capture(null);
+            InvalidateVisual();
+            GradientFinished?.Invoke(_gradientStart, _gradientEnd);
             return;
         }
         if (_shaping)

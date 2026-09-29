@@ -42,6 +42,15 @@ public sealed class MainWindow : Window
     /// <summary>The rest of the Layer menu, so all of it can go dead together when nothing is selected.</summary>
     private readonly List<MenuItem> _layerItems = [];
 
+    /// <summary>How the Gradient tool paints: its shape, whether it fades to the background colour or to
+    /// nothing, which way round, and the colour it fades to.</summary>
+    private readonly MenuItem _gradientMenu = new() { Header = "Gradient _options" };
+
+    private GradientShape _gradientShape = GradientShape.Linear;
+    private bool _gradientToBackground;
+    private bool _gradientReversed;
+    private (double Red, double Green, double Blue) _gradientBackground = (1, 1, 1);
+
     /// <summary>Which shape the Shape tool draws.</summary>
     private readonly MenuItem _shapeKinds = new() { Header = "Shape _kind" };
 
@@ -103,6 +112,7 @@ public sealed class MainWindow : Window
         Type,
         Crop,
         Shape,
+        Gradient,
     }
 
     private readonly Dictionary<Tool, MenuItem> _toolItems = [];
@@ -129,10 +139,12 @@ public sealed class MainWindow : Window
         _canvas.CloneSourceClicked = CloneSourceChosen;
         _canvas.EyedropperClicked = Picked;
         _canvas.ShapeFinished = ShapeFinished;
+        _canvas.GradientFinished = GradientFinished;
         _canvas.CropChanged = CropChanged;
         _canvas.CropCommitted = ApplyCrop;
         BuildCropRatios();
         BuildShapeKinds();
+        BuildGradientMenu();
         _canvas.TextClicked = TypeHere;
         _canvas.TransformStarted = TransformStarted;
         _canvas.TransformChanged = TransformChanged;
@@ -240,6 +252,9 @@ public sealed class MainWindow : Window
                         ToolItem("_Type (click where the text goes)", Tool.Type),
                         ToolItem("_Crop (drag a frame, then apply it)", Tool.Crop),
                         ToolItem("_Shape (drag out a rectangle, ellipse or line)", Tool.Shape),
+                        ToolItem("_Gradient (drag the line it runs along)", Tool.Gradient),
+                        new Separator(),
+                        _gradientMenu,
                         new Separator(),
                         _shapeKinds,
                         new Separator(),
@@ -663,6 +678,7 @@ public sealed class MainWindow : Window
         _canvas.TypeOnClick = tool == Tool.Type;
         _canvas.CropEnabled = tool == Tool.Crop;
         _canvas.ShapeEnabled = tool == Tool.Shape;
+        _canvas.GradientEnabled = tool == Tool.Gradient;
         // A crop frame belongs to the tool: leaving the tool lets go of it.
         if (tool != Tool.Crop) _cropFrame = null;
         ShowCropBox();
@@ -694,6 +710,7 @@ public sealed class MainWindow : Window
             Tool.Type => "Type — click where the text goes, then type it",
             Tool.Crop => "Crop — drag a frame, Alt to grow it from the middle, then Crop ▸ Apply",
             Tool.Shape => $"Shape ({_shapeKind}) — drag it out; Shift squares it, Alt grows it from the middle",
+            Tool.Gradient => $"Gradient ({_gradientShape}, {(_gradientToBackground ? "to the background colour" : "to nothing")}) — drag the line it runs along",
             Tool.Move => "Move — drag the layer, or a handle to scale and turn it",
             Tool.Marquee => "Marquee — drag a rectangle; Shift adds, Alt subtracts",
             Tool.Ellipse => "Elliptical marquee — drag an oval; Shift adds, Alt subtracts",
@@ -723,6 +740,82 @@ public sealed class MainWindow : Window
                 _ => BrushMode.Paint,
             },
         };
+
+    /// <summary>The Gradient tool's options, as the Mac build's gradient bar has them.</summary>
+    private void BuildGradientMenu()
+    {
+        foreach (var shape in Enum.GetValues<GradientShape>())
+        {
+            _gradientMenu.Items.Add(Command($"_{shape}", () => SetGradient(shape, null, null)));
+        }
+        _gradientMenu.Items.Add(new Separator());
+        _gradientMenu.Items.Add(Command("_To the background colour", () => SetGradient(null, true, null)));
+        _gradientMenu.Items.Add(Command("To _nothing", () => SetGradient(null, false, null)));
+        _gradientMenu.Items.Add(new Separator());
+        _gradientMenu.Items.Add(Command("_Reversed", () => SetGradient(null, null, !_gradientReversed)));
+        _gradientMenu.Items.Add(Command("_Background colour…", () => _ = SetGradientBackground()));
+    }
+
+    private void SetGradient(GradientShape? shape, bool? toBackground, bool? reversed)
+    {
+        if (shape is { } wanted) _gradientShape = wanted;
+        if (toBackground is { } fade) _gradientToBackground = fade;
+        if (reversed is { } turn) _gradientReversed = turn;
+        Say($"Gradient: {_gradientShape}, {(_gradientToBackground ? "to the background colour" : "to nothing")}" +
+            (_gradientReversed ? ", reversed" : "") + ", opacity as the brush's");
+        SetTool(_tool);
+    }
+
+    private async Task SetGradientBackground()
+    {
+        var current = $"{_gradientBackground.Red * 255:0},{_gradientBackground.Green * 255:0},{_gradientBackground.Blue * 255:0}";
+        if (await TextPrompt.Ask(this, "Gradient background colour", "Red, green and blue, 0 to 255", current)
+            is not { } typed)
+        {
+            return;
+        }
+        if (Colour(typed) is not { } colour)
+        {
+            Say("The colour has to be three numbers from 0 to 255, as in 255,0,0");
+            return;
+        }
+        _gradientBackground = colour;
+        _gradientToBackground = true;
+        Say($"Gradient background {colour.Red * 255:0},{colour.Green * 255:0},{colour.Blue * 255:0}");
+        SetTool(_tool);
+    }
+
+    /// <summary>
+    /// A gradient drag: the colour runs from one end to the other, over the selected layer's pixels or its
+    /// mask, at the brush's opacity, as one undo step.
+    /// </summary>
+    private void GradientFinished(SKPoint start, SKPoint end)
+    {
+        if (_document is not { } document || Selected is not { } id) return;
+        if (!GradientEdits.HasLine(start, end))
+        {
+            Say("Drag the line the gradient should run along");
+            return;
+        }
+        var from = new SKColor(
+            (byte)Math.Clamp(Math.Round(_brush.Red * 255), 0, 255),
+            (byte)Math.Clamp(Math.Round(_brush.Green * 255), 0, 255),
+            (byte)Math.Clamp(Math.Round(_brush.Blue * 255), 0, 255));
+        var to = _gradientToBackground
+            ? new SKColor(
+                (byte)Math.Clamp(Math.Round(_gradientBackground.Red * 255), 0, 255),
+                (byte)Math.Clamp(Math.Round(_gradientBackground.Green * 255), 0, 255),
+                (byte)Math.Clamp(Math.Round(_gradientBackground.Blue * 255), 0, 255))
+            : new SKColor(from.Red, from.Green, from.Blue, 0);
+        if (_gradientReversed) (from, to) = (to, from);
+        var mask = _paintingMask;
+        var shape = _gradientShape;
+        var opacity = _brush.Opacity;
+        Edit(mask ? "Gradient Mask" : "Gradient",
+            () => GradientEdits.Fill(document, id, mask, start, end, from, to, opacity, shape));
+        Reselect(id);
+        Say($"Gradient over {Math.Sqrt(Math.Pow(end.X - start.X, 2) + Math.Pow(end.Y - start.Y, 2)):0} pixels");
+    }
 
     /// <summary>The shapes the Shape tool draws, and the two numbers that shape them.</summary>
     private void BuildShapeKinds()

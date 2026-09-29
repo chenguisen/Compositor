@@ -35,6 +35,7 @@ internal static class Program
                 "merge" => Merge(args),
                 "type" => Type(args),
                 "shape" => Shape(args),
+                "gradient" => Gradient(args),
                 _ => Fail($"'{args[0]}' is not a command. Try --help."),
             };
         }
@@ -59,6 +60,7 @@ internal static class Program
           merge  <in> <out> <layer>           merge a layer into what lies beneath it
           type   <in> <out> <text> [size]     add a text layer
           shape  <in> <out> rectangle|ellipse|line [size]   add a shape layer
+          gradient <in> <out> <layer> [linear|radial]       fill a layer with a gradient
         """);
 
     private static int Info(string[] args)
@@ -305,6 +307,37 @@ internal static class Program
         var layer = document.Layers.First(candidate => candidate.ID == id);
         Console.WriteLine($"wrote {args[2]} ({shape} '{layer.Name}' {layer.Asset!.Width}x{layer.Asset.Height} " +
             $"at {box.Left},{box.Top}, {document.Layers.Count} layers)");
+        return 0;
+    }
+
+    /// <summary>Fills a layer's pixels with a gradient, the way the Gradient tool does.</summary>
+    private static int Gradient(string[] args)
+    {
+        if (args.Length is not (4 or 5)) return Fail("gradient needs a project, an output, the layer to fill, and a shape if you want one.");
+        var shape = args.Length == 5
+            ? args[4].ToLowerInvariant() switch
+            {
+                "linear" => GradientShape.Linear,
+                "radial" => GradientShape.Radial,
+                _ => (GradientShape?)null,
+            }
+            : GradientShape.Linear;
+        if (shape is not { } fill) return Fail($"'{args[4]}' is not a gradient shape; try linear or radial.");
+        using var snapshot = ProjectStore.Load(args[1]);
+        using var document = snapshot.ToDocument();
+        var matches = document.Layers.Where(layer => string.Equals(layer.Name, args[3], StringComparison.OrdinalIgnoreCase)).ToList();
+        if (matches.Count == 0) return Fail($"No layer in that project is called '{args[3]}'.");
+        if (matches.Count > 1) return Fail($"{matches.Count} layers are called '{args[3]}'; rename one of them first.");
+        var id = matches[0].ID;
+        var start = new SKPoint(0, document.Height / 2f);
+        var end = new SKPoint(document.Width, document.Height / 2f);
+        var from = new SKColor(255, 255, 255, 255);
+        if (!GradientEdits.Fill(document, id, mask: false, start, end, from, new SKColor(255, 255, 255, 0), 1, fill))
+        {
+            return Fail("That layer holds no pixels to fill, or the drag was too short.");
+        }
+        ProjectStore.Save(ProjectSnapshot.FromDocument(document), args[2]);
+        Console.WriteLine($"wrote {args[2]} ({fill} gradient over '{matches[0].Name}', from {start.X},{start.Y} to {end.X},{end.Y})");
         return 0;
     }
 
