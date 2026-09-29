@@ -580,6 +580,7 @@ public sealed class MainWindow : Window
                         _snapToCanvas,
                         _snapToGuides,
                         _snapToLayers,
+                        _snapToGrid,
                         new Separator(),
                         Command("New _Guide…", () => _ = NewGuide(), "Ctrl+OemSemicolon"),
                         Command("_Clear Guides", ClearGuides),
