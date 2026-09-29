@@ -1222,7 +1222,7 @@ public sealed class MainWindow : Window
         // The panel shows what it is doing: as its sliders move the layer is filtered into a copy of the
         // document and the canvas draws that, while the document itself is not touched until Apply.
         StartPreview(document, id);
-        var asked = await CameraRawDialog.Ask(this, new CameraRawSettings(),
+        var asked = await CameraRawDialog.Ask(this, new CameraRawSettings(), BrushColour(),
             settings => RequestPreview((target, layer) => CameraRawEdits.Apply(target, layer, settings)));
         StopPreview();
         if (asked is not { } settings) return;
@@ -1717,6 +1717,13 @@ public sealed class MainWindow : Window
     /// Starts showing what a panel would do to a layer, before anything is committed. Nothing happens when
     /// the layer cannot be previewed, and the panel still works.
     /// </summary>
+    /// <summary>The brush's colour, which the panels that think in colours start from.</summary>
+    private SKColor BrushColour() => new(
+        (byte)Math.Clamp(Math.Round(_brush.Red * 255), 0, 255),
+        (byte)Math.Clamp(Math.Round(_brush.Green * 255), 0, 255),
+        (byte)Math.Clamp(Math.Round(_brush.Blue * 255), 0, 255));
+
+    /// <summary>Starts showing what a panel would do to a layer, before anything is committed.
     private void StartPreview(CanvasDocument document, Guid layerID)
     {
         if (FilterPreview.Begin(document, layerID) is not { } preview) return;

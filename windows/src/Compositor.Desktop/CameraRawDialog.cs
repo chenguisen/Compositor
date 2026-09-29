@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Compositor.Core.Document;
+using SkiaSharp;
 
 namespace Compositor.Desktop;
 
@@ -16,6 +17,10 @@ internal sealed class CameraRawDialog : Window
     private readonly ComboBox _glowStyle = new();
     private readonly ComboBox _vignetteStyle = new();
     private readonly ComboBox _curveChannel = new();
+    private readonly ListBox _points = new() { Height = 96 };
+    private readonly List<CameraRawPointColor> _pointList = [];
+    private CameraRawPointColor? _point;
+    private bool _showingPoints;
     private CurveEditor? _curve;
     private CameraRawSettings? _result;
 
@@ -25,8 +30,11 @@ internal sealed class CameraRawDialog : Window
     /// </summary>
     public Action<CameraRawSettings>? Preview { get; set; }
 
-    private CameraRawDialog(CameraRawSettings start)
+    private CameraRawDialog(CameraRawSettings start, SKColor brush)
     {
+        brush.ToHsl(out var brushHue, out var brushSaturation, out _);
+        _brushHue = brushHue;
+        _brushSaturation = brushSaturation;
         Title = "Camera Raw Filter";
         Width = 460;
         Height = 760;
@@ -131,6 +139,39 @@ internal sealed class CameraRawDialog : Window
             Add(groups, $"{name}: luminance", -100, 100, At(mixer, luminance), (s, v) => s.Mixer[luminance] = v);
         }
 
+        groups.Children.Add(Heading("Point colour"));
+        groups.Children.Add(new TextBlock
+        {
+            Text = "Pick the colour the brush is set to out of the picture, then move it. The Mac build picks "
+                + "colours by clicking on the canvas, which this panel does not do.",
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+            Opacity = 0.75,
+        });
+        var addPoint = new Button { Content = "Add the brush colour" };
+        var removePoint = new Button { Content = "Remove" };
+        addPoint.Click += (_, _) => AddPoint();
+        removePoint.Click += (_, _) => RemovePoint();
+        groups.Children.Add(new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            Children = { addPoint, removePoint },
+        });
+        groups.Children.Add(_points);
+        _points.SelectionChanged += (_, _) => SelectPoint();
+        // The nine numbers of the one being edited, which is what the panel's sliders move.
+        Add(groups, "Hue", 0, 360, 0, (_, v) => Point(point => point.Hue = v), "0");
+        Add(groups, "Saturation", 0, 1, 0, (_, v) => Point(point => point.Saturation = v), "0.00");
+        Add(groups, "Lightness", 0, 1, 0, (_, v) => Point(point => point.Luminance = v), "0.00");
+        Add(groups, "Turn the hue", -100, 100, 0, (_, v) => Point(point => point.HueShift = v));
+        Add(groups, "Raise the saturation", -100, 100, 0, (_, v) => Point(point => point.SaturationShift = v));
+        Add(groups, "Move the lightness", -100, 100, 0, (_, v) => Point(point => point.LuminanceShift = v));
+        Add(groups, "Hue range", 5, 180, 30, (_, v) => Point(point => point.HueRange = v), "0");
+        Add(groups, "Saturation range", 0.05, 1, 0.4, (_, v) => Point(point => point.SaturationRange = v), "0.00");
+        Add(groups, "Lightness range", 0.05, 1, 0.4, (_, v) => Point(point => point.LuminanceRange = v), "0.00");
+        foreach (var point in start.Points) _pointList.Add(point.Normalized());
+        if (_pointList.Count > 0) _points.SelectedIndex = 0;
+
         groups.Children.Add(Heading("Colour grading"));
         Add(groups, "Shadows: hue", 0, 360, start.ShadowHue, (s, v) => s.ShadowHue = v, "0");
         Add(groups, "Shadows: amount", 0, 100, start.ShadowSaturation, (s, v) => s.ShadowSaturation = v, "0");
@@ -171,6 +212,126 @@ internal sealed class CameraRawDialog : Window
 
         Content = new ScrollViewer { Content = groups };
     }
+
+    /// <summary>The colours as the panel has them, with the one being edited stored back first.</summary>
+    private List<CameraRawPointColor> Points()
+    {
+        StorePoint();
+        return [.. _pointList];
+    }
+
+    /// <summary>Changes the colour being edited, if there is one.</summary>
+    private void Point(Action<CameraRawPointColor> change)
+    {
+        if (_point is null) return;
+        change(_point);
+        Labelled();
+    }
+
+    /// <summary>Adds the brush's own colour to the points, at the middle of the picture's lightness.</summary>
+    private void AddPoint()
+    {
+        if (_pointList.Count >= CameraRawSettings.MostPoints) return;
+        StorePoint();
+        _pointList.Add(new CameraRawPointColor
+        {
+            Hue = _brushHue,
+            Saturation = _brushSaturation,
+            Luminance = 0.5,
+        });
+        _showingPoints = true;
+        try
+        {
+            _points.SelectedIndex = _pointList.Count - 1;
+        }
+        finally
+        {
+            _showingPoints = false;
+        }
+        _point = _pointList[^1];
+        Labelled();
+        Preview?.Invoke(Current());
+    }
+
+    /// <summary>Takes the colour being edited out of the list.</summary>
+    private void RemovePoint()
+    {
+        if (_points.SelectedIndex < 0 || _points.SelectedIndex >= _pointList.Count) return;
+        _pointList.RemoveAt(_points.SelectedIndex);
+        _showingPoints = true;
+        try
+        {
+            _points.SelectedIndex = _pointList.Count > 0 ? Math.Min(_points.SelectedIndex, _pointList.Count - 1) : -1;
+        }
+        finally
+        {
+            _showingPoints = false;
+        }
+        _point = _points.SelectedIndex >= 0 ? _pointList[_points.SelectedIndex] : null;
+        Labelled();
+        Preview?.Invoke(Current());
+    }
+
+    /// <summary>The list has moved to another colour: what was being edited is kept and the other loaded.</summary>
+    private void SelectPoint()
+    {
+        if (_showingPoints) return;
+        StorePoint();
+        _point = _points.SelectedIndex >= 0 && _points.SelectedIndex < _pointList.Count
+            ? _pointList[_points.SelectedIndex]
+            : null;
+        LoadPoint();
+        Preview?.Invoke(Current());
+    }
+
+    private void StorePoint()
+    {
+        if (_point is null) return;
+        var at = _pointList.IndexOf(_point);
+        if (at >= 0) _pointList[at] = _point.Normalized();
+    }
+
+    /// <summary>
+    /// The sliders read the colour being edited. The rows are the panel's own, so they are moved without
+    /// asking for a preview of each one.
+    /// </summary>
+    private void LoadPoint()
+    {
+        if (_point is not { } point) return;
+        var values = new[]
+        {
+            point.Hue, point.Saturation, point.Luminance,
+            point.HueShift, point.SaturationShift, point.LuminanceShift,
+            point.HueRange, point.SaturationRange, point.LuminanceRange,
+        };
+        for (var index = 0; index < values.Length; index++)
+        {
+            _rows[_pointRow + index].Slider.Value = values[index];
+        }
+    }
+
+    /// <summary>Puts the numbers of each colour, and whether one is being edited at all, into the list.</summary>
+    private void Labelled()
+    {
+        _showingPoints = true;
+        try
+        {
+            var at = _points.SelectedIndex;
+            _points.ItemsSource = _pointList
+                .Select((point, index) => $"{index + 1}: hue {point.Hue:0}°, saturation {point.Saturation:0.00}, "
+                    + $"lightness {point.Luminance:0.00}")
+                .ToList();
+            _points.SelectedIndex = at;
+        }
+        finally
+        {
+            _showingPoints = false;
+        }
+    }
+
+    /// <summary>The first row that belongs to the colour being edited.</summary>
+    private int _pointRow =>
+        _rows.Count - 9;
 
     /// <summary>One of the mixer's numbers, or nothing when the settings came without their twenty-four.</summary>
     private static double At(double[] mixer, int index) => index < mixer.Length ? mixer[index] : 0;
@@ -226,6 +387,10 @@ internal sealed class CameraRawDialog : Window
     }
 
     /// <summary>The amounts as the panel has them, for a preview of what they would do.</summary>
+    /// <summary>The brush's colour while the panel was opened, which is the colour a point starts at.</summary>
+    private readonly double _brushHue;
+    private readonly double _brushSaturation;
+
     private CameraRawSettings Current()
     {
         var settings = new CameraRawSettings
@@ -236,6 +401,7 @@ internal sealed class CameraRawDialog : Window
             // The mixer's places are written into by the rows, so the settings the rows are handed have all
             // twenty-four of them whatever the layer's panel started from.
             Mixer = new double[24],
+            Points = [.. Points()],
         };
         foreach (var (slider, set, _, _) in _rows) set(settings, slider.Value);
         return settings;
@@ -261,10 +427,10 @@ internal sealed class CameraRawDialog : Window
     }
 
     /// <summary>The settings to apply, or null when the panel was dismissed or asks for nothing.</summary>
-    public static async Task<CameraRawSettings?> Ask(Window owner, CameraRawSettings start,
+    public static async Task<CameraRawSettings?> Ask(Window owner, CameraRawSettings start, SKColor brush,
         Action<CameraRawSettings>? preview = null)
     {
-        var dialog = new CameraRawDialog(start) { Preview = preview };
+        var dialog = new CameraRawDialog(start, brush) { Preview = preview };
         await dialog.ShowDialog(owner);
         return dialog._result is { } settings && !settings.IsIdentity ? settings : null;
     }

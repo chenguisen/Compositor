@@ -144,6 +144,28 @@ public sealed class CameraRawSettings
     public static string[] MixerFamilies { get; } =
         ["Reds", "Oranges", "Yellows", "Greens", "Aquas", "Blues", "Purples", "Magentas"];
 
+    /// <summary>The colours picked out of the picture to shift. The Mac build picks them by clicking on the
+    /// canvas and allows eight; this holds eight and takes their numbers.</summary>
+    public List<CameraRawPointColor> Points { get; set; } = [];
+
+    /// <summary>How many colours may be picked out at once, as the Mac build allows.</summary>
+    public const int MostPoints = 8;
+
+    /// <summary>Whether point colour asks for anything.</summary>
+    public bool AdjustsPointColor =>
+        Points.Count > 0 && Points.Any(point => point.HueShift != 0 || point.SaturationShift != 0 || point.LuminanceShift != 0);
+
+    /// <summary>The points flattened into the nine numbers each the kernel reads.</summary>
+    internal float[] PointFloats()
+    {
+        var values = new float[Points.Count * 9];
+        for (var index = 0; index < Points.Count; index++)
+        {
+            Points[index].Floats().CopyTo(values, index * 9);
+        }
+        return values;
+    }
+
     /// <summary>Whether the colour mixer asks for anything.</summary>
     public bool AdjustsMixer => Mixer.Any(value => value != 0);
 
@@ -169,7 +191,7 @@ public sealed class CameraRawSettings
 
     /// <summary>Whether the curve or what is held off it asks for anything.</summary>
     public bool AdjustsCurve =>
-        RefineSaturation != 0 || CurveMoves || AdjustsMixer;
+        RefineSaturation != 0 || CurveMoves || AdjustsMixer || AdjustsPointColor;
 
     /// <summary>Whether the grading asks for anything.</summary>
     public bool AdjustsGrading =>
@@ -257,7 +279,7 @@ public sealed class CameraRawSettings
     /// <summary>Nothing asked for, so there is nothing to do.</summary>
     public bool IsIdentity =>
         !AdjustsLight && !AdjustsColor && !AdjustsEffects && !AdjustsDetail && !AdjustsOptics && !AdjustsCalibration
-        && !AdjustsCurve && !AdjustsGrading && !AdjustsMixer;
+        && !AdjustsCurve && !AdjustsGrading && !AdjustsMixer && !AdjustsPointColor;
 
     /// <summary>Every slider within the range its group allows.</summary>
     public bool IsValid =>
@@ -293,13 +315,78 @@ public sealed class CameraRawSettings
         && Within(HighlightHue, 0, 360) && Within(HighlightSaturation, 0, 100) && Within(HighlightLuminance, -100, 100)
         && Within(GlobalHue, 0, 360) && Within(GlobalSaturation, 0, 100) && Within(GlobalLuminance, -100, 100)
         && Within(GradeBlending, 0, 100) && Within(GradeBalance, -100, 100)
-        && Mixer.Length == 24 && Mixer.All(value => Within(value, -100, 100));
+        && Mixer.Length == 24 && Mixer.All(value => Within(value, -100, 100))
+        && Points.Count <= MostPoints && Points.All(point => point.IsValid);
 
     /// <summary>The corner's distance a distortion of ±100 moves, as the Mac build's lens strength is.</summary>
     public const double LensStrength = 0.35;
 
     private static bool Within(double value, double least, double most) =>
         double.IsFinite(value) && value >= least && value <= most;
+}
+
+/// <summary>
+/// One colour picked out of the picture to shift: where it sits in hue, saturation and lightness, how far
+/// around it the shift reaches, and what the shift is. The Mac build picks the colour by clicking on the
+/// canvas; here the colour is given by its numbers.
+/// </summary>
+public sealed class CameraRawPointColor
+{
+    /// <summary>The colour's hue in degrees, 0 to 360.</summary>
+    public double Hue { get; set; }
+    /// <summary>Its saturation and lightness as the picture holds them, 0 to 1.</summary>
+    public double Saturation { get; set; }
+    public double Luminance { get; set; }
+    /// <summary>How far the hue is turned, how much the saturation is raised and how far the lightness is
+    /// moved, each −100 to 100.</summary>
+    public double HueShift { get; set; }
+    public double SaturationShift { get; set; }
+    public double LuminanceShift { get; set; }
+    /// <summary>How far around the colour the shift reaches: degrees of hue, 5 to 180, and saturation and
+    /// lightness, 0.05 to 1.</summary>
+    public double HueRange { get; set; } = 30;
+    public double SaturationRange { get; set; } = 0.4;
+    public double LuminanceRange { get; set; } = 0.4;
+
+    /// <summary>The same colour with every number inside the range it is allowed.</summary>
+    public CameraRawPointColor Normalized() => new()
+    {
+        Hue = Clamp(Hue, 0, 360, 0),
+        Saturation = Clamp(Saturation, 0, 1, 0),
+        Luminance = Clamp(Luminance, 0, 1, 0),
+        HueShift = Clamp(HueShift, -100, 100, 0),
+        SaturationShift = Clamp(SaturationShift, -100, 100, 0),
+        LuminanceShift = Clamp(LuminanceShift, -100, 100, 0),
+        HueRange = Clamp(HueRange, 5, 180, 30),
+        SaturationRange = Clamp(SaturationRange, 0.05, 1, 0.4),
+        LuminanceRange = Clamp(LuminanceRange, 0.05, 1, 0.4),
+    };
+
+    public bool IsValid =>
+        double.IsFinite(Hue) && Hue is >= 0 and <= 360
+        && double.IsFinite(Saturation) && Saturation is >= 0 and <= 1
+        && double.IsFinite(Luminance) && Luminance is >= 0 and <= 1
+        && double.IsFinite(HueShift) && HueShift is >= -100 and <= 100
+        && double.IsFinite(SaturationShift) && SaturationShift is >= -100 and <= 100
+        && double.IsFinite(LuminanceShift) && LuminanceShift is >= -100 and <= 100
+        && double.IsFinite(HueRange) && HueRange is >= 5 and <= 180
+        && double.IsFinite(SaturationRange) && SaturationRange is >= 0.05 and <= 1
+        && double.IsFinite(LuminanceRange) && LuminanceRange is >= 0.05 and <= 1;
+
+    /// <summary>The nine numbers the kernel reads for one point, in the order it reads them.</summary>
+    public float[] Floats()
+    {
+        var point = Normalized();
+        return
+        [
+            (float)(point.Hue / 360), (float)point.Saturation, (float)point.Luminance,
+            (float)(point.HueShift / 100), (float)(point.SaturationShift / 100), (float)(point.LuminanceShift / 100),
+            (float)(point.HueRange / 360), (float)point.SaturationRange, (float)point.LuminanceRange,
+        ];
+    }
+
+    private static double Clamp(double value, double least, double most, double fallback) =>
+        double.IsFinite(value) ? Math.Clamp(value, least, most) : fallback;
 }
 
 /// <summary>
@@ -342,9 +429,10 @@ public static class CameraRawEdits
         {
             var (luma, red, green, blue) = settings.Curves();
             // The kernel indexes the mixer and the grade whether or not anything is asked for, which is why
-            // both are always given in full. Point colour is the one part of the stage still unwired.
+            // both are always given in full; the points are read only up to their count.
             AdjustPixels.CameraRawCurveColor(pixels, width, height, stride, luma, red, green, blue,
-                settings.RefineSaturation / 100, settings.MixerFloats(), 0, [], settings.Grade,
+                settings.RefineSaturation / 100, settings.MixerFloats(), settings.Points.Count, settings.PointFloats(),
+                settings.Grade,
                 settings.GradeBlending / 100, settings.GradeBalance / 100, -1);
         }
         if (settings.AdjustsEffects)

@@ -363,6 +363,55 @@ public class CameraRawEditsTests
     }
 
     [Fact]
+    public void APointColourShiftsTheColourItWasPickedFromAndLeavesTheRest()
+    {
+        static SKColor Shift(byte red, byte green, byte blue, CameraRawPointColor point)
+        {
+            using var document = new CanvasDocument(Guid.NewGuid(), 20, 20);
+            var bitmap = new SKBitmap(Bitmaps.ColorInfo(20, 20));
+            bitmap.Erase(new SKColor(red, green, blue));
+            var layer = new ImageLayer(Guid.NewGuid(), ImportedImage.Create(bitmap, "Flat"),
+                new LayerTransform(0, 0, 20, 20), "Flat");
+            document.Layers.Add(layer);
+            Assert.True(CameraRawEdits.Apply(document, layer.ID, new CameraRawSettings { Points = [point] }));
+            return layer.Asset!.Image.GetPixel(10, 10);
+        }
+        // A colour picked out where the reds are — hue 0 in the kernel's turns, fully saturated — and its
+        // hue turned: the red moves and a blue, which is far outside the range, does not.
+        var atRed = new CameraRawPointColor { Hue = 0, Saturation = 1, Luminance = 0.5, HueShift = 100 };
+        var red = new SKColor(220, 40, 40);
+        var blue = new SKColor(40, 40, 220);
+        var moved = Shift(red.Red, red.Green, red.Blue, atRed);
+        Assert.NotEqual(red, moved);
+        Assert.Equal(blue, Shift(blue.Red, blue.Green, blue.Blue, atRed));
+
+        // The range decides how far around the colour the shift reaches: narrow enough and even a colour a
+        // little way off is left alone.
+        var narrow = new CameraRawPointColor { Hue = 0, Saturation = 1, Luminance = 0.5, HueShift = 100, HueRange = 5 };
+        var orange = new SKColor(210, 110, 40);
+        Assert.Equal(orange, Shift(orange.Red, orange.Green, orange.Blue, narrow));
+    }
+
+    [Fact]
+    public void APointColourWithMorePointsThanMayBePickedIsRefused()
+    {
+        var (document, layer) = Flat(20, 20, SKColors.Gray);
+        using var _ = document;
+        var settings = new CameraRawSettings();
+        for (var index = 0; index <= CameraRawSettings.MostPoints; index++)
+        {
+            settings.Points.Add(new CameraRawPointColor { Hue = index * 30, HueShift = 50 });
+        }
+        Assert.False(settings.IsValid);
+        Assert.False(CameraRawEdits.Apply(document, layer.ID, settings));
+        // And a point whose numbers are not ones it may use is refused too.
+        var bad = new CameraRawSettings { Points = [new CameraRawPointColor { HueShift = 900 }] };
+        Assert.False(bad.IsValid);
+        Assert.False(CameraRawEdits.Apply(document, layer.ID, bad));
+        Assert.Equal(128, Middle(layer).Red);
+    }
+
+    [Fact]
     public void TheCurveAndGradingAmountsAreCheckedLikeTheOthers()
     {
         var (document, layer) = Flat(20, 20, SKColors.Gray);
