@@ -237,6 +237,114 @@ public class DistortWarpTests
         Assert.False(DistortEdits.Distort(document, Guid.NewGuid(), square));
     }
 
+    /// <summary>Two solid squares side by side, each one colour, and the document holding them.</summary>
+    private static (CanvasDocument Document, ImageLayer Left, ImageLayer Right) SideBySide()
+    {
+        var document = new CanvasDocument(Guid.NewGuid(), 80, 40);
+        var left = new ImageLayer(Guid.NewGuid(), Solid(new SKColor(220, 40, 40)), new LayerTransform(0, 0, 20, 20), "Left");
+        var right = new ImageLayer(Guid.NewGuid(), Solid(new SKColor(40, 60, 220)), new LayerTransform(30, 0, 20, 20), "Right");
+        document.Layers.Add(left);
+        document.Layers.Add(right);
+        return (document, left, right);
+    }
+
+    private static ImportedImage Solid(SKColor colour)
+    {
+        var bitmap = new SKBitmap(Bitmaps.ColorInfo(20, 20));
+        bitmap.Erase(colour);
+        return ImportedImage.Create(bitmap, "Solid");
+    }
+
+    [Fact]
+    public void ABoxCarriedByItsOwnShapeStaysWhereItWas()
+    {
+        var box = new LayerTransform(4, 6, 20, 10);
+        var corners = DistortWarp.Corners(box);
+        // The shape a transform already has takes it nowhere, so carrying it by that shape leaves it alone.
+        var carried = DistortWarp.Carried(box, box, corners);
+        Assert.NotNull(carried);
+        for (var index = 0; index < 4; index++)
+        {
+            Assert.Equal(corners[index].X, carried[index].X, 3);
+            Assert.Equal(corners[index].Y, carried[index].Y, 3);
+        }
+    }
+
+    [Fact]
+    public void ALayerBesideTheOneDraggedIsCarriedByTheSamePerspective()
+    {
+        var (document, left, right) = SideBySide();
+        using var _ = document;
+        var box = TransformEdits.GroupBox(document, [left.ID, right.ID]);
+        Assert.NotNull(box);
+        // A move of the whole box: every corner of it goes the same way, which carries each layer by that much
+        // and leaves the distance between them exactly as it was.
+        var corners = DistortWarp.Corners(box.Value);
+        for (var index = 0; index < 4; index++)
+        {
+            corners[index] = new SKPoint(corners[index].X + 10, corners[index].Y + 5);
+        }
+        var carried = DistortWarp.Carried(left.Transform, box.Value, corners);
+        Assert.NotNull(carried);
+        Assert.Equal(10, carried[0].X, 3);
+        Assert.Equal(5, carried[0].Y, 3);
+        Assert.Equal(30, carried[1].X, 3);
+
+        Assert.True(DistortEdits.Distort(document, [left.ID, right.ID], box.Value, corners));
+        Assert.Equal(10, left.Transform.X, 3);
+        Assert.Equal(5, left.Transform.Y, 3);
+        Assert.Equal(20, left.Transform.Width, 3);
+        Assert.Equal(40, right.Transform.X, 3);
+        Assert.Equal(5, right.Transform.Y, 3);
+        // The gap between them is what it was, and each still holds its own picture.
+        var gap = right.Transform.X - (left.Transform.X + left.Transform.Width);
+        Assert.Equal(10, gap, 3);
+        Assert.True(IsRed(AtDocument(left, 20, 15)));
+        Assert.True(AtDocument(right, 50, 15).Blue > AtDocument(right, 50, 15).Red + 40);
+    }
+
+    [Fact]
+    public void AStretchedGroupStretchesEveryLayerInIt()
+    {
+        var (document, left, right) = SideBySide();
+        using var _ = document;
+        var box = TransformEdits.GroupBox(document, [left.ID, right.ID]);
+        Assert.NotNull(box);
+        // The box's right-hand side is pulled 20 further right, so the box is 70 wide where it was 50: every
+        // layer in it is stretched by the same amount, and keeps its place along the box.
+        var corners = DistortWarp.Corners(box.Value);
+        corners[1] = new SKPoint(corners[1].X + 20, corners[1].Y);
+        corners[2] = new SKPoint(corners[2].X + 20, corners[2].Y);
+        Assert.True(DistortEdits.Distort(document, [left.ID, right.ID], box.Value, corners));
+
+        Assert.Equal(0, left.Transform.X, 3);
+        Assert.Equal(28, left.Transform.Width, 3);
+        Assert.Equal(42, right.Transform.X, 3);
+        Assert.Equal(28, right.Transform.Width, 3);
+        Assert.Equal(20, left.Transform.Height, 3);
+        // Both pictures are in their new shape, each where its own layer was carried to.
+        Assert.True(IsRed(AtDocument(left, 14, 10)));
+        Assert.True(AtDocument(right, 56, 10).Blue > AtDocument(right, 56, 10).Red + 40);
+    }
+
+    [Fact]
+    public void ADistortionOfSeveralLayersIsRefusedWhenNoneOfThemCanBeMade()
+    {
+        var (document, left, right) = SideBySide();
+        using var _ = document;
+        var box = TransformEdits.GroupBox(document, [left.ID, right.ID]);
+        Assert.NotNull(box);
+        var corners = DistortWarp.Corners(box.Value);
+        // Nothing selected at all: there is no layer to carry.
+        Assert.False(DistortEdits.Distort(document, [Guid.NewGuid()], box.Value, corners));
+        // A shape with no area between its corners is not one a perspective can take, for the box or for a layer.
+        var flat = new[] { corners[0], corners[1], corners[1], corners[3] };
+        Assert.Null(DistortWarp.Carried(left.Transform, box.Value, flat));
+        Assert.False(DistortEdits.Distort(document, [left.ID, right.ID], box.Value, flat));
+        Assert.Equal(0, left.Transform.X);
+        Assert.Equal(30, right.Transform.X);
+    }
+
     [Fact]
     public void ADistortedLayerStaysWhatItWasInEveryOtherWay()
     {

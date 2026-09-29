@@ -267,18 +267,79 @@ public static class DistortWarp
     /// </summary>
     private static Func<double, double, (double U, double V)>? Backward(IReadOnlyList<SKPoint> corners)
     {
-        var unit = new (double X, double Y)[] { (0, 0), (1, 0), (1, 1), (0, 1) };
-        var target = new SKPoint[4];
-        for (var index = 0; index < 4; index++) target[index] = corners[index];
-        return Plane(unit, target);
+        if (Solved(UnitSquare(), corners) is not { } forward) return null;
+        var m = Inverted(forward);
+        if (m is null) return null;
+        return (x, y) => Map(m, x, y);
     }
 
     /// <summary>
-    /// The plane perspective taking four points to four others, as the map that reads a destination point back
-    /// to its source. Solved as the eight unknowns the four corner correspondences give; null when the points
-    /// leave it undetermined, which is a shape with no area between them.
+    /// The shape's perspective read forwards: a place on the unit square to where it lands on the document.
+    /// Null when the shape has no perspective at all, which is a shape with no area.
     /// </summary>
-    private static Func<double, double, (double U, double V)>? Plane((double X, double Y)[] from, SKPoint[] to)
+    private static Func<double, double, (double X, double Y)>? Forward(IReadOnlyList<SKPoint> corners) =>
+        Solved(UnitSquare(), corners) is { } m ? (x, y) => Map(m, x, y) : null;
+
+    /// <summary>
+    /// Where <paramref name="placement"/>'s corners (handle order) land when the perspective taking
+    /// <paramref name="box"/>'s corners to <paramref name="corners"/> is applied to the document around it too.
+    /// A layer beside the one whose corner was dragged is carried by the same perspective as the box, so
+    /// several layers distort together and keep the shape they had.
+    /// </summary>
+    public static SKPoint[]? Carried(LayerTransform placement, LayerTransform box, IReadOnlyList<SKPoint> corners)
+    {
+        if (!IsUsable(corners) || Forward(corners) is not { } map) return null;
+        if (!BrushEdits.PixelToDocument(box, 1, 1).TryInvert(out var toBox)) return null;
+        var placed = Corners(placement);
+        var carried = new SKPoint[placed.Length];
+        for (var index = 0; index < placed.Length; index++)
+        {
+            var unit = toBox.MapPoint(placed[index]);
+            var (x, y) = map(unit.X, unit.Y);
+            if (!double.IsFinite(x) || !double.IsFinite(y)) return null;
+            carried[index] = new SKPoint((float)x, (float)y);
+        }
+        return IsUsable(carried) ? carried : null;
+    }
+
+    /// <summary>The four places a perspective is worked out between: the whole unit square's corners.</summary>
+    private static (double X, double Y)[] UnitSquare() => [(0, 0), (1, 0), (1, 1), (0, 1)];
+
+    /// <summary>A point taken through a 3x3 plane map, as that map's own kind of point.</summary>
+    private static (double X, double Y) Map(double[] m, double x, double y)
+    {
+        var w = m[6] * x + m[7] * y + m[8];
+        if (Math.Abs(w) < 1e-12) return (double.NaN, double.NaN);
+        return ((m[0] * x + m[1] * y + m[2]) / w, (m[3] * x + m[4] * y + m[5]) / w);
+    }
+
+    /// <summary>A 3x3 plane map read the other way, from its adjugate; null when it has no inverse at all.</summary>
+    private static double[]? Inverted(double[] forward)
+    {
+        var determinant = forward[0] * (forward[4] * forward[8] - forward[5] * forward[7])
+                        - forward[1] * (forward[3] * forward[8] - forward[5] * forward[6])
+                        + forward[2] * (forward[3] * forward[7] - forward[4] * forward[6]);
+        if (Math.Abs(determinant) < 1e-12) return null;
+        return
+        [
+            (forward[4] * forward[8] - forward[5] * forward[7]) / determinant,
+            (forward[2] * forward[7] - forward[1] * forward[8]) / determinant,
+            (forward[1] * forward[5] - forward[2] * forward[4]) / determinant,
+            (forward[5] * forward[6] - forward[3] * forward[8]) / determinant,
+            (forward[0] * forward[8] - forward[2] * forward[6]) / determinant,
+            (forward[2] * forward[3] - forward[0] * forward[5]) / determinant,
+            (forward[3] * forward[7] - forward[4] * forward[6]) / determinant,
+            (forward[1] * forward[6] - forward[0] * forward[7]) / determinant,
+            (forward[0] * forward[4] - forward[1] * forward[3]) / determinant,
+        ];
+    }
+
+    /// <summary>
+    /// The plane perspective taking four points to four others, as the nine numbers of the forward map — the
+    /// unit square onto the shape. Solved as the eight unknowns the four corner correspondences give; null when
+    /// the points leave it undetermined, which is a shape with no area between them.
+    /// </summary>
+    private static double[]? Solved((double X, double Y)[] from, IReadOnlyList<SKPoint> to)
     {
         var rows = new double[8, 9];
         for (var index = 0; index < 4; index++)
@@ -320,30 +381,10 @@ public static class DistortWarp
                 for (var at = column; at < 9; at++) rows[row, at] -= factor * rows[column, at];
             }
         }
-        // What was solved maps the unit square onto the shape; a pixel needs the other direction.
         var forward = new double[9];
         for (var index = 0; index < 8; index++) forward[index] = rows[index, 8];
         forward[8] = 1;
-        var determinant = forward[0] * (forward[4] * forward[8] - forward[5] * forward[7])
-                        - forward[1] * (forward[3] * forward[8] - forward[5] * forward[6])
-                        + forward[2] * (forward[3] * forward[7] - forward[4] * forward[6]);
-        if (Math.Abs(determinant) < 1e-12) return null;
-        var m = new double[9];
-        m[0] = (forward[4] * forward[8] - forward[5] * forward[7]) / determinant;
-        m[1] = (forward[2] * forward[7] - forward[1] * forward[8]) / determinant;
-        m[2] = (forward[1] * forward[5] - forward[2] * forward[4]) / determinant;
-        m[3] = (forward[5] * forward[6] - forward[3] * forward[8]) / determinant;
-        m[4] = (forward[0] * forward[8] - forward[2] * forward[6]) / determinant;
-        m[5] = (forward[2] * forward[3] - forward[0] * forward[5]) / determinant;
-        m[6] = (forward[3] * forward[7] - forward[4] * forward[6]) / determinant;
-        m[7] = (forward[1] * forward[6] - forward[0] * forward[7]) / determinant;
-        m[8] = (forward[0] * forward[4] - forward[1] * forward[3]) / determinant;
-        return (x, y) =>
-        {
-            var w = m[6] * x + m[7] * y + m[8];
-            if (Math.Abs(w) < 1e-12) return (double.NaN, double.NaN);
-            return ((m[0] * x + m[1] * y + m[2]) / w, (m[3] * x + m[4] * y + m[5]) / w);
-        };
+        return forward;
     }
 
     /// <summary>The colour at a place on the shape, read out of the picture; nothing when it is off it.</summary>

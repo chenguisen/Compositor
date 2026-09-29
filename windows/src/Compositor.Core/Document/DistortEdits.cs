@@ -55,6 +55,26 @@ public static class DistortEdits
     }
 
     /// <summary>
+    /// Resamples several layers so the shape made from <paramref name="box"/>'s corners lands on
+    /// <paramref name="corners"/>: each layer's own corners are carried by that same perspective, so layers
+    /// distorted together keep the shape they had between them. A layer the perspective does not fit, or that
+    /// has nothing there, is left as it was — as the Mac build leaves it. True when any layer was distorted.
+    /// </summary>
+    public static bool Distort(CanvasDocument document, IReadOnlyList<Guid> layerIDs, LayerTransform box,
+        IReadOnlyList<SKPoint> corners)
+    {
+        if (!DistortWarp.IsUsable(corners)) return false;
+        var distorted = false;
+        foreach (var id in layerIDs)
+        {
+            if (document.Layers.FirstOrDefault(layer => layer.ID == id) is not { Asset: not null } layer) continue;
+            if (DistortWarp.Carried(layer.Transform, box, corners) is not { } carried) continue;
+            if (Distort(document, id, carried)) distorted = true;
+        }
+        return distorted;
+    }
+
+    /// <summary>
     /// The layer's mask resampled the same way, when it is held on the layer's own grid, cropped to match the
     /// pixels it now goes with. Null when there is no such mask, so the caller leaves the layer's own alone.
     /// </summary>

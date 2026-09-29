@@ -147,6 +147,47 @@ public class FilterPreviewTests
         var (document, _) = Warm(20);
         using var _document = document;
         Assert.Null(FilterPreview.Begin(document, Guid.NewGuid()));
+        // Nor does a list with nothing in it that is there make a preview.
+        Assert.Null(FilterPreview.Begin(document, [Guid.NewGuid(), Guid.NewGuid()]));
+    }
+
+    [Fact]
+    public void SeveralLayersCanBeLookedAtTogetherAndEachKeepsWhatItHad()
+    {
+        // A distortion over a group resamples every layer in it, so the preview has to carry them all and
+        // forget the last look of each — not compound them, and not free the layers' own pixels.
+        var (document, layer) = Warm(20);
+        using var _ = document;
+        var other = new ImageLayer(Guid.NewGuid(), ImportedImage.Create(layer.Asset!.Image.Copy(), "Other"),
+            new LayerTransform(30, 0, 20, 20), "Other");
+        document.Layers.Add(other);
+        var originals = new[] { layer.Asset, other.Asset };
+        var box = TransformEdits.GroupBox(document, [layer.ID, other.ID]);
+        Assert.NotNull(box);
+        using var preview = FilterPreview.Begin(document, [layer.ID, other.ID]);
+        Assert.NotNull(preview);
+        var corners = DistortWarp.Corners(box.Value);
+        for (var index = 0; index < 4; index++) corners[index] = new SKPoint(corners[index].X + 10, corners[index].Y);
+
+        Assert.True(preview.Show(document => DistortEdits.Distort(document, [layer.ID, other.ID], box.Value, corners)));
+        var shownLeft = preview.Document.Layers.First(entry => entry.ID == layer.ID);
+        var shownRight = preview.Document.Layers.First(entry => entry.ID == other.ID);
+        Assert.Equal(10, shownLeft.Transform.X, 3);
+        Assert.Equal(40, shownRight.Transform.X, 3);
+        // Looking again starts from the layers' own pixels, so it lands in the same place rather than 10 further.
+        Assert.True(preview.Show(document => DistortEdits.Distort(document, [layer.ID, other.ID], box.Value, corners)));
+        Assert.Equal(10, preview.Document.Layers.First(entry => entry.ID == layer.ID).Transform.X, 3);
+        // A shape that cannot be made is refused, and the last look stands.
+        var flat = new[] { corners[0], corners[1], corners[1], corners[3] };
+        Assert.False(preview.Show(document => DistortEdits.Distort(document, [layer.ID, other.ID], box.Value, flat)));
+        Assert.Equal(10, preview.Document.Layers.First(entry => entry.ID == layer.ID).Transform.X, 3);
+        Assert.Equal(40, preview.Document.Layers.First(entry => entry.ID == other.ID).Transform.X, 3);
+        // Neither layer's own pixels were taken over or freed.
+        Assert.Same(originals[0], layer.Asset);
+        Assert.Same(originals[1], other.Asset);
+        preview.Dispose();
+        using var rendered = Rendering.DocumentRenderer.Render(document);
+        Assert.Equal(new SKColor(200, 60, 40), rendered.GetPixel(10, 10));
     }
 
     [Fact]

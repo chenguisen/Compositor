@@ -54,7 +54,12 @@ public sealed class MainWindow : Window
     private ClipboardImage? _clipboard;
     private FilterPreview? _preview;
     private DispatcherTimer? _previewTimer;
-    private Func<CanvasDocument, Guid, bool>? _previewApply;
+    private Func<CanvasDocument, bool>? _previewApply;
+    /// <summary>The one layer a single-layer preview stands for, so a panel that thinks in layers can be shown.</summary>
+    private Guid? _previewLayer;
+    /// <summary>The box and the layers a distortion drag began with, so every step is measured from it.</summary>
+    private LayerTransform? _distortBox;
+    private List<Guid>? _distortLayers;
 
     /// <summary>The blend modes in the order the menu lists them, which is the order the enum declares.</summary>
     private static readonly LayerBlendMode[] BlendModes = Enum.GetValues<LayerBlendMode>();
@@ -1564,29 +1569,45 @@ public sealed class MainWindow : Window
     private void DistortStarted()
     {
         if (_document is not { } document || Selected is not { } id) return;
-        _history.Begin("Distort", document, Selected);
-        StartPreview(document, id);
+        _distortBox = _canvas.TransformBox;
+        _distortLayers = SelectedLayers;
+        _history.Begin(_distortLayers.Count > 1 ? "Distort Layers" : "Distort", document, Selected);
+        if (_distortLayers.Count > 1) StartPreview(document, _distortLayers);
+        else StartPreview(document, id);
     }
 
     /// <summary>
-    /// A corner has moved: the layer is resampled into the shape the corners make in the preview, so the
-    /// distortion can be seen while it is being made rather than only after it is let go.
+    /// A corner has moved: the layers are resampled into the shape the corners make in the preview, so the
+    /// distortion can be seen while it is being made rather than only after it is let go. One layer's corners
+    /// are the shape itself; several layers are each carried by the box's own perspective, so they keep the
+    /// shape they had between them.
     /// </summary>
     private void DistortChanged(IReadOnlyList<SKPoint> corners)
     {
+        if (_distortLayers is { Count: > 1 } ids && _distortBox is { } box)
+        {
+            RequestPreview(document => DistortEdits.Distort(document, ids, box, corners));
+            return;
+        }
         RequestPreview((target, layer) => DistortEdits.Distort(target, layer, corners));
     }
 
     /// <summary>
-    /// The distortion has been let go: the layer's pixels are resampled into that shape, which is the one
-    /// edit. The shape is only drawn while it is dragged — nothing is resampled until it is let go, so a drag
-    /// costs nothing until it ends, where the Mac build previews it as it moves.
+    /// The distortion has been let go: the layers' pixels are resampled into that shape, which is the one
+    /// edit. The shape is only drawn while it is dragged — nothing is resampled until it is let go.
     /// </summary>
     private void DistortFinished(IReadOnlyList<SKPoint> corners)
     {
         if (_document is not { } document || Selected is not { } id) return;
         StopPreview();
-        if (!DistortEdits.Distort(document, id, corners)) Say("That shape cannot be made");
+        var ids = _distortLayers ?? [id];
+        var box = _distortBox;
+        _distortLayers = null;
+        _distortBox = null;
+        var distorted = ids.Count > 1 && box is { } group
+            ? DistortEdits.Distort(document, ids, group, corners)
+            : DistortEdits.Distort(document, id, corners);
+        if (!distorted) Say("That shape cannot be made");
         _history.End(document, Selected);
         Reselect(id);
     }
@@ -1724,10 +1745,18 @@ public sealed class MainWindow : Window
         (byte)Math.Clamp(Math.Round(_brush.Blue * 255), 0, 255));
 
     /// <summary>Starts showing what a panel would do to a layer, before anything is committed.
-    private void StartPreview(CanvasDocument document, Guid layerID)
+    private void StartPreview(CanvasDocument document, Guid layerID) =>
+        StartPreview(FilterPreview.Begin(document, layerID), layerID);
+
+    /// <summary>The same for a look that changes several layers at once, which is what a group distortion is.</summary>
+    private void StartPreview(CanvasDocument document, IReadOnlyList<Guid> layerIDs) =>
+        StartPreview(FilterPreview.Begin(document, layerIDs), null);
+
+    private void StartPreview(FilterPreview? preview, Guid? layerID)
     {
-        if (FilterPreview.Begin(document, layerID) is not { } preview) return;
+        if (preview is null) return;
         _preview = preview;
+        _previewLayer = layerID;
         _canvas.PreviewDocument = preview.Document;
     }
 
@@ -1763,6 +1792,12 @@ public sealed class MainWindow : Window
 
     private void RequestPreview(Func<CanvasDocument, Guid, bool> apply)
     {
+        if (_previewLayer is not { } layer) return;
+        RequestPreview(document => apply(document, layer));
+    }
+
+    private void RequestPreview(Func<CanvasDocument, bool> apply)
+    {
         if (_preview is null) return;
         _previewApply = apply;
         _previewTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(140) };
@@ -1788,6 +1823,7 @@ public sealed class MainWindow : Window
     {
         _previewTimer?.Stop();
         _previewApply = null;
+        _previewLayer = null;
         _canvas.PreviewDocument = null;
         _preview?.Dispose();
         _preview = null;
@@ -2384,13 +2420,14 @@ public sealed class MainWindow : Window
         if (_tool != Tool.Move || _document is not { } document)
         {
             _canvas.TransformBox = null;
+            _canvas.DistortEnabled = false;
             return;
         }
         // One box around everything the transform moves, which for one layer is its own.
         _canvas.TransformBox = TransformEdits.GroupBox(document, SelectedLayers);
-        // A corner can be dragged on its own only when the box is one layer's, since a distortion resamples
-        // that layer's pixels into the shape and a box around several is not one layer's shape.
-        _canvas.DistortEnabled = SelectedLayers.Count == 1;
+        // A corner can be dragged on its own whenever the box stands for something with pixels: a box around
+        // several layers resamples each of them into the shape the box is dragged into.
+        _canvas.DistortEnabled = _canvas.TransformBox is not null;
     }
 
     /// <summary>

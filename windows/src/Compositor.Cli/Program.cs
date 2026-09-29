@@ -60,7 +60,8 @@ internal static class Program
           guide  <in> <out> h|v <position>    add a guide; - means take them all away
           distort <in> <out> <layer> x1 y1 x2 y2 x3 y3 x4 y4
                                               move a layer's four corners (top left, top right,
-                                              bottom right, bottom left) and resample it
+                                              bottom right, bottom left) and resample it;
+                                              comma-separate layer names to distort several together
           canvas <in> <out> w h [anchor]      resize the canvas, moving content
           resize <in> <out> w h [dpi]         resample the image and every layer
           trim   <in> <out> [tolerance]       crop the canvas to what is drawn on it
@@ -260,22 +261,35 @@ internal static class Program
         }
         using var snapshot = ProjectStore.Load(args[1]);
         using var document = snapshot.ToDocument();
-        var matches = document.Layers
-            .Where(layer => string.Equals(layer.Name, args[3], StringComparison.OrdinalIgnoreCase)).ToList();
-        if (matches.Count == 0) return Fail($"No layer in that project is called '{args[3]}'.");
-        if (matches.Count > 1) return Fail($"{matches.Count} layers are called '{args[3]}'; rename one of them first.");
+        var ids = new List<Guid>();
+        // Several names, comma-separated, are distorted together: the corners are the box around them all and
+        // each layer is carried by that one perspective, as dragging the group's corner does in the window.
+        foreach (var name in args[3].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var matches = document.Layers
+                .Where(layer => string.Equals(layer.Name, name, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (matches.Count == 0) return Fail($"No layer in that project is called '{name}'.");
+            if (matches.Count > 1) return Fail($"{matches.Count} layers are called '{name}'; rename one of them first.");
+            ids.Add(matches[0].ID);
+        }
+        if (ids.Count == 0) return Fail("distort needs the name of at least one layer.");
         var corners = new SKPoint[4];
         for (var index = 0; index < 4; index++)
         {
             corners[index] = new SKPoint(numbers[index * 2], numbers[index * 2 + 1]);
         }
-        if (!DistortEdits.Distort(document, matches[0].ID, corners))
+        var box = ids.Count > 1 ? TransformEdits.GroupBox(document, ids) : null;
+        if (ids.Count > 1 && box is null) return Fail("There is nothing with pixels in those layers to distort.");
+        var distorted = box is { } group
+            ? DistortEdits.Distort(document, ids, group, corners)
+            : DistortEdits.Distort(document, ids[0], corners);
+        if (!distorted)
         {
             return Fail("The distortion was refused: that shape cannot be made from those corners, or it would not fit in memory.");
         }
         ProjectStore.Save(ProjectSnapshot.FromDocument(document), args[2]);
-        var layer = document.Layers.First(entry => entry.ID == matches[0].ID);
-        Console.WriteLine($"wrote {args[2]} (distorted '{layer.Name}' into {layer.Transform.Width:0}x{layer.Transform.Height:0})");
+        var names = string.Join(", ", ids.Select(id => document.Layers.First(layer => layer.ID == id).Name));
+        Console.WriteLine($"wrote {args[2]} (distorted {names})");
         return 0;
     }
 
