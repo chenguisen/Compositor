@@ -402,6 +402,8 @@ public sealed class MainWindow : Window
                         Command("_Expand…", () => _ = ModifySelection(SelectionAmount.Expand)),
                         Command("_Contract…", () => _ = ModifySelection(SelectionAmount.Contract)),
                         Command("_Feather…", () => _ = ModifySelection(SelectionAmount.Feather)),
+                        new Separator(),
+                        Command("Colour _Range…", () => _ = ColorRange()),
                     },
                 },
                 new MenuItem
@@ -1609,6 +1611,23 @@ public sealed class MainWindow : Window
         }
         Edit("Clear Guides", () => GuideEdits.Clear(document) > 0);
         Say("Guides cleared");
+    }
+
+    /// <summary>
+    /// Select ▸ Colour Range: everything in the picture near a colour, wherever it is. What is matched is the
+    /// canvas as shown, as the Mac build matches, so a colour counts wherever it appears.
+    /// </summary>
+    private async Task ColorRange()
+    {
+        if (_document is not { } document) return;
+        if (document.Width <= 0 || document.Height <= 0) return;
+        var start = new SKColor((byte)Math.Round(_brush.Red * 255), (byte)Math.Round(_brush.Green * 255),
+            (byte)Math.Round(_brush.Blue * 255));
+        if (await ColorRangeDialog.Ask(this, start) is not { } asked) return;
+        using var sample = DocumentRenderer.Render(document);
+        Edit($"Colour Range {asked.Fuzziness}", () => SelectionEdits.SelectColorRange(
+            document, sample, [asked.Colour], [], asked.Fuzziness, asked.Invert, asked.Mode));
+        Say($"Selected what is near {asked.Colour} within {asked.Fuzziness}");
     }
 
     /// <summary>Image ▸ Canvas Size: the canvas in pixels, with the picture kept at one of nine anchors.</summary>

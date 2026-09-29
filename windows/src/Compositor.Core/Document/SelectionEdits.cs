@@ -129,6 +129,64 @@ public static class SelectionEdits
         return Apply(document, builder.Detach(), mode);
     }
 
+    /// <summary>
+    /// Select ▸ Colour Range: everything like the colours asked for, anywhere in the sample. The sample is the
+    /// canvas as shown, as the Mac build's is, so a colour is matched wherever it appears — not just where it
+    /// runs together. Colours to leave out take precedence over the ones to look for.
+    /// </summary>
+    public static bool SelectColorRange(CanvasDocument document, SKBitmap sample, IReadOnlyList<SKColor> include,
+        IReadOnlyList<SKColor> exclude, int fuzziness, bool invert, SelectionMode mode)
+    {
+        if (sample.Width <= 0 || sample.Height <= 0 || include.Count == 0) return false;
+        var mask = new byte[(long)sample.Width * sample.Height];
+        var matched = WandPixels.ColorRangeMask(sample.GetPixelSpan(), sample.Width, sample.Height, sample.RowBytes,
+            Colours(include), include.Count, Colours(exclude), exclude.Count,
+            Math.Clamp(fuzziness, 0, 200), invert, mask);
+        if (matched <= 0) return mode == SelectionMode.Replace ? Deselect(document) : false;
+        if (Outline(mask, sample.Width, sample.Height) is not { } path) return false;
+        using (path) return Apply(document, path, mode);
+    }
+
+    /// <summary>The colours as the kernel wants them: three straight-sRGB bytes each, one after another.</summary>
+    private static byte[] Colours(IReadOnlyList<SKColor> colours)
+    {
+        var bytes = new byte[colours.Count * 3];
+        for (var index = 0; index < colours.Count; index++)
+        {
+            bytes[index * 3] = colours[index].Red;
+            bytes[index * 3 + 1] = colours[index].Green;
+            bytes[index * 3 + 2] = colours[index].Blue;
+        }
+        return bytes;
+    }
+
+    /// <summary>
+    /// The outline of a mask, along exact pixel edges, or null when there is nothing to draw or it is too
+    /// detailed to be worth drawing. The caller keeps what comes back.
+    /// </summary>
+    private static SKPath? Outline(byte[] mask, int width, int height)
+    {
+        if (WandPixels.WandTrace(mask, width, height, out var points, out _, out var loops, out var loopCount) != 0
+            || loopCount == 0)
+        {
+            return null;
+        }
+        var builder = new SKPathBuilder();
+        var index = 0;
+        for (var loop = 0; loop < loopCount; loop++)
+        {
+            var length = loops[loop];
+            var corners = new SKPoint[length];
+            for (var corner = 0; corner < length; corner++)
+            {
+                corners[corner] = new SKPoint(points[(index + corner) * 2], points[(index + corner) * 2 + 1]);
+            }
+            builder.AddPoly(corners, close: true);
+            index += length;
+        }
+        return builder.Detach();
+    }
+
     /// <summary>The whole canvas minus what is selected, which is Select ▸ Inverse.</summary>
     public static bool Invert(CanvasDocument document)
     {
