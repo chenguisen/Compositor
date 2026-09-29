@@ -106,6 +106,52 @@ public static class LayerEdits
     }
 
     /// <summary>
+    /// What the layer draws around itself, whole. Null takes every effect away. False when the layer is not
+    /// there, when the effects are not ones the rasterizer may draw, or when they are what the layer already
+    /// has — so an unchanged panel does not leave a step in the history.
+    /// </summary>
+    public static bool SetEffects(CanvasDocument document, Guid layerID, Format.LayerEffects? effects)
+    {
+        if (Find(document, layerID) is not { } layer) return false;
+        if (effects is not null && !effects.IsValid) return false;
+        var next = effects is { IsEmpty: true } ? null : effects;
+        if (SameEffects(layer.Effects, next)) return false;
+        layer.Effects = next;
+        return true;
+    }
+
+    /// <summary>
+    /// One of the layer's effects replaced, leaving the others alone, or taken away when it is null. What the
+    /// window's Effects menu uses, so changing the stroke does not disturb the glow.
+    /// </summary>
+    public static bool SetEffect(CanvasDocument document, Guid layerID, Format.EffectKind kind, Format.LayerEffects? effect)
+    {
+        if (Find(document, layerID) is not { } layer) return false;
+        var from = layer.Effects;
+        var next = new Format.LayerEffects
+        {
+            Stroke = kind == Format.EffectKind.Stroke ? effect?.Stroke : from?.Stroke,
+            Shadow = kind == Format.EffectKind.DropShadow ? effect?.Shadow : from?.Shadow,
+            ColorOverlay = kind == Format.EffectKind.ColorOverlay ? effect?.ColorOverlay : from?.ColorOverlay,
+            InnerShadow = kind == Format.EffectKind.InnerShadow ? effect?.InnerShadow : from?.InnerShadow,
+            OuterGlow = kind == Format.EffectKind.OuterGlow ? effect?.OuterGlow : from?.OuterGlow,
+            InnerGlow = kind == Format.EffectKind.InnerGlow ? effect?.InnerGlow : from?.InnerGlow,
+        };
+        return SetEffects(document, layerID, next.IsEmpty ? null : next);
+    }
+
+    /// <summary>
+    /// Whether two sets of effects say the same thing. These are the very records the manifest writes, so
+    /// their written form is their value: it is compared rather than each of the thirty-odd fields by hand.
+    /// </summary>
+    private static bool SameEffects(Format.LayerEffects? left, Format.LayerEffects? right)
+    {
+        if (left is null || right is null) return left is null && right is null;
+        return System.Text.Json.JsonSerializer.Serialize(left, Format.ManifestJson.Options)
+            == System.Text.Json.JsonSerializer.Serialize(right, Format.ManifestJson.Options);
+    }
+
+    /// <summary>
     /// Moves a layer one place through the layers it shares a folder with: up is towards the top of the
     /// stack, which is the end of the array. Only the two records swap, so a folder still holds what is
     /// inside it.

@@ -45,7 +45,9 @@ public sealed class MainWindow : Window
     /// <summary>The blend modes in the order the menu lists them, which is the order the enum declares.</summary>
     private static readonly LayerBlendMode[] BlendModes = Enum.GetValues<LayerBlendMode>();
     private readonly MenuItem _adjustmentMenu = new() { Header = "New _Adjustment Layer" };
+    private readonly MenuItem _effectsMenu = new() { Header = "Layer _Effects" };
     private MenuItem _adjustmentSettings = new();
+    private MenuItem _clearEffects = new();
     private readonly MenuItem _clipping = new() { HotKey = new KeyGesture(Key.G, KeyModifiers.Control | KeyModifiers.Alt) };
     private readonly MenuItem _addMask = new() { Header = "Add _Mask" };
     private readonly MenuItem _maskToggle = new();
@@ -265,6 +267,7 @@ public sealed class MainWindow : Window
                             (document, _) => document.Layers.Count < LayerPlacement.MaxLayers),
                         _adjustmentMenu,
                         _adjustmentSettings,
+                        _effectsMenu,
                         new Separator(),
                         _visibility,
                     },
@@ -1222,6 +1225,48 @@ public sealed class MainWindow : Window
         }
         _adjustmentSettings = LayerCommand("Adjustment _Settings…", () => _ = EditAdjustment(), null,
             (_, layer) => layer.Adjustment is not null);
+        BuildEffectsMenu();
+    }
+
+    /// <summary>
+    /// The effects a layer draws around itself, one row each plus a row that takes them all away. Each row
+    /// opens the panel for that effect, ticked when the layer already has it.
+    /// </summary>
+    private void BuildEffectsMenu()
+    {
+        foreach (var kind in Enum.GetValues<EffectKind>())
+        {
+            var wanted = kind;
+            _effectsMenu.Items.Add(LayerCommand(EffectDialog.TitleFor(kind) + "…", () => _ = EditEffect(wanted), null,
+                (_, layer) => layer.IsGroup == false));
+        }
+        _effectsMenu.Items.Add(new Separator());
+        _clearEffects = LayerCommand("_Clear Effects", ClearEffects, null, (_, layer) => layer.Effects is not null);
+        _effectsMenu.Items.Add(_clearEffects);
+    }
+
+    /// <summary>One effect's panel, with the layer's own effect as it starts out.</summary>
+    private async Task EditEffect(EffectKind kind)
+    {
+        if (_document is not { } document || Selected is not { } id) return;
+        if (document.Layers.FirstOrDefault(layer => layer.ID == id) is not { } layer) return;
+        if (await EffectDialog.Ask(this, kind, layer.Effects) is not { } effects) return;
+        if (_document is not { } current) return;
+        Edit(EffectDialog.TitleFor(kind), () => LayerEdits.SetEffect(current, id, kind, effects));
+        Reselect(id);
+    }
+
+    /// <summary>Every effect taken off the layer, as one undo step.</summary>
+    private void ClearEffects()
+    {
+        if (_document is not { } document || Selected is not { } id) return;
+        if (document.Layers.FirstOrDefault(layer => layer.ID == id)?.Effects is null)
+        {
+            Say("This layer has no effects");
+            return;
+        }
+        Edit("Clear Effects", () => LayerEdits.SetEffects(document, id, null));
+        Say("Effects cleared");
     }
 
     /// <summary>A new adjustment layer over the selected one, with its settings asked for straight away.</summary>

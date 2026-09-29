@@ -1,5 +1,16 @@
 namespace Compositor.Core.Format;
 
+/// <summary>Which of the effects a layer may draw around itself, as the Effects menu lists them.</summary>
+public enum EffectKind
+{
+    Stroke,
+    DropShadow,
+    ColorOverlay,
+    InnerShadow,
+    OuterGlow,
+    InnerGlow,
+}
+
 /// <summary>A line drawn around what the layer shows, outside its edge or inside it.</summary>
 public sealed class StrokeEffect
 {
