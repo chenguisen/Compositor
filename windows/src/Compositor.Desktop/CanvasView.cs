@@ -55,6 +55,9 @@ public sealed class CanvasView : Control
     /// <summary>A line a drag has snapped to: cyan, as Photoshop shows them.</summary>
     private static readonly Pen SnapPen = new() { Brush = Brushes.Cyan, Thickness = 1 };
 
+    /// <summary>Guides are drawn in the blue Photoshop uses for them, so they do not read as part of the picture.</summary>
+    private static readonly Pen GuidePen = new() { Brush = new SolidColorBrush(Color.FromRgb(0x33, 0x99, 0xFF)), Thickness = 1 };
+
     private CanvasDocument? _document;
     private SKPoint _origin;
     private double _zoom = 1;
@@ -364,8 +367,20 @@ public sealed class CanvasView : Control
             region.Height * _zoom);
         context.DrawRectangle(Paper, null, destination);
         context.DrawImage(image, destination);
+        DrawGuides(context, document);
         DrawSelection(context);
         DrawStroke(context);
+    }
+
+    /// <summary>The alignment guides, across the whole canvas at the place each one sits.</summary>
+    private void DrawGuides(DrawingContext context, CanvasDocument document)
+    {
+        foreach (var guide in document.Guides)
+        {
+            var (x1, y1, x2, y2) = GuideEdits.ScreenLine(guide, document.Width, document.Height,
+                _zoom, _origin.X, _origin.Y);
+            context.DrawLine(GuidePen, new Point(x1, y1), new Point(x2, y2));
+        }
     }
 
     /// <summary>The caret, drawn over everything else while text is being typed.</summary>

@@ -369,6 +369,9 @@ public sealed class MainWindow : Window
                         Command("Zoom _out", () => { _canvas.ZoomBy(1 / 1.25); Say(); }),
                         Command("_Fit on screen", () => { _canvas.Fit(); Say(); }),
                         Command("Actual _pixels", () => { _canvas.ActualSize(); Say(); }),
+                        new Separator(),
+                        Command("New _Guide…", () => _ = NewGuide(), "Ctrl+OemSemicolon"),
+                        Command("_Clear Guides", ClearGuides),
                     },
                 },
             },
@@ -1271,6 +1274,37 @@ public sealed class MainWindow : Window
     {
         _clipboard?.Dispose();
         _clipboard = copied;
+    }
+
+    /// <summary>View ▸ New Guide: a line across the canvas to line things up against.</summary>
+    private async Task NewGuide()
+    {
+        if (_document is not { } document) return;
+        if (await GuideDialog.Ask(this, document.Width, document.Height) is not { } asked) return;
+        if (_document is not { } current) return;
+        _history.Begin("New Guide", current, Selected);
+        var made = GuideEdits.Add(current, asked.Axis, asked.Position);
+        _history.End(current, Selected);
+        if (made is null)
+        {
+            Say("This document already holds as many guides as it may.");
+            return;
+        }
+        Refresh();
+        Say($"{asked.Axis} guide at {asked.Position:0.#}");
+    }
+
+    /// <summary>View ▸ Clear Guides: every guide taken away, as one undo step.</summary>
+    private void ClearGuides()
+    {
+        if (_document is not { } document) return;
+        if (document.Guides.Count == 0)
+        {
+            Say("There are no guides to clear");
+            return;
+        }
+        Edit("Clear Guides", () => GuideEdits.Clear(document) > 0);
+        Say("Guides cleared");
     }
 
     /// <summary>Image ▸ Canvas Size: the canvas in pixels, with the picture kept at one of nine anchors.</summary>
