@@ -24,6 +24,7 @@ internal sealed class FilterDialog : Window
         {
             FilterKind.GaussianBlur => "Gaussian Blur",
             FilterKind.MotionBlur => "Motion Blur",
+            FilterKind.BloomGlow => "Bloom / Glow",
             FilterKind.AddNoise => "Add Noise",
             FilterKind.Vignette => "Vignette",
             FilterKind.TonalContrast => "Tonal Contrast",
@@ -40,6 +41,10 @@ internal sealed class FilterDialog : Window
         {
             case FilterKind.GaussianBlur:
                 Add(group, "Radius, pixels", 0.1, 250, start.BlurRadius, defaults.BlurRadius, (s, v) => s.BlurRadius = v);
+                break;
+            case FilterKind.BloomGlow:
+                Add(group, "Amount", 0, 100, start.BloomAmount, defaults.BloomAmount, (s, v) => s.BloomAmount = v);
+                Add(group, "Radius, pixels", 1, 150, start.BloomRadius, defaults.BloomRadius, (s, v) => s.BloomRadius = v, "0");
                 break;
             case FilterKind.MotionBlur:
                 Add(group, "Angle, degrees", -90, 90, start.MotionAngle, defaults.MotionAngle, (s, v) => s.MotionAngle = v);

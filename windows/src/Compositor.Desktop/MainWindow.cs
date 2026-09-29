@@ -329,6 +329,7 @@ public sealed class MainWindow : Window
                         Command("_Gaussian Blur…", () => _ = ApplyFilter(FilterKind.GaussianBlur)),
                         Command("_Motion Blur…", () => _ = ApplyFilter(FilterKind.MotionBlur)),
                         Command("Add _Noise…", () => _ = ApplyFilter(FilterKind.AddNoise)),
+                        Command("_Bloom / Glow…", () => _ = ApplyFilter(FilterKind.BloomGlow)),
                         Command("_Dither…", () => _ = DitherFilter()),
                         new Separator(),
                         Command("_Content-Aware Fill", ContentAwareFill),

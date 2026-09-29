@@ -15,6 +15,9 @@ public enum FilterKind
     /// <summary>Smears everything along a line, the way a moving camera or subject does.</summary>
     MotionBlur,
 
+    /// <summary>Spreads the bright parts of the picture into a soft glow around them.</summary>
+    BloomGlow,
+
     /// <summary>Speckles the picture with random brightness, as film grain or sensor noise.</summary>
     AddNoise,
 
@@ -44,6 +47,12 @@ public sealed class FilterSettings
     // Gaussian blur
     /// <summary>Standard deviation in layer pixels, 0.1 to 250.</summary>
     public double BlurRadius { get; set; } = 1;
+
+    // Bloom
+    /// <summary>0 to 100: how strongly the glow is laid over the picture.</summary>
+    public double BloomAmount { get; set; } = 40;
+    /// <summary>The glow's reach in layer pixels, 1 to 150.</summary>
+    public double BloomRadius { get; set; } = 24;
 
     // Motion blur
     /// <summary>Direction in degrees, counterclockwise from horizontal as Photoshop measures it, −90 to 90.</summary>
@@ -90,6 +99,7 @@ public sealed class FilterSettings
     {
         FilterKind.GaussianBlur => Within(BlurRadius, 0.1, 250),
         FilterKind.MotionBlur => Within(MotionAngle, -90, 90) && Within(MotionDistance, 1, 2000),
+        FilterKind.BloomGlow => Within(BloomAmount, 0, 100) && Within(BloomRadius, 1, 150),
         FilterKind.AddNoise => Within(NoiseAmount, 0.1, 400),
         FilterKind.Vignette =>
             Within(VignetteAmount, 0, 100) && Within(VignetteMidpoint, 0, 100) && Within(VignetteRoundness, -100, 100)
@@ -106,6 +116,7 @@ public sealed class FilterSettings
     {
         FilterKind.GaussianBlur => BlurRadius > 0,
         FilterKind.MotionBlur => MotionDistance > 0,
+        FilterKind.BloomGlow => BloomAmount > 0,
         FilterKind.AddNoise => NoiseAmount > 0,
         FilterKind.Vignette => VignetteAmount > 0,
         FilterKind.TonalContrast =>
@@ -132,11 +143,13 @@ public static class FilterEdits
     {
         FilterKind.GaussianBlur => (int)Math.Ceiling(settings.BlurRadius * 3 + 2),
         FilterKind.MotionBlur => (int)Math.Ceiling(settings.MotionDistance / 2 + 2),
+        FilterKind.BloomGlow => (int)Math.Ceiling(settings.BloomRadius * 3 + 2),
         _ => 0,
     };
 
     /// <summary>Whether a filter spreads past the layer's edge, and so needs room and trimming back.</summary>
-    private static bool Spreads(FilterKind kind) => kind is FilterKind.GaussianBlur or FilterKind.MotionBlur;
+    private static bool Spreads(FilterKind kind) =>
+        kind is FilterKind.GaussianBlur or FilterKind.MotionBlur or FilterKind.BloomGlow;
 
     /// <summary>
     /// Applies a filter to a layer's pixels. False when there is nothing to do, when the amounts or the layer
@@ -163,6 +176,16 @@ public static class FilterEdits
                 // the wider buffer is far enough away that reading it as the edge changes nothing.
                 GaussianBlur.Clamped(pixels, width, height, 4, stride, settings.BlurRadius);
                 break;
+            case FilterKind.BloomGlow:
+            {
+                // What glows is the picture lifted: bright parts spread, dark ones left where they are.
+                using var lifted = FilterSurface.Copy(work);
+                BloomPixels.Lift(lifted.GetPixelSpan(), lifted.GetPixelSpan(), width, height, stride,
+                    settings.BloomAmount / 50.0);
+                GaussianBlur.Clamped(lifted.GetPixelSpan(), width, height, 4, lifted.RowBytes, settings.BloomRadius);
+                BloomPixels.Screen(pixels, lifted.GetPixelSpan(), width, height, stride, settings.BloomAmount / 50.0);
+                break;
+            }
             case FilterKind.MotionBlur:
                 using (var source = FilterSurface.Copy(work))
                 {

@@ -455,6 +455,76 @@ public class FilterEditsTests
         Assert.True(layer.Asset.Image.GetPixel(10, 10).Red != 128, "the selected half was not noised");
     }
 
+    /// <summary>A bright dot on a dark field, with room around it for a glow to reach into.</summary>
+    private static (CanvasDocument Document, ImageLayer Layer) DotOnDark()
+    {
+        var bitmap = new SKBitmap(Bitmaps.ColorInfo(60, 60));
+        bitmap.Erase(new SKColor(10, 10, 10));
+        for (var y = 28; y < 32; y++)
+            for (var x = 28; x < 32; x++)
+                bitmap.SetPixel(x, y, SKColors.White);
+        var document = new CanvasDocument(Guid.NewGuid(), 60, 60);
+        var layer = new ImageLayer(Guid.NewGuid(), ImportedImage.Create(bitmap, "Dot"),
+            new LayerTransform(0, 0, 60, 60), "Dot");
+        document.Layers.Add(layer);
+        return (document, layer);
+    }
+
+    [Fact]
+    public void BloomSpreadsTheBrightPartsAndLeavesTheDarkOnes()
+    {
+        var (document, layer) = DotOnDark();
+        using var _ = document;
+        Assert.True(FilterEdits.Apply(document, layer.ID, FilterKind.BloomGlow,
+            new FilterSettings { BloomAmount = 80, BloomRadius = 12 }));
+
+        // A glow spreads past the layer's own edge, so the picture is read through the placement it now has.
+        var dot = AtDocument(layer, 30, 30);
+        var near = AtDocument(layer, 34, 30);
+        var far = AtDocument(layer, 52, 30);
+        var corner = AtDocument(layer, 3, 3);
+        Assert.True(dot.Red >= 250, $"the dot itself was dimmed to {dot.Red}");
+        Assert.True(near.Red > 30, $"the glow did not reach the dot's neighbours: {near.Red}");
+        Assert.True(near.Red > far.Red, $"the glow does not fade with distance: near {near.Red}, far {far.Red}");
+        // What is dark and far from anything bright is left very nearly where it was.
+        Assert.True(corner.Red < 25, $"the dark corner was lifted to {corner.Red}");
+        // And the glow has spread the layer beyond the dot, into the room it was given.
+        Assert.True(layer.Asset!.Width > 60, $"the glow did not spread: {layer.Asset.Width}");
+    }
+
+    [Fact]
+    public void MoreBloomIsMoreGlow()
+    {
+        var none = NeighbourAfterBloom(20);
+        var some = NeighbourAfterBloom(60);
+        var lots = NeighbourAfterBloom(100);
+        Assert.True(some > none, $"60 gave {some}, 20 gave {none}");
+        Assert.True(lots > some, $"100 gave {lots}, 60 gave {some}");
+        Assert.True(none > 10, $"even a little bloom did nothing: {none}");
+    }
+
+    /// <summary>The pixel just beside the bright dot after a bloom of this amount.</summary>
+    private static byte NeighbourAfterBloom(double amount)
+    {
+        var (document, layer) = DotOnDark();
+        using var _ = document;
+        Assert.True(FilterEdits.Apply(document, layer.ID, FilterKind.BloomGlow,
+            new FilterSettings { BloomAmount = amount, BloomRadius = 12 }));
+        return AtDocument(layer, 34, 30).Red;
+    }
+
+    [Fact]
+    public void BloomOfAnAmountOutOfRangeIsRefused()
+    {
+        var (document, layer) = Flat(20, 20, SKColors.Gray);
+        using var _ = document;
+        Assert.False(FilterEdits.Apply(document, layer.ID, FilterKind.BloomGlow, new FilterSettings { BloomAmount = 0 }));
+        Assert.False(FilterEdits.Apply(document, layer.ID, FilterKind.BloomGlow, new FilterSettings { BloomAmount = 400 }));
+        Assert.False(FilterEdits.Apply(document, layer.ID, FilterKind.BloomGlow,
+            new FilterSettings { BloomAmount = 40, BloomRadius = 900 }));
+        Assert.Equal(128, Middle(layer).Red);
+    }
+
     [Fact]
     public void AddNoiseWithNothingToAddIsRefused()
     {
