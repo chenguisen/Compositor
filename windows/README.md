@@ -103,15 +103,12 @@ Nothing on this list is hidden in the code — each is either a deliberate refus
   (a model, its licence, its size), and that decision was taken deliberately: parked, with no dependency added.
   Everything downstream of a selection is complete, so the loss is the segmentation step alone — a subject must
   be cut out here with the wand, a lasso or Color Range.
+- **The Eyedropper's Sample Ring** — an option the Mac's tool bar has and this one does not.
 - **The Mac's "move selected pixels"** (drag a selection's contents, or step them with ⌘ and an arrow). This port
   has *move the selection outline* only, so the Mac's two shortcut rows for it are not in the key table either.
-- **The Eyedropper's Sample Ring**, the marquee and lasso **Anti-alias** toggle, and a **Preview** toggle on the
-  filter panels. The first two are options the Mac's tool bar has; the port's panels always preview live.
 
 **Smaller divergences**
 
-- The **interface spells it "colour"** where the Mac says "color" ("Fill with Foreground Colour", "Reset
-  colours"). Same words, different house style; worth fixing for a like-for-like interface.
 - **No color picker**: a color is three or four RGB numbers or sliders, where the Mac opens the system picker.
   Every value is reachable, and tools that only have a few colors get swatches.
 - The **Dither** panel's tone heading says "Levels" where the Mac says "Tones"; the panel does not retain its
@@ -121,10 +118,13 @@ Nothing on this list is hidden in the code — each is either a deliberate refus
   look. Every other filter and adjustment is a port of the Mac's own kernel or operator.
 - **Updates**: the feed both builds read publishes a macOS `.dmg`, so Help ▸ Check for Updates reports the news
   and links the release page; building from this repository is what updates a Windows copy.
-- **A human has never clicked through the window.** Every engine beneath it is tested and the self-checks above
-  prove construction, layout and the headless state machines, but the pointer paths themselves — paint, marquee,
-  wand, a guide drag, Ctrl-drag to distort, the opacity slider, curve handles, the text caret — are untested by
-  hand. Treat the pointer as unproven until someone has driven it.
+- **Some of the window has been driven by a real pointer, and some of it has not.** A script that launches the
+  published app, clicks it and photographs it has opened menus (which is how the gestures are known to draw),
+  made a document from the New Project dialog, painted a stroke on the canvas, driven the shortcut sheet's
+  recorder with real keys, and found the two faults that nothing offscreen could see. What is still **unproven
+  by hand**: Ctrl-drag to distort a layer, the opacity slider and the blend pop-up, the curve editor's handles,
+  the text caret, the Camera Raw panel's own controls, and crop. Treat those as untested until somebody drives
+  them — `--clicks` covers the canvas paths it names, and nothing covers the rest.
 
 ## Keeping this alive, or handing it on
 
