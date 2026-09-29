@@ -30,6 +30,10 @@ internal sealed class ToolOptions
     /// </summary>
     public bool SelectionAntialiased = true;
 
+    /// <summary>Whether an eyedropper drag carries the ring that compares what is under the pointer with what it
+    /// is replacing, which is the Mac build's Sample Ring tick in the eyedropper's own controls.</summary>
+    public bool ShowsSampleRing = true;
+
     /// <summary>How the Gradient tool paints.</summary>
     public GradientShape Gradient = GradientShape.Linear;
     public bool GradientToBackground;

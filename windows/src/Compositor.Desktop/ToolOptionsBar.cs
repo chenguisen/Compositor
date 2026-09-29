@@ -102,6 +102,7 @@ internal sealed class ToolOptionsBar : Border
             On("blur", tool == Tool.Blur);
             On("marqueeShape", tool is Tool.Marquee or Tool.Ellipse);
             On("lasso", tool is Tool.Lasso or Tool.Polygon);
+            On("eye", tool == Tool.Eyedropper);
             On("wand", tool == Tool.Wand);
                 On("gradient", tool == Tool.Gradient);
             On("shape", tool == Tool.Shape);
@@ -160,6 +161,7 @@ internal sealed class ToolOptionsBar : Border
         _cloneAll.SelectedIndex = _options.Brush.CloneAllLayers ? 1 : 0;
         _contiguous.IsChecked = _options.Wand.Contiguous;
         _antialias.IsChecked = _options.SelectionAntialiased;
+        _sampleRing.IsChecked = _options.ShowsSampleRing;
         _wandAll.SelectedIndex = _options.WandAllLayers ? 1 : 0;
         _shapeKind.SelectedIndex = (int)_options.Shape;
         _gradientKind.SelectedIndex = (int)_options.Gradient;
@@ -211,6 +213,7 @@ internal sealed class ToolOptionsBar : Border
     private readonly ComboBox _lassoKind = new();
     private readonly CheckBox _contiguous = new() { Content = "Contiguous" };
     private readonly CheckBox _antialias = new() { Content = "Anti-alias" };
+    private readonly CheckBox _sampleRing = new() { Content = "Sample Ring" };
     private readonly ComboBox _wandAll = new();
     private readonly ComboBox _shapeKind = new();
     private readonly ComboBox _gradientKind = new();
@@ -292,6 +295,9 @@ internal sealed class ToolOptionsBar : Border
         _antialias.IsChecked = _options.SelectionAntialiased;
         _antialias.IsCheckedChanged += (_, _) =>
             Set(ref _options.SelectionAntialiased, _antialias.IsChecked == true);
+        _sampleRing.IsChecked = _options.ShowsSampleRing;
+        _sampleRing.IsCheckedChanged += (_, _) =>
+            Set(ref _options.ShowsSampleRing, _sampleRing.IsChecked == true);
         _cloneAll.ItemsSource = new[] { "Sample: This Layer", "Sample: All Layers" };
         _cloneAll.SelectedIndex = 0;
         _cloneAll.SelectionChanged += (_, _) =>
@@ -364,6 +370,9 @@ internal sealed class ToolOptionsBar : Border
         Cell("marqueeShape", _marqueeShape);
         Cell("lasso", _lassoKind);
         Cell("lasso", _antialias);
+        // The eyedropper's own row, which the Mac keeps in the picker's controls: the ring is the only thing that
+        // tool can be told.
+        Cell("eye", _sampleRing);
         Cell("wand", _tolerance);
         Cell("wand", _sampleSize);
         Cell("wand", _contiguous);

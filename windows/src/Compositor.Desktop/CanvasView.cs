@@ -128,6 +128,23 @@ public sealed class CanvasView : Control
     /// <summary>Handed the point the eyedropper was clicked at, in document pixels.</summary>
     public Action<SKPoint>? EyedropperClicked { get; set; }
 
+    /// <summary>
+    /// Whether the ring that follows an eyedropper drag is drawn — the colour under the pointer across its top
+    /// half and the colour the pick is replacing across its bottom, which is the Mac build's own Sample Ring.
+    /// </summary>
+    public bool ShowsSampleRing { get; set; } = true;
+
+    /// <summary>Whether the sampling ring is up, and the two colours on it, which is what the checks read.</summary>
+    internal bool SampleRingShowing => _sampleRing is not null;
+
+    internal (SKColor Original, SKColor Sampled)? SampleRing => _sampleRing;
+
+    /// <summary>The ring while the eyedropper's pointer is down: where it sits, and what it compares.</summary>
+    private (SKColor Original, SKColor Sampled)? _sampleRing;
+    private Point _sampleAt;
+    private SKColor _sampleOriginal;
+    private bool _sampling;
+
     /// <summary>When set, the crop frame below is drawn and can be dragged about.</summary>
     public bool CropEnabled { get; set; }
 
@@ -539,6 +556,54 @@ public sealed class CanvasView : Control
         DrawSelection(context);
         DrawUprightGuides(context);
         DrawStroke(context);
+        DrawSampleRing(context);
+    }
+
+    /// <summary>
+    /// Reads the colour under the pointer as the canvas shows it and puts it on the ring. The read is of one
+    /// pixel through the region renderer rather than of the whole picture, so a drag can sample as fast as the
+    /// pointer moves; it is the same route the canvas's own drawing takes, so what the ring names is drawn.
+    /// </summary>
+    private void Sample()
+    {
+        var point = ToDocument(_sampleAt);
+        var x = (int)Math.Floor(point.X);
+        var y = (int)Math.Floor(point.Y);
+        var sampled = _sampleOriginal;
+        if ((PreviewDocument ?? _document) is { } document
+            && x >= 0 && y >= 0 && x < document.Width && y < document.Height)
+        {
+            using var one = DocumentRenderer.RenderRegion(document, SKRectI.Create(x, y, 1, 1));
+            sampled = one.GetPixel(0, 0);
+        }
+        _sampleRing = ShowsSampleRing ? (_sampleOriginal, sampled) : null;
+        InvalidateVisual();
+    }
+
+    /// <summary>
+    /// The ring an eyedropper drag carries, as the Mac build's Sample Ring draws it: a band of grey with the
+    /// colour being sampled stroked across its top half and the colour being replaced across its bottom, so the
+    /// two can be told apart at a glance while the pointer is moving.
+    /// </summary>
+    private void DrawSampleRing(DrawingContext context)
+    {
+        if (_sampleRing is not { } ring) return;
+        const double side = 116, inset = 15, band = 24, weight = 16;
+        var box = new Rect(_sampleAt.X - side / 2, _sampleAt.Y - side / 2, side, side);
+        var oval = new EllipseGeometry(new Rect(box.X + inset, box.Y + inset,
+            box.Width - inset * 2, box.Height - inset * 2));
+        context.DrawGeometry(null, new Pen(new SolidColorBrush(Color.FromRgb(0x73, 0x73, 0x73)), band), oval);
+        foreach (var (colour, top) in new[] { (ring.Sampled, true), (ring.Original, false) })
+        {
+            var half = new Rect(box.X, top ? box.Y : box.Y + box.Height / 2, box.Width, box.Height / 2);
+            using (context.PushClip(half))
+            {
+                context.DrawGeometry(null,
+                    new Pen(new SolidColorBrush(Color.FromArgb(colour.Alpha, colour.Red, colour.Green, colour.Blue)),
+                        weight),
+                    oval);
+            }
+        }
     }
 
     /// <summary>
@@ -1213,8 +1278,15 @@ public sealed class CanvasView : Control
         }
         if (EyedropperOnClick && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
         {
+            _sampling = true;
+            _sampleAt = e.GetPosition(this);
+            // The colour the pick replaces, which the ring's lower half goes on showing while the drag does.
+            _sampleOriginal = new SKColor((byte)Math.Round(Brush.Red * 255), (byte)Math.Round(Brush.Green * 255),
+                (byte)Math.Round(Brush.Blue * 255));
+            Sample();
+            e.Pointer.Capture(this);
             e.Handled = true;
-            EyedropperClicked?.Invoke(ToDocument(e.GetPosition(this)));
+            EyedropperClicked?.Invoke(ToDocument(_sampleAt));
             return;
         }
         if (SampleSourceOnClick && e.KeyModifiers.HasFlag(KeyModifiers.Alt)
@@ -1299,6 +1371,14 @@ public sealed class CanvasView : Control
         // Every move is reported, whatever the drag in hand is, so a readout that follows the pointer does not
         // stop while a stroke is being painted.
         PointerMovedAt?.Invoke(ToDocument(now));
+        // Sampling with the eyedropper is its own drag: the ring follows the pointer and names what is under it.
+        if (_sampling)
+        {
+            _sampleAt = now;
+            Sample();
+            e.Handled = true;
+            return;
+        }
         if (_uprightDraft is { } drawn)
         {
             _uprightDraft = (drawn.Start, ToDocument(now));
@@ -1422,6 +1502,15 @@ public sealed class CanvasView : Control
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
+        if (_sampling)
+        {
+            _sampling = false;
+            _sampleRing = null;
+            e.Pointer.Capture(null);
+            InvalidateVisual();
+            e.Handled = true;
+            return;
+        }
         if (_uprightDraft is { } drawn)
         {
             _uprightDraft = null;

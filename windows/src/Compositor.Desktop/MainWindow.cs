@@ -1733,6 +1733,19 @@ public sealed class MainWindow : Window
         var moved = document.Guides[0].Position;
         report.Add($"the guide dragged along the canvas: 110 → {moved:0.#}");
         if (Math.Abs(moved - 40) > 3) throw new InvalidOperationException($"the guide ended at {moved:0.#}, not 40");
+
+        // The eyedropper's Sample Ring: press and drag on the picture and the ring follows the pointer, naming
+        // the colour under it across its top half and the colour being replaced across its bottom. This is the
+        // last step and the pointer is left down, so the frame the caller photographs has the ring in it — a
+        // pointer coming up takes the ring away, which is what the Mac build's does too.
+        SetTool(Tool.Eyedropper);
+        this.MouseDown(Aim(new SKPoint(30, 30)), MouseButton.Left, RawInputModifiers.LeftMouseButton);
+        this.MouseMove(Aim(new SKPoint(60, 60)), RawInputModifiers.LeftMouseButton);
+        if (_canvas.SampleRing is not { } ring) throw new InvalidOperationException("the sample ring did not come up");
+        report.Add($"the eyedropper's sample ring: the colour being replaced is "
+            + $"{ring.Original.Red},{ring.Original.Green},{ring.Original.Blue} and the one under the pointer is "
+            + $"{ring.Sampled.Red},{ring.Sampled.Green},{ring.Sampled.Blue}");
+        if (ring.Original == ring.Sampled) throw new InvalidOperationException("the ring names one colour twice");
         }
         catch (Exception failure)
         {
@@ -2536,6 +2549,9 @@ public sealed class MainWindow : Window
                 _ => BrushMode.Paint,
             },
         };
+        // The sample ring belongs to the same push: it is a view switch the bar sets, and it goes wherever the
+        // brush does so a change from the bar reaches the canvas without a second path.
+        _canvas.ShowsSampleRing = _options.ShowsSampleRing;
         ShowColours();
     }
 
