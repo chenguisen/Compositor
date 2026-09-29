@@ -131,4 +131,26 @@ public class MemorySpikeTests
         Assert.True(clock.ElapsedMilliseconds < 5_000,
             $"a blur of the widest radius took {clock.ElapsedMilliseconds} ms");
     }
+
+    /// <summary>
+    /// A streak is a line of samples across the picture, so it costs its length times the pixels, and the
+    /// panel's distance reaches 2000: measured on a 2000 x 1169 photograph, distance 100 cost 7.5 seconds and
+    /// distance 2000 about three minutes, both on the thread that draws the window. Past a spread of eight the
+    /// streak is sheared until it runs along the frame's rows and walked with a running total, which costs the
+    /// picture instead: this is a picture big enough for the difference to show, and the budget is far under
+    /// what the tapped kernel costs.
+    /// </summary>
+    [Fact]
+    public void AStreakAcrossALargePictureIsQuick()
+    {
+        using var document = new CanvasDocument(Guid.NewGuid(), 2000, 1169);
+        document.Layers.Add(Solid(new SKColor(60, 90, 120), 0, 0, 2000, 1169));
+        var layer = document.Layers[0];
+        var clock = Stopwatch.StartNew();
+        Assert.True(FilterEdits.Apply(document, layer.ID, FilterKind.MotionBlur,
+            new FilterSettings { MotionDistance = 400, MotionAngle = 30 }));
+        clock.Stop();
+        Assert.True(clock.ElapsedMilliseconds < 5_000,
+            $"a streak of 400 across a 2000 x 1169 picture took {clock.ElapsedMilliseconds} ms");
+    }
 }

@@ -56,9 +56,7 @@ public static class GaussianBlur
         var half = Half(sigma);
         var exact = half <= ExactHalf;
         var weights = exact ? Weights((float)sigma, half) : [];
-        // The room both callers give a blur: three sigma and two pixels, the Mac build's own margin, which a
-        // tiled render's halo is made of too. The boxes reach no further than it.
-        var sizes = exact ? [] : Boxes((float)sigma, half + 2);
+        var sizes = exact ? [] : Sizes(sigma);
         // A zero-padded blur wider than the exact kernel is run on a plane grown by the same three sigma the
         // exact kernel would have needed. Each box pass pads its own border, and what it drops there is a
         // loss the next pass compounds — the passes leave the plane's outermost row at a seventh of what the
@@ -208,6 +206,14 @@ public static class GaussianBlur
     }
 
     // ---------------------------------------------------------------- The boxes
+
+    /// <summary>
+    /// The box widths that stand in for a Gaussian of this spread: three, sized to the room a blur is given
+    /// and as close to the Gaussian's variance as integers allow. Motion Blur asks here too, so a streak and
+    /// a blur of the same spread are made of the same boxes, and a streak reaches no further along its line
+    /// than an edge's ramp does — which is what a filter's margin and a tiled render's halo are measured by.
+    /// </summary>
+    internal static int[] Sizes(double sigma) => Boxes((float)sigma, Half(sigma) + 2);
 
     /// <summary>
     /// Three odd box widths whose combined spread is as close to the Gaussian's as the room a blur is given
