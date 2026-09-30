@@ -526,6 +526,14 @@ internal static class Program
             Console.WriteLine(report);
             window.CaptureRenderedFrame()?.Save(output, new PngBitmapEncoderOptions());
             Console.WriteLine($"wrote {output}: the window after the pointer drove it");
+            // The picker is a window of its own, so it is photographed on its own as well — the check leaves it
+            // up on the background colour for exactly this.
+            if (window.Picker is { } picker)
+            {
+                var pickerOutput = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(output))!, "color-picker.png");
+                picker.CaptureRenderedFrame()?.Save(pickerOutput, new PngBitmapEncoderOptions());
+                Console.WriteLine($"wrote {pickerOutput}: the colour picker the check left up");
+            }
             // The check reports a failure in its own words rather than throwing, so that what it managed to do
             // is still on the screen; the exit code is what says it failed.
             return report.Contains("FAILED:", StringComparison.Ordinal) ? 1 : 0;

@@ -19,6 +19,8 @@ internal sealed class ToolRail : Grid
     private readonly Dictionary<Tool, Button> _buttons = [];
     private readonly Glyph _foreground = new() { Kind = Tool.Brush };
     private readonly Glyph _background = new() { Kind = Tool.Brush };
+    private Button? _front;
+    private Button? _back;
     private Tool _marked = Tool.Pan;
     private SKColor _foregroundColour = SKColors.Black;
     private SKColor _backgroundColour = SKColors.White;
@@ -78,6 +80,10 @@ internal sealed class ToolRail : Grid
     /// so a click on it is the one thing that proves the marks are not merely drawn but reachable.
     /// </summary>
     internal Button? ButtonFor(Tool tool) => _buttons.TryGetValue(tool, out var button) ? button : null;
+
+    /// <summary>One of the two colour swatches, which is what a click there opens the picker through. True for
+    /// the foreground. The self check is the only caller.</summary>
+    internal Button? SwatchFor(bool foreground) => foreground ? _front : _back;
 
     /// <summary>Shows the two colours, as a swatch each.</summary>
     public void ShowColours(SKColor foreground, SKColor background)
@@ -169,6 +175,8 @@ internal sealed class ToolRail : Grid
         };
         ToolTip.SetTip(button, foreground ? "Foreground color" : "Background color");
         button.Click += (_, _) => ColourChosen?.Invoke(foreground);
+        if (foreground) _front = button;
+        else _back = button;
         return button;
     }
 

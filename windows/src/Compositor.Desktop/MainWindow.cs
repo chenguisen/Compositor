@@ -66,6 +66,14 @@ public sealed class MainWindow : Window
     /// <summary>The scope the last Camera Raw preview counted, for the panel to draw when that picture is shown.</summary>
     private CameraRawScope? _cameraRawScope;
 
+    /// <summary>The colour picker while it is up, of which there is at most one: a swatch clicked again brings
+    /// the one that is open to the front rather than opening a second.</summary>
+    private ColorPickerDialog? _picker;
+
+    /// <summary>The picker while the self check has it up, so the caller can photograph that window too — the
+    /// picture of the editor does not hold a window of its own.</summary>
+    internal ColorPickerDialog? Picker => _picker;
+
     /// <summary>
     /// What the filter panels were last used with, which is where they open again: the Mac build keeps one set
     /// of filter settings for the session and its sheets read them. A panel edits a copy of these, so only
@@ -280,6 +288,9 @@ public sealed class MainWindow : Window
         // The two calls a screen has to be asked for are made once the window is open, which is when there is a
         // screen to ask.
         Opened += (_, _) => FitToScreen();
+        // The picker is a window of its own and the app is left running until the last window closes, so it
+        // goes with the editor rather than being left behind to hold the session open.
+        Closing += (_, _) => _picker?.Close();
         Background = Skin.ChromeBrush;
         // The window's plain labels (a heading, a readout) take their colour from here, as the Mac's do from
         // the appearance; controls that name their own text keep it.
@@ -335,7 +346,7 @@ public sealed class MainWindow : Window
         _rail.Chosen += SetTool;
         _rail.ColoursSwapped += SwapColours;
         _rail.ColoursReset += ResetColours;
-        _rail.ColourChosen += which => _ = ChooseColour(which);
+        _rail.ColourChosen += ChooseColour;
         _rail.ShowColours(BrushColour(), BackgroundColour());
         // The options bar is a face on the same settings the Tools menu moves, so either one marks the other.
         _optionsBar = new ToolOptionsBar(_options);
@@ -343,7 +354,7 @@ public sealed class MainWindow : Window
         _optionsBar.BrushSettingAsked += which => _ = SetBrush(which);
         _optionsBar.WandSettingAsked += which => _ = SetWand(which);
         _optionsBar.ShapeSettingAsked += which => _ = SetShape(which);
-        _optionsBar.ColourAsked += which => _ = ChooseColour(which);
+        _optionsBar.ColourAsked += ChooseColour;
         _optionsBar.FlipAsked += horizontally => Flip(horizontally, canvas: false);
         _optionsBar.CropRatioChosen += index => SetCropRatio(CropRatios[index].Ratio);
         _optionsBar.CropApplied += ApplyCrop;
@@ -2020,6 +2031,83 @@ public sealed class MainWindow : Window
         }
         CloseCameraRaw();
 
+        // The colour picker, which is a window of this app's own: the rail's swatch opens it, a click in the
+        // saturation and brightness field and one on the hue strip move the colour, a click on the canvas while
+        // it is up samples into it, and OK takes the colour the swatch is left showing.
+        SetTool(Tool.Brush);
+        ResetColours();
+        if (_rail.SwatchFor(foreground: true) is not { } frontSwatch)
+        {
+            throw new InvalidOperationException("the rail has no foreground swatch");
+        }
+        if (frontSwatch.TranslatePoint(new Point(frontSwatch.Bounds.Width / 2,
+                frontSwatch.Bounds.Height / 2), this) is not { } onSwatch)
+        {
+            throw new InvalidOperationException("the rail's foreground swatch is not in the window");
+        }
+        Click(onSwatch);
+        if (_picker is not { } picker) throw new InvalidOperationException("the swatch opened no picker");
+        report.Add($"the rail's foreground swatch opened the picker, {picker.Width:0}x{picker.Height:0} of its own");
+
+        // The hue strip first, a third of the way down, which is 240 degrees round the wheel: blue. The strip
+        // takes the pointer where a drag would, and the colour is read back off the picker itself.
+        picker.UpdateLayout();
+        if (picker.Hue.TranslatePoint(new Point(picker.Hue.Bounds.Width / 2, picker.Hue.Bounds.Height / 3), picker)
+            is not { } onHue)
+        {
+            throw new InvalidOperationException("the picker's hue strip is nowhere a pointer can reach");
+        }
+        picker.MouseDown(onHue, MouseButton.Left, RawInputModifiers.LeftMouseButton);
+        picker.MouseUp(onHue, MouseButton.Left, RawInputModifiers.None);
+
+        // Then the field's top right corner, which is full saturation at full brightness: blue, if the strip
+        // sent the pointer where it was sent. The brush's own colour is read back too, since nothing is to be
+        // taken until the picker is put away.
+        if (picker.Field.TranslatePoint(new Point(picker.Field.Bounds.Width - 2, 2), picker) is not { } onField)
+        {
+            throw new InvalidOperationException("the picker's field is nowhere a pointer can reach");
+        }
+        picker.MouseDown(onField, MouseButton.Left, RawInputModifiers.LeftMouseButton);
+        picker.MouseUp(onField, MouseButton.Left, RawInputModifiers.None);
+        var chosen = picker.Colour;
+        report.Add($"a third of the way down the hue strip, then the field's top right corner: "
+            + $"{chosen.Red * 255:0},{chosen.Green * 255:0},{chosen.Blue * 255:0}");
+        if (chosen.Blue < 0.95 || chosen.Red > 0.05 || chosen.Green > 0.05)
+        {
+            throw new InvalidOperationException(
+                $"the corner gave {chosen.Red * 255:0},{chosen.Green * 255:0},{chosen.Blue * 255:0} rather than blue");
+        }
+        // Nothing has been taken yet: the brush is still the black the swatch reset it to, as the Mac build's
+        // picker leaves the palette alone until it is put away with OK.
+        if (BrushColour() != new SKColor(0, 0, 0)) throw new InvalidOperationException("the picker took the colour early");
+
+        // A click on the canvas while the picker is up samples into it, which is what its own line says.
+        SetTool(Tool.Eyedropper);
+        Click(Aim(new SKPoint(30, 30)));
+        var sampled = picker.Colour;
+        report.Add($"the canvas clicked with the picker up: it is now "
+            + $"{sampled.Red * 255:0},{sampled.Green * 255:0},{sampled.Blue * 255:0}");
+        if (sampled == chosen) throw new InvalidOperationException("the canvas click did not sample into the picker");
+        if (BrushColour() != new SKColor(0, 0, 0)) throw new InvalidOperationException("the sample went to the brush");
+
+        // OK, pressed rather than invoked, and the colour the picker ended on is the brush's.
+        if (picker.Ok.TranslatePoint(new Point(picker.Ok.Bounds.Width / 2, picker.Ok.Bounds.Height / 2), picker)
+            is not { } onOk)
+        {
+            throw new InvalidOperationException("the picker's OK is nowhere a pointer can reach");
+        }
+        picker.MouseDown(onOk, MouseButton.Left, RawInputModifiers.LeftMouseButton);
+        picker.MouseUp(onOk, MouseButton.Left, RawInputModifiers.None);
+        var taken = BrushColour();
+        report.Add($"OK pressed: the picker is {(_picker is null ? "away" : "STILL UP")} and the brush is "
+            + $"{Spell(taken)}, the colour the canvas was sampled at");
+        if (_picker is not null) throw new InvalidOperationException("OK left the picker up");
+        if (taken != new SKColor((byte)Math.Round(sampled.Red * 255), (byte)Math.Round(sampled.Green * 255),
+                (byte)Math.Round(sampled.Blue * 255)))
+        {
+            throw new InvalidOperationException("the brush is not the colour the picker ended on");
+        }
+
         // The eyedropper's Sample Ring: press and drag on the picture and the ring follows the pointer, naming
         // the colour under it across its top half and the colour being replaced across its bottom. This is the
         // last step and the pointer is left down, so the frame the caller photographs has the ring in it — a
@@ -2032,6 +2120,30 @@ public sealed class MainWindow : Window
             + $"{ring.Original.Red},{ring.Original.Green},{ring.Original.Blue} and the one under the pointer is "
             + $"{ring.Sampled.Red},{ring.Sampled.Green},{ring.Sampled.Blue}");
         if (ring.Original == ring.Sampled) throw new InvalidOperationException("the ring names one colour twice");
+        this.MouseUp(Aim(new SKPoint(60, 60)), MouseButton.Left, RawInputModifiers.None);
+
+        // And the picker opened once more on the background colour and left up, so the caller can photograph it:
+        // it is a window of its own, so the picture of the main window does not hold it.
+        if (_rail.SwatchFor(foreground: false) is not { } backSwatch)
+        {
+            throw new InvalidOperationException("the rail has no background swatch");
+        }
+        if (backSwatch.TranslatePoint(new Point(backSwatch.Bounds.Width / 2,
+                backSwatch.Bounds.Height / 2), this) is not { } onBack)
+        {
+            throw new InvalidOperationException("the rail's background swatch is not in the window");
+        }
+        Click(onBack);
+        if (_picker is not { } left) throw new InvalidOperationException("the background swatch opened no picker");
+        if (left.Field.TranslatePoint(new Point(left.Field.Bounds.Width * 0.35, left.Field.Bounds.Height * 0.25),
+                left) is not { } somewhere)
+        {
+            throw new InvalidOperationException("the picker's field is nowhere a pointer can reach");
+        }
+        left.MouseDown(somewhere, MouseButton.Left, RawInputModifiers.LeftMouseButton);
+        left.MouseUp(somewhere, MouseButton.Left, RawInputModifiers.None);
+        report.Add($"the picker left up on the background colour, showing "
+            + $"{left.Colour.Red * 255:0},{left.Colour.Green * 255:0},{left.Colour.Blue * 255:0}, for the drawing");
         }
         catch (Exception failure)
         {
@@ -2905,12 +3017,57 @@ public sealed class MainWindow : Window
         Say("Foreground black and background white");
     }
 
-    /// <summary>Asks for one of the two colours, as clicking its swatch in the rail does.</summary>
-    private async Task ChooseColour(bool foreground)
+    /// <summary>
+    /// Opens the picker on one of the two colours, as clicking its swatch in the rail does. It is a window of
+    /// its own rather than a dialog over the editor, because the canvas has to stay live — a click on the
+    /// picture samples the colour under it, which is what the picker's own line says.
+    /// </summary>
+    private void ChooseColour(bool foreground) => OpenPicker(foreground, toBackground: false);
+
+    /// <summary>
+    /// The gradient's background colour, which is the colour of the rail's background swatch: choosing it from
+    /// the Gradient menu also asks the gradient to run to it, which is what that menu row means.
+    /// </summary>
+    private void SetGradientBackground() => OpenPicker(foreground: false, toBackground: true);
+
+    private void OpenPicker(bool foreground, bool toBackground)
     {
-        if (foreground) await SetBrush(BrushSetting.Colour);
-        else await SetGradientBackground();
-        ShowColours();
+        if (_picker is { } already)
+        {
+            already.Activate();
+            return;
+        }
+        var start = foreground
+            ? (_options.Brush.Red, _options.Brush.Green, _options.Brush.Blue)
+            : _options.GradientBackground;
+        var picker = new ColorPickerDialog(foreground ? "Foreground color" : "Background color", start);
+        picker.Applied += colour => TakeColour(foreground, toBackground, colour);
+        picker.Cancelled += () =>
+        {
+            _picker = null;
+            Say($"The {(foreground ? "foreground" : "background")} color was left as it was");
+        };
+        _picker = picker;
+        picker.Show(this);
+        Say($"Picking the {(foreground ? "foreground" : "background")} color — click the canvas to sample one");
+    }
+
+    /// <summary>Takes the colour the picker ended on: the brush's, or the background's and the gradient's.</summary>
+    private void TakeColour(bool foreground, bool toBackground, (double Red, double Green, double Blue) colour)
+    {
+        _picker = null;
+        if (foreground)
+        {
+            _options.Brush = _options.Brush with { Red = colour.Red, Green = colour.Green, Blue = colour.Blue };
+        }
+        else
+        {
+            _options.GradientBackground = colour;
+            if (toBackground) _options.GradientToBackground = true;
+        }
+        PushBrush();
+        Say($"{(foreground ? "Foreground" : "Background")} color: "
+            + $"{colour.Red * 255:0},{colour.Green * 255:0},{colour.Blue * 255:0}");
     }
 
     /// <summary>The Gradient tool's options, as the Mac build's gradient bar has them.</summary>
@@ -2925,7 +3082,7 @@ public sealed class MainWindow : Window
         _gradientMenu.Items.Add(Command("To _nothing", () => SetGradient(null, false, null)));
         _gradientMenu.Items.Add(new Separator());
         _gradientMenu.Items.Add(Command("_Reversed", () => SetGradient(null, null, !_options.GradientReversed)));
-        _gradientMenu.Items.Add(Command("_Background color…", () => _ = SetGradientBackground()));
+        _gradientMenu.Items.Add(Command("_Background color…", SetGradientBackground));
     }
 
     private void SetGradient(GradientShape? shape, bool? toBackground, bool? reversed)
@@ -2935,25 +3092,6 @@ public sealed class MainWindow : Window
         if (reversed is { } turn) _options.GradientReversed = turn;
         Say($"Gradient: {_options.Gradient}, {(_options.GradientToBackground ? "to the background colour" : "to nothing")}" +
             (_options.GradientReversed ? ", reversed" : "") + ", opacity as the brush's");
-        SetTool(_tool);
-    }
-
-    private async Task SetGradientBackground()
-    {
-        var current = $"{_options.GradientBackground.Red * 255:0},{_options.GradientBackground.Green * 255:0},{_options.GradientBackground.Blue * 255:0}";
-        if (await TextPrompt.Ask(this, "Gradient background color", "Red, green and blue, 0 to 255", current)
-            is not { } typed)
-        {
-            return;
-        }
-        if (Colour(typed) is not { } colour)
-        {
-            Say("The color has to be three numbers from 0 to 255, as in 255,0,0");
-            return;
-        }
-        _options.GradientBackground = colour;
-        _options.GradientToBackground = true;
-        Say($"Gradient background {colour.Red * 255:0},{colour.Green * 255:0},{colour.Blue * 255:0}");
         SetTool(_tool);
     }
 
@@ -4489,6 +4627,14 @@ public sealed class MainWindow : Window
             Say("Nothing is drawn there");
             return;
         }
+        // Sampling goes into the picker while it is open rather than to the brush, as the Mac build's does:
+        // the colour is being chosen there, and what is under the pointer is one of the ways to choose it.
+        if (_picker is { } picking)
+        {
+            picking.Sample((colour.Red / 255.0, colour.Green / 255.0, colour.Blue / 255.0));
+            Say($"Sampled {colour.Red},{colour.Green},{colour.Blue} into the picker");
+            return;
+        }
         // A transparent pixel has no colour to take; a part-transparent one is read as it looks on white.
         _options.Brush = _options.Brush with
         {
@@ -4541,18 +4687,9 @@ public sealed class MainWindow : Window
                 }
                 break;
             default:
-                if (await TextPrompt.Ask(this, "Brush color", "Red, green and blue, 0 to 255",
-                        $"{_options.Brush.Red * 255:0},{_options.Brush.Green * 255:0},{_options.Brush.Blue * 255:0}") is not { } typed)
-                {
-                    return;
-                }
-                if (Colour(typed) is not { } colour)
-                {
-                    Say("The color has to be three numbers from 0 to 255, as in 255,0,0");
-                    return;
-                }
-                _options.Brush = _options.Brush with { Red = colour.Red, Green = colour.Green, Blue = colour.Blue };
-                break;
+                // The colour is the picker's business, which is what the Mac's own Color button opens.
+                ChooseColour(foreground: true);
+                return;
         }
         PushBrush();
         Say($"Brush: {_options.Brush.Diameter:0} pixels, {Spell(_options.Brush)}");
