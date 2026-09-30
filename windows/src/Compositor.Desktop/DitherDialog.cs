@@ -50,7 +50,7 @@ internal sealed class DitherDialog : DialogWindow
         "Halftone Dots", "Halftone Lines", "Halftone Diamonds", "Mac Patterns", "ASCII",
     ];
 
-    private DitherDialog(DitherSettings start)
+    private DitherDialog(DitherStyle style, DitherSettings start)
     {
         _amounts = start.Copy();
         Title = "Dither";
@@ -64,8 +64,8 @@ internal sealed class DitherDialog : DialogWindow
 
         // The looks are grouped as the Mac's panel groups them, with a rule between the groups, so the list is
         // filled here rather than by Choice and _styleRows says which look an item is.
-        _styleRows.AddRange(GroupedChoice.Fill(_style, DitherSettings.Groups, style => StyleNames[(int)style]));
-        _style.SelectedIndex = 0;
+        _styleRows.AddRange(GroupedChoice.Fill(_style, DitherSettings.Groups, look => StyleNames[(int)look]));
+        _style.SelectedIndex = Math.Max(0, _styleRows.IndexOf(style));
         Row(group, new StackPanel
         {
             Orientation = Orientation.Horizontal,
@@ -248,15 +248,17 @@ internal sealed class DitherDialog : DialogWindow
         Refresh();
     }
 
-    /// <summary>The look the panel has chosen, which is what its item stands for rather than its index.</summary>
-    private DitherStyle Style()
+    /// <summary>The look the panel has chosen, which is what its item stands for rather than its index. The
+    /// self check reads it to see which look the panel opened on.</summary>
+    internal DitherStyle Style()
     {
         var index = _style.SelectedIndex;
         return index >= 0 && index < _styleRows.Count && _styleRows[index] is { } style ? style : DitherStyle.Atkinson;
     }
 
-    /// <summary>The amounts as the panel has them, for a preview of what they would do.</summary>
-    private DitherSettings Current()
+    /// <summary>The amounts as the panel has them, for a preview of what they would do. The self check reads
+    /// them to see which amounts the panel opened with.</summary>
+    internal DitherSettings Current()
     {
         var settings = _amounts;
         settings.PixelShape = (DitherPixelShape)Math.Max(0, _shape.SelectedIndex);
@@ -278,19 +280,22 @@ internal sealed class DitherDialog : DialogWindow
     /// and building it is what runs its gating — every row is asked whether the look applies to it as it is
     /// added, so a row that would do nothing for the look is hidden before the panel is ever on a screen.
     /// </summary>
-    internal static Control Body(DitherSettings start)
+    internal static Control Body(DitherStyle style, DitherSettings start)
     {
-        var dialog = new DitherDialog(start);
+        var dialog = new DitherDialog(style, start);
         var body = (Control)dialog.Content!;
         dialog.Content = null;
         return body;
     }
 
-    /// <summary>The look and its amounts, or null when the panel was dismissed.</summary>
-    public static async Task<(DitherStyle Style, DitherSettings Settings)?> Ask(Window owner, DitherSettings start,
-        Action<DitherStyle, DitherSettings>? preview = null)
+    /// <summary>
+    /// The look and its amounts, or null when the panel was dismissed. It opens on the look and amounts it is
+    /// given, which are the ones this panel was last used with.
+    /// </summary>
+    public static async Task<(DitherStyle Style, DitherSettings Settings)?> Ask(Window owner, DitherStyle style,
+        DitherSettings start, Action<DitherStyle, DitherSettings>? preview = null)
     {
-        var dialog = new DitherDialog(start) { Preview = preview };
+        var dialog = new DitherDialog(style, start) { Preview = preview };
         await dialog.ShowDialog(owner);
         if (dialog._result is not { } settings) return null;
         return (dialog.Style(), settings);

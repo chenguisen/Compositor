@@ -8,6 +8,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Compositor.Core.Document;
 using Compositor.Core.Format;
 using Compositor.Core.IO;
@@ -80,6 +81,7 @@ public sealed class MainWindow : Window
     /// Apply changes them, and a Cancel leaves every filter's amounts as they were.
     /// </summary>
     private FilterSettings _filterAmounts = new();
+    private DitherStyle _ditherLook = DitherStyle.Atkinson;
     private DitherSettings _ditherAmounts = new();
     private CameraRawSettings _cameraRawAmounts = new();
 
@@ -2031,6 +2033,124 @@ public sealed class MainWindow : Window
         }
         CloseCameraRaw();
 
+        // The filter panel's own widgets: the verb the Filter menu calls opens the panel and waits for it, and
+        // the panel it opened is found among the windows this one owns. Its amount is clicked and its Apply is
+        // pressed, and then the jobs a dispatcher loop would run are run — which is what lets the waiting verb
+        // finish and put the filter on the layer. Nothing here reaches into the panel; it is aimed at where a
+        // hand would click.
+        Reselect(target.ID);
+        var inkedForFilter = InkOf(document.Layers.First(one => one.ID == target.ID).Asset!.Image);
+        var filtering = ApplyFilter(FilterKind.Vignette);
+        var filterPanel = OwnedWindows.OfType<FilterDialog>().FirstOrDefault()
+            ?? throw new InvalidOperationException("the Filter menu's verb opened no panel");
+        // Its amounts are inside a scroll view, whose content is only attached when a layout pass runs.
+        filterPanel.UpdateLayout();
+        var vignetteAmount = AmountIn(filterPanel, "Amount");
+        ClickIn(filterPanel, vignetteAmount, 0.85);
+        var asked = filterPanel.Current().VignetteAmount;
+        if (asked < 60) throw new InvalidOperationException($"the click left the amount at {asked}, near where it started");
+        // The panel's buttons are below the fold of its own scroll view, and a click outside the viewport does
+        // not reach them: the view is scrolled the way a hand would scroll it first.
+        ScrollToEnd(filterPanel);
+        PressIn(filterPanel, "Apply");
+        Dispatcher.UIThread.RunJobs();
+        if (!filtering.IsCompletedSuccessfully) throw new InvalidOperationException("the filter verb never finished");
+        var inkedAfterFilter = InkOf(document.Layers.First(one => one.ID == target.ID).Asset!.Image);
+        report.Add($"the filter panel's own amount clicked and its Apply pressed: the amount went to {asked:0.#}, "
+            + $"the layer's ink {inkedForFilter} → {inkedAfterFilter}, one \"{_history.UndoName}\" step");
+        if (inkedAfterFilter == inkedForFilter) throw new InvalidOperationException("the filter changed nothing");
+        if (_history.UndoName != "Vignette Filter") throw new InvalidOperationException($"the filter made a \"{_history.UndoName}\" step");
+        // And the amounts the panel was left with are the ones the window remembers for the next time.
+        if (_filterAmounts.VignetteAmount != asked)
+        {
+            throw new InvalidOperationException(
+                $"the window remembers {_filterAmounts.VignetteAmount} rather than the {asked} the panel was left with");
+        }
+
+        // The curve editor, dragged with the pointer: it is the one control of this app that a hand reaches and
+        // nothing else does. Image ▸ Curves runs it over the layer's own pixels, so the drag is read back out of
+        // the document rather than out of the editor.
+        Reselect(target.ID);
+        var inkedForCurve = InkOf(document.Layers.First(one => one.ID == target.ID).Asset!.Image);
+        var adjusting = ImageAdjustment(AdjustmentKind.Curves);
+        var curvePanel = OwnedWindows.OfType<AdjustmentDialog>().FirstOrDefault()
+            ?? throw new InvalidOperationException("the Image menu's Curves opened no panel");
+        curvePanel.UpdateLayout();
+        if (curvePanel.GetVisualDescendants().OfType<CurveEditor>().FirstOrDefault() is not { } curve)
+        {
+            throw new InvalidOperationException("the curves panel has no curve to drag");
+        }
+        // From the middle of the line upwards: a click there puts a handle on the line, and the drag lifts it, so
+        // the midtones come up.
+        DragIn(curvePanel, curve,
+            new Point(curve.Bounds.Width / 2, curve.Bounds.Height / 2),
+            new Point(curve.Bounds.Width / 2, curve.Bounds.Height / 4));
+        ScrollToEnd(curvePanel);
+        PressIn(curvePanel, "Apply");
+        Dispatcher.UIThread.RunJobs();
+        if (!adjusting.IsCompletedSuccessfully) throw new InvalidOperationException("the Curves verb never finished");
+        var inkedAfterCurve = InkOf(document.Layers.First(one => one.ID == target.ID).Asset!.Image);
+        report.Add($"the curve editor dragged and its Apply pressed: the layer's ink "
+            + $"{inkedForCurve} → {inkedAfterCurve}, one \"{_history.UndoName}\" step");
+        if (inkedAfterCurve == inkedForCurve) throw new InvalidOperationException("the curve changed nothing");
+        if (_history.UndoName != "Curves") throw new InvalidOperationException($"the curve made a \"{_history.UndoName}\" step");
+
+        // The Dither panel, driven the same way, and opened a second time to see that it opens where it was
+        // left: the look and the amounts the last Apply used are the ones the Mac's one set of filter settings
+        // keeps. The look is chosen from the pop-up and an amount is clicked, so what the check leaves is what
+        // the panel was told, not what it started with.
+        Reselect(target.ID);
+        var inkedForDither = InkOf(document.Layers.First(one => one.ID == target.ID).Asset!.Image);
+        var dithering = DitherFilter();
+        var ditherPanel = OwnedWindows.OfType<DitherDialog>().FirstOrDefault()
+            ?? throw new InvalidOperationException("the Dither verb opened no panel");
+        ditherPanel.UpdateLayout();
+        if (ditherPanel.GetVisualDescendants().OfType<ComboBox>().FirstOrDefault() is not { } look)
+        {
+            throw new InvalidOperationException("the Dither panel has no list of looks");
+        }
+        var halftone = look.Items.OfType<ComboBoxItem>().ToList()
+            .FindIndex(item => (item.Content as string) == "Halftone Dots");
+        if (halftone < 0) throw new InvalidOperationException("the Dither panel has no Halftone Dots look");
+        look.SelectedIndex = halftone;
+        Dispatcher.UIThread.RunJobs();
+        // Contrast is an amount every look shows, so it is the one to click.
+        var contrast = AmountIn(ditherPanel, "Contrast");
+        ClickIn(ditherPanel, contrast, 0.9);
+        var wanted = ditherPanel.Current();
+        if (Math.Abs(wanted.Contrast) < 20) throw new InvalidOperationException($"the click left contrast at {wanted.Contrast}");
+        ScrollToEnd(ditherPanel);
+        PressIn(ditherPanel, "Apply");
+        Dispatcher.UIThread.RunJobs();
+        if (!dithering.IsCompletedSuccessfully) throw new InvalidOperationException("the Dither verb never finished");
+        var inkedAfterDither = InkOf(document.Layers.First(one => one.ID == target.ID).Asset!.Image);
+        report.Add($"the Dither panel's look chosen and its Contrast clicked: the layer's ink "
+            + $"{inkedForDither} → {inkedAfterDither}, one \"{_history.UndoName}\" step");
+        if (inkedAfterDither == inkedForDither) throw new InvalidOperationException("the dither changed nothing");
+        if (_history.UndoName != "Dither") throw new InvalidOperationException($"the dither made a \"{_history.UndoName}\" step");
+
+        // Opened again, on the look and amounts it was left with rather than on the ones it opens with.
+        var ditheringAgain = DitherFilter();
+        var reopened = OwnedWindows.OfType<DitherDialog>().FirstOrDefault()
+            ?? throw new InvalidOperationException("the Dither panel did not open a second time");
+        reopened.UpdateLayout();
+        var kept = reopened.Current();
+        report.Add($"opened again: {reopened.Style()} with contrast {kept.Contrast:0.#}, "
+            + $"against the {wanted.Contrast:0.#} it was left with");
+        if (reopened.Style() != DitherStyle.Dots)
+        {
+            throw new InvalidOperationException($"the Dither panel opened on {reopened.Style()}, not the look it was left with");
+        }
+        if (Math.Abs(kept.Contrast - wanted.Contrast) > 1e-9)
+        {
+            throw new InvalidOperationException(
+                $"the Dither panel opened with contrast {kept.Contrast} rather than {wanted.Contrast}");
+        }
+        ScrollToEnd(reopened);
+        PressIn(reopened, "Cancel");
+        Dispatcher.UIThread.RunJobs();
+        if (!ditheringAgain.IsCompletedSuccessfully) throw new InvalidOperationException("the dismissed Dither panel never finished");
+
         // The colour picker, which is a window of this app's own: the rail's swatch opens it, a click in the
         // saturation and brightness field and one on the hue strip move the colour, a click on the canvas while
         // it is up samples into it, and OK takes the colour the swatch is left showing.
@@ -2157,6 +2277,79 @@ public sealed class MainWindow : Window
     {
         this.MouseDown(at, MouseButton.Left, RawInputModifiers.LeftMouseButton);
         this.MouseUp(at, MouseButton.Left, RawInputModifiers.None);
+    }
+
+    /// <summary>
+    /// A dialog's own widget clicked, aimed the way a hand aims: at a fraction across the control, through the
+    /// control's own mapping into the dialog. A dialog is a window of its own, so the pointer has to be aimed
+    /// at that window rather than this one.
+    /// </summary>
+    private static void ClickIn(Window dialog, Control control, double across, double down = 0.5)
+    {
+        Press(dialog, At(dialog, control, across, down));
+    }
+
+    /// <summary>A drag inside a dialog, from one fraction of a control to another, as a hand drags it.</summary>
+    private static void DragIn(Window dialog, Control control, Point from, Point to)
+    {
+        var start = control.TranslatePoint(from, dialog)
+            ?? throw new InvalidOperationException($"the dialog's {control.GetType().Name} is out of reach");
+        var end = control.TranslatePoint(to, dialog)
+            ?? throw new InvalidOperationException($"the dialog's {control.GetType().Name} is out of reach");
+        dialog.MouseDown(start, MouseButton.Left, RawInputModifiers.LeftMouseButton);
+        for (var step = 1; step <= 6; step++)
+        {
+            dialog.MouseMove(new Point(
+                start.X + (end.X - start.X) * step / 6.0,
+                start.Y + (end.Y - start.Y) * step / 6.0), RawInputModifiers.LeftMouseButton);
+        }
+        dialog.MouseUp(end, MouseButton.Left, RawInputModifiers.None);
+    }
+
+    /// <summary>The point a fraction across and down one of a dialog's controls sits at in the dialog.</summary>
+    private static Point At(Window dialog, Control control, double across, double down = 0.5) =>
+        control.TranslatePoint(new Point(control.Bounds.Width * across, control.Bounds.Height * down), dialog)
+        ?? throw new InvalidOperationException($"the dialog's {control.GetType().Name} is out of reach");
+
+    /// <summary>
+    /// One of a dialog's amounts, found by the label its row carries rather than by its place in the panel: a
+    /// row a look hides is still in the tree, so the last slider built is not the last one a hand can reach.
+    /// </summary>
+    private static Slider AmountIn(Window dialog, string label)
+    {
+        var row = dialog.GetVisualDescendants().OfType<StackPanel>().FirstOrDefault(candidate =>
+            candidate.Children.OfType<TextBlock>().Any(text => text.Text == label)
+            && candidate.Children.OfType<Slider>().Any());
+        return row?.Children.OfType<Slider>().FirstOrDefault()
+            ?? throw new InvalidOperationException($"the dialog has no amount called {label}");
+    }
+
+    /// <summary>The button a dialog labels clicked, found by what it says rather than by where it is.</summary>
+    private static void PressIn(Window dialog, string label)
+    {
+        var button = dialog.GetVisualDescendants().OfType<Button>()
+            .FirstOrDefault(candidate => (candidate.Content as string) == label)
+            ?? throw new InvalidOperationException($"the dialog has no button called {label}");
+        Press(dialog, At(dialog, button, 0.5));
+    }
+
+    private static void Press(Window dialog, Point at)
+    {
+        dialog.MouseDown(at, MouseButton.Left, RawInputModifiers.LeftMouseButton);
+        dialog.MouseUp(at, MouseButton.Left, RawInputModifiers.None);
+    }
+
+    /// <summary>
+    /// A dialog scrolled to the bottom, so what is below the fold of its own scroll view can be clicked: a
+    /// click outside the viewport is a click on the dialog's edge and reaches nothing.
+    /// </summary>
+    private static void ScrollToEnd(Window dialog)
+    {
+        if (dialog.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault() is { } scroller)
+        {
+            scroller.ScrollToEnd();
+            dialog.UpdateLayout();
+        }
     }
 
     internal string ToolsSelfCheck(string project)
@@ -3455,10 +3648,12 @@ public sealed class MainWindow : Window
             return;
         }
         StartPreview(document, id);
-        var asked = await DitherDialog.Ask(this, _ditherAmounts,
+        var asked = await DitherDialog.Ask(this, _ditherLook, _ditherAmounts,
             (style, settings) => RequestPreview((target, layer) => DitherEdits.Apply(target, layer, style, settings)));
         StopPreview();
         if (asked is not { } chosen) return;
+        // The look as well as the amounts: Dither opens again on the one it was last used with.
+        _ditherLook = chosen.Style;
         _ditherAmounts = chosen.Settings;
         if (_document is not { } current) return;
         Edit("Dither", () => DitherEdits.Apply(current, id, chosen.Style, chosen.Settings));

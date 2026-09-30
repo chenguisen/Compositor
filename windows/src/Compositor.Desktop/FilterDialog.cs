@@ -153,8 +153,9 @@ internal sealed class FilterDialog : DialogWindow
         foreach (var (box, _, fallback) in _checks) box.IsChecked = fallback;
     }
 
-    /// <summary>The amounts as the panel has them, for a preview of what they would do.</summary>
-    private FilterSettings Current()
+    /// <summary>The amounts as the panel has them, for a preview of what they would do. The self check reads
+    /// them to see what its own clicks did.</summary>
+    internal FilterSettings Current()
     {
         var settings = _amounts;
         foreach (var (slider, set) in _rows) set(settings, slider.Value);

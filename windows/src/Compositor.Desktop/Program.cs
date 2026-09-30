@@ -171,7 +171,7 @@ internal static class Program
         // built and then hidden by what the look uses, which is the check: an amount that would do nothing
         // for the look chosen must not be on the panel when Apply is pressed. Driving it works without a
         // window because a box's selection is a property, not a template.
-        var dither = (ScrollViewer)DitherDialog.Body(new DitherSettings());
+        var dither = (ScrollViewer)DitherDialog.Body(DitherStyle.Atkinson, new DitherSettings());
         var panel = (StackPanel)dither.Content!;
         var look = panel.Children.OfType<StackPanel>()
             .SelectMany(row => row.Children.OfType<Control>()).OfType<ComboBox>().First();
