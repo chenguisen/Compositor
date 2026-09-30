@@ -25,6 +25,9 @@ internal sealed class DitherDialog : DialogWindow
     private readonly List<(Control Heading, List<Control> Rows)> _sections = [];
     private readonly List<(Slider Slider, Action<DitherSettings, double> Set)> _sliders = [];
     private readonly List<double> _fallbacks = [];
+    /// <summary>The two colours of the ink and paper, and what they started as for Reset.</summary>
+    private readonly List<(ColorSwatch Swatch, Action<DitherSettings, (double Red, double Green, double Blue)> Set,
+        (double Red, double Green, double Blue) Fallback)> _swatches = [];
     private readonly ComboBox _style = new();
     /// <summary>What each item of the look list stands for: the look, or nothing for a rule between groups.</summary>
     private readonly List<DitherStyle?> _styleRows = [];
@@ -105,12 +108,36 @@ internal sealed class DitherDialog : DialogWindow
 
         Heading(group, "Colors");
         Choice(group, "Ink and paper", _colors, ["Black & White", "Two Colors", "Original"], (int)start.Colors, () => true);
-        Add(group, "Dark red", 0, 1, start.DarkRed, defaults.DarkRed, (s, v) => s.DarkRed = v, "0.00", TwoColours);
-        Add(group, "Dark green", 0, 1, start.DarkGreen, defaults.DarkGreen, (s, v) => s.DarkGreen = v, "0.00", TwoColours);
-        Add(group, "Dark blue", 0, 1, start.DarkBlue, defaults.DarkBlue, (s, v) => s.DarkBlue = v, "0.00", TwoColours);
-        Add(group, "Light red", 0, 1, start.LightRed, defaults.LightRed, (s, v) => s.LightRed = v, "0.00", TwoColours);
-        Add(group, "Light green", 0, 1, start.LightGreen, defaults.LightGreen, (s, v) => s.LightGreen = v, "0.00", TwoColours);
-        Add(group, "Light blue", 0, 1, start.LightBlue, defaults.LightBlue, (s, v) => s.LightBlue = v, "0.00", TwoColours);
+        // The two colours are swatches that open the picker, as the Mac's panel has them, where this panel used
+        // to offer three numbers for each of them.
+        var dark = Swatch("Dark", (start.DarkRed, start.DarkGreen, start.DarkBlue),
+            (defaults.DarkRed, defaults.DarkGreen, defaults.DarkBlue), "Color Picker (Dither Dark Color)", "Choose the dark color",
+            (s, colour) =>
+            {
+                s.DarkRed = colour.Red;
+                s.DarkGreen = colour.Green;
+                s.DarkBlue = colour.Blue;
+            });
+        var light = Swatch("Light", (start.LightRed, start.LightGreen, start.LightBlue),
+            (defaults.LightRed, defaults.LightGreen, defaults.LightBlue), "Color Picker (Dither Light Color)", "Choose the light color",
+            (s, colour) =>
+            {
+                s.LightRed = colour.Red;
+                s.LightGreen = colour.Green;
+                s.LightBlue = colour.Blue;
+            });
+        Row(group, new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            Children =
+            {
+                new TextBlock { Text = "Dark", VerticalAlignment = VerticalAlignment.Center },
+                dark,
+                new TextBlock { Text = "Light", Margin = new Thickness(10, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center },
+                light,
+            },
+        }, TwoColours);
 
         var ok = new Button { Content = "Apply", IsDefault = true };
         var cancel = new Button { Content = "Cancel", IsCancel = true };
@@ -206,6 +233,26 @@ internal sealed class DitherDialog : DialogWindow
         },
     }, applies);
 
+    /// <summary>
+    /// One of the two colours as a swatch that opens the app's picker on it. What the picker reports is written
+    /// into the look and previewed, so the picture follows the colour while it is being chosen; a Cancel reports
+    /// the colour it opened on and puts both back.
+    /// </summary>
+    private ColorSwatch Swatch(string label, (double Red, double Green, double Blue) colour,
+        (double Red, double Green, double Blue) fallback,
+        string title, string hint, Action<DitherSettings, (double Red, double Green, double Blue)> set)
+    {
+        var swatch = new ColorSwatch(hint) { Colour = colour };
+        swatch.Click += (_, _) => _ = ColorPickerDialog.Pick(this, title, swatch.Colour, moved =>
+        {
+            swatch.Colour = moved;
+            set(_amounts, moved);
+            Preview?.Invoke(Style(), Current());
+        });
+        _swatches.Add((swatch, set, fallback));
+        return swatch;
+    }
+
     /// <summary>Adds one amount, and hands back its slider when the caller needs to watch it.</summary>
     private Slider Add(StackPanel parent, string label, double least, double most, double value, double fallback,
         Action<DitherSettings, double> set, string format, Func<bool> applies)
@@ -245,6 +292,11 @@ internal sealed class DitherDialog : DialogWindow
         _colors.SelectedIndex = 0;
         _lightOnDark.IsChecked = defaults.LightOnDark;
         _characters.Text = defaults.Characters;
+        foreach (var (swatch, set, fallback) in _swatches)
+        {
+            swatch.Colour = fallback;
+            set(_amounts, fallback);
+        }
         Refresh();
     }
 
@@ -266,6 +318,7 @@ internal sealed class DitherDialog : DialogWindow
         settings.LightOnDark = _lightOnDark.IsChecked == true;
         settings.Characters = _characters.Text ?? DitherSettings.DefaultCharacters;
         foreach (var (slider, set) in _sliders) set(settings, slider.Value);
+        foreach (var (swatch, set, _) in _swatches) set(settings, swatch.Colour);
         return settings;
     }
 

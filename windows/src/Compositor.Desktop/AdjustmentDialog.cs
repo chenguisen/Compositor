@@ -17,6 +17,9 @@ internal sealed class AdjustmentDialog : DialogWindow
     private readonly List<(Slider Slider, Action<LayerAdjustment, double> Set)> _rows = [];
     private readonly List<double> _fallbacks = [];
     private readonly List<(CheckBox Box, Action<LayerAdjustment, bool> Set, bool Fallback)> _boxes = [];
+    /// <summary>The colours the panel offers as swatches, the bar they feed, and what they started as.</summary>
+    private readonly List<(ColorSwatch Swatch, Action<LayerAdjustment, (double Red, double Green, double Blue)> Set,
+        (double Red, double Green, double Blue) Fallback, bool AtStart, ColorStrip Strip)> _swatches = [];
     private readonly ComboBox? _range;
     private CurveEditor? _curve;
     private readonly ComboBox? _levelsChannel;
@@ -96,14 +99,28 @@ internal sealed class AdjustmentDialog : DialogWindow
                 break;
             }
             case AdjustmentKind.GradientMap:
-                Add(group, "Darkest: red", 0, 1, start.GradientMap.Shadows.Red, 0, (s, v) => s.GradientMapSettings = Map(s, shadowRed: v), "0.00");
-                Add(group, "Darkest: green", 0, 1, start.GradientMap.Shadows.Green, 0, (s, v) => s.GradientMapSettings = Map(s, shadowGreen: v), "0.00");
-                Add(group, "Darkest: blue", 0, 1, start.GradientMap.Shadows.Blue, 0, (s, v) => s.GradientMapSettings = Map(s, shadowBlue: v), "0.00");
-                Add(group, "Lightest: red", 0, 1, start.GradientMap.Highlights.Red, 1, (s, v) => s.GradientMapSettings = Map(s, highlightRed: v), "0.00");
-                Add(group, "Lightest: green", 0, 1, start.GradientMap.Highlights.Green, 1, (s, v) => s.GradientMapSettings = Map(s, highlightGreen: v), "0.00");
-                Add(group, "Lightest: blue", 0, 1, start.GradientMap.Highlights.Blue, 1, (s, v) => s.GradientMapSettings = Map(s, highlightBlue: v), "0.00");
-                Check(group, "Reversed", start.GradientMap.Reversed, (s, v) => s.GradientMapSettings = Map(s, reversed: v));
+            {
+                // The two ends are swatches that open the picker, over the bar they make, as the Mac's sheet has
+                // it — where this panel used to offer three numbers for each end.
+                var strip = new ColorStrip
+                {
+                    Height = 20,
+                    Margin = new Thickness(0, 4, 0, 6),
+                    From = End(start.GradientMap.Shadows),
+                    To = End(start.GradientMap.Highlights),
+                };
+                group.Children.Add(strip);
+                // What Reset goes back to, which is what a layer of this kind is made with.
+                var fresh = new LayerAdjustment { Kind = kind }.GradientMap;
+                Swatch(group, "Shadows", End(start.GradientMap.Shadows), End(fresh.Shadows),
+                    "Color Picker (Gradient Map Shadows)", "Choose the shadows color", strip, atStart: true,
+                    (s, colour) => s.GradientMapSettings = Map(s, shadowRed: colour.Red, shadowGreen: colour.Green, shadowBlue: colour.Blue));
+                Swatch(group, "Highlights", End(start.GradientMap.Highlights), End(fresh.Highlights),
+                    "Color Picker (Gradient Map Highlights)", "Choose the highlights color", strip, atStart: false,
+                    (s, colour) => s.GradientMapSettings = Map(s, highlightRed: colour.Red, highlightGreen: colour.Green, highlightBlue: colour.Blue));
+                Check(group, "Reverse", start.GradientMap.Reversed, (s, v) => s.GradientMapSettings = Map(s, reversed: v));
                 break;
+            }
             case AdjustmentKind.AddNoise:
                 Add(group, "Amount, %", 0.1, 400, start.ResolvedNoiseAmount, 10, (s, v) => s.NoiseAmount = v);
                 Check(group, "Gaussian", start.ResolvedNoiseGaussian, (s, v) => s.NoiseGaussian = v);
@@ -270,6 +287,41 @@ internal sealed class AdjustmentDialog : DialogWindow
         };
     }
 
+    /// <summary>One end of the Gradient Map's colours as a colour the panel can draw.</summary>
+    private static (double Red, double Green, double Blue) End(AdjustmentColor colour) =>
+        (colour.Red, colour.Green, colour.Blue);
+
+    /// <summary>
+    /// One end of the Gradient Map as a swatch that opens the app's picker on it. What the picker reports is
+    /// written into the settings and previewed, and the bar above the swatches is redrawn to match; a Cancel
+    /// reports the colour it opened on and puts everything back.
+    /// </summary>
+    private void Swatch(StackPanel parent, string label, (double Red, double Green, double Blue) colour,
+        (double Red, double Green, double Blue) fallback, string title, string hint, ColorStrip strip, bool atStart,
+        Action<LayerAdjustment, (double Red, double Green, double Blue)> set)
+    {
+        var swatch = new ColorSwatch(hint) { Colour = colour };
+        swatch.Click += (_, _) => _ = ColorPickerDialog.Pick(this, title, swatch.Colour, moved =>
+        {
+            swatch.Colour = moved;
+            if (atStart) strip.From = moved;
+            else strip.To = moved;
+            strip.Redraw();
+            Preview?.Invoke(Built(_start));
+        });
+        parent.Children.Add(new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            Children =
+            {
+                swatch,
+                new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center },
+            },
+        });
+        _swatches.Add((swatch, set, fallback, atStart, strip));
+    }
+
     private void Check(StackPanel parent, string label, bool value, Action<LayerAdjustment, bool> set)
     {
         var box = new CheckBox { Content = label, IsChecked = value };
@@ -324,6 +376,13 @@ internal sealed class AdjustmentDialog : DialogWindow
         if (_range is not null) _range.SelectedIndex = HueBand.Ranges.IndexOf(ColorRange.Master);
         if (_levelsChannel is not null) _levelsChannel.SelectedIndex = (int)fresh.Levels.Channel;
         if (_curve is not null) _curve.Curves = Clone(fresh.Curves);
+        foreach (var (swatch, set, fallback, atStart, strip) in _swatches)
+        {
+            swatch.Colour = fallback;
+            if (atStart) strip.From = fallback;
+            else strip.To = fallback;
+            strip.Redraw();
+        }
     }
 
     /// <summary>
@@ -383,6 +442,7 @@ internal sealed class AdjustmentDialog : DialogWindow
         if (_curve is { } curve) settings.Curves = curve.Curves;
         foreach (var (slider, set) in _rows) set(settings, slider.Value);
         foreach (var (box, set, _) in _boxes) set(settings, box.IsChecked == true);
+        foreach (var (swatch, set, _, _, _) in _swatches) set(settings, swatch.Colour);
         // The rows build the range-aware settings from the layer's own, so the range goes on afterwards.
         if (_range is { SelectedIndex: >= 0 } range)
         {

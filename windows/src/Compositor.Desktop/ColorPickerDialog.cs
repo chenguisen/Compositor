@@ -27,11 +27,31 @@ internal sealed class ColorPickerDialog : DialogWindow
     private bool _showing;
     private bool _done;
 
+    /// <summary>
+    /// Every colour the picker is moved to, which is what lets the sheet behind it preview what that colour
+    /// would do — the Mac's own swatches preview live while the picker is up.
+    /// </summary>
+    public event Action<(double Red, double Green, double Blue)>? Moved;
+
     /// <summary>OK: the colour the picker ended on.</summary>
     public event Action<(double Red, double Green, double Blue)>? Applied;
 
     /// <summary>Cancel, or the window shut: nothing is to be taken.</summary>
     public event Action? Cancelled;
+
+    /// <summary>
+    /// Opens the picker on a colour the panel behind it is already showing, and reports every colour it is
+    /// moved to. A panel's swatch is a colour inside that panel's own settings, so the report is what makes
+    /// its preview follow — and a Cancel reports the colour it started on, which puts the panel back.
+    /// </summary>
+    public static async Task Pick(Window owner, string title, (double Red, double Green, double Blue) start,
+        Action<(double Red, double Green, double Blue)> changed)
+    {
+        var picker = new ColorPickerDialog(title, start);
+        picker.Moved += changed;
+        picker.Cancelled += () => changed(start);
+        await picker.ShowDialog(owner);
+    }
 
     public ColorPickerDialog(string title, (double Red, double Green, double Blue) start)
     {
@@ -180,7 +200,8 @@ internal sealed class ColorPickerDialog : DialogWindow
     }
 
     /// <summary>What the working colour looks like: the field's ring, the strip's arrows, the swatch, the
-    /// numbers and the hex digits, all from the one place so they cannot disagree.</summary>
+    /// numbers and the hex digits, all from the one place so they cannot disagree. Whoever asked for the
+    /// picker is told what it has moved to.</summary>
     private void Refresh()
     {
         _field.InvalidateVisual();
@@ -204,6 +225,7 @@ internal sealed class ColorPickerDialog : DialogWindow
         {
             _showing = false;
         }
+        Moved?.Invoke(colour);
     }
 
     /// <summary>The hex box typed into: the colour follows it, or the box goes back to what the colour is.</summary>

@@ -2049,6 +2049,46 @@ public sealed class MainWindow : Window
         ClickIn(filterPanel, vignetteAmount, 0.85);
         var asked = filterPanel.Current().VignetteAmount;
         if (asked < 60) throw new InvalidOperationException($"the click left the amount at {asked}, near where it started");
+        // Reset puts the panel back to what the filter is made with, the colour included — which is the one
+        // place the two kinds of control share.
+        PressIn(filterPanel, "Reset");
+        var reset = filterPanel.Current();
+        report.Add($"the panel's Reset: amount {reset.VignetteAmount:0.#}, colour "
+            + $"{reset.VignetteRed:0.00},{reset.VignetteGreen:0.00},{reset.VignetteBlue:0.00}");
+        if (reset.VignetteAmount != new FilterSettings().VignetteAmount
+            || reset.VignetteRed != 0 || reset.VignetteGreen != 0 || reset.VignetteBlue != 0)
+        {
+            throw new InvalidOperationException("Reset did not put the amount and the colour back");
+        }
+        ClickIn(filterPanel, vignetteAmount, 0.85);
+        asked = filterPanel.Current().VignetteAmount;
+
+        // The panel's colour is a swatch, and the swatch opens the app's own picker — on the panel's colour,
+        // owned by the panel, with every colour it is moved to reported back. That report is what the sheet
+        // previews through, so a colour picked there has to arrive in the panel's own amounts.
+        if (filterPanel.GetVisualDescendants().OfType<ColorSwatch>().FirstOrDefault() is not { } vignetteSwatch)
+        {
+            throw new InvalidOperationException("the filter panel's colour is not a swatch");
+        }
+        ClickIn(filterPanel, vignetteSwatch, 0.5);
+        var colourPicker = filterPanel.OwnedWindows.OfType<ColorPickerDialog>().FirstOrDefault()
+            ?? throw new InvalidOperationException("the panel's swatch opened no picker");
+        colourPicker.UpdateLayout();
+        // The field's top right corner: full saturation at full brightness, at whatever hue the strip is on.
+        Press(colourPicker, At(colourPicker, colourPicker.Field, 0.85, 0.15));
+        Press(colourPicker, At(colourPicker, colourPicker.Ok, 0.5));
+        Dispatcher.UIThread.RunJobs();
+        var picked = filterPanel.Current();
+        report.Add($"the panel's colour swatch opened the picker: the colour is now "
+            + $"{picked.VignetteRed:0.00},{picked.VignetteGreen:0.00},{picked.VignetteBlue:0.00}");
+        if (picked.VignetteRed + picked.VignetteGreen + picked.VignetteBlue < 0.2)
+        {
+            throw new InvalidOperationException("the picker's colour never reached the panel");
+        }
+        if (picked.VignetteAmount != asked)
+        {
+            throw new InvalidOperationException("picking a colour changed the amount beside it");
+        }
         // The panel's buttons are below the fold of its own scroll view, and a click outside the viewport does
         // not reach them: the view is scrolled the way a hand would scroll it first.
         ScrollToEnd(filterPanel);
@@ -2095,6 +2135,35 @@ public sealed class MainWindow : Window
         if (inkedAfterCurve == inkedForCurve) throw new InvalidOperationException("the curve changed nothing");
         if (_history.UndoName != "Curves") throw new InvalidOperationException($"the curve made a \"{_history.UndoName}\" step");
 
+        // The Gradient Map's two ends are swatches over the bar they make, and each opens the picker: the same
+        // path as the panels', inside a different dialog, so it is driven the same way.
+        Reselect(target.ID);
+        var inkedForMap = InkOf(document.Layers.First(one => one.ID == target.ID).Asset!.Image);
+        var mapping = ImageAdjustment(AdjustmentKind.GradientMap);
+        var mapPanel = OwnedWindows.OfType<AdjustmentDialog>().FirstOrDefault()
+            ?? throw new InvalidOperationException("the Image menu's Gradient Map opened no panel");
+        mapPanel.UpdateLayout();
+        if (mapPanel.GetVisualDescendants().OfType<ColorSwatch>().FirstOrDefault() is not { } shadows)
+        {
+            throw new InvalidOperationException("the Gradient Map panel has no swatches");
+        }
+        ClickIn(mapPanel, shadows, 0.5);
+        var mapPicker = mapPanel.OwnedWindows.OfType<ColorPickerDialog>().FirstOrDefault()
+            ?? throw new InvalidOperationException("the Gradient Map panel's swatch opened no picker");
+        mapPicker.UpdateLayout();
+        Press(mapPicker, At(mapPicker, mapPicker.Field, 0.9, 0.15));
+        Press(mapPicker, At(mapPicker, mapPicker.Ok, 0.5));
+        Dispatcher.UIThread.RunJobs();
+        ScrollToEnd(mapPanel);
+        PressIn(mapPanel, "Apply");
+        Dispatcher.UIThread.RunJobs();
+        if (!mapping.IsCompletedSuccessfully) throw new InvalidOperationException("the Gradient Map verb never finished");
+        var inkedAfterMap = InkOf(document.Layers.First(one => one.ID == target.ID).Asset!.Image);
+        report.Add($"the Gradient Map's shadows swatch opened the picker and its Apply pressed: the layer's ink "
+            + $"{inkedForMap} → {inkedAfterMap}, one \"{_history.UndoName}\" step");
+        if (inkedAfterMap == inkedForMap) throw new InvalidOperationException("the gradient map changed nothing");
+        if (_history.UndoName != "Gradient Map") throw new InvalidOperationException($"the map made a \"{_history.UndoName}\" step");
+
         // The Dither panel, driven the same way, and opened a second time to see that it opens where it was
         // left: the look and the amounts the last Apply used are the ones the Mac's one set of filter settings
         // keeps. The look is chosen from the pop-up and an amount is clicked, so what the check leaves is what
@@ -2109,11 +2178,32 @@ public sealed class MainWindow : Window
         {
             throw new InvalidOperationException("the Dither panel has no list of looks");
         }
-        var halftone = look.Items.OfType<ComboBoxItem>().ToList()
-            .FindIndex(item => (item.Content as string) == "Halftone Dots");
+        var halftone = look.Items.Cast<object>().ToList().FindIndex(item => LabelOf(item) == "Halftone Dots");
         if (halftone < 0) throw new InvalidOperationException("the Dither panel has no Halftone Dots look");
         look.SelectedIndex = halftone;
+        // Two Colors is the choice whose ink and paper are the panel's own, so it is the one that shows the
+        // two swatches; the ink is then chosen through the picker, as the Mac's panel does it.
+        var inkAndPaper = ditherPanel.GetVisualDescendants().OfType<ComboBox>()
+            .FirstOrDefault(box => box.Items.Cast<object>().Any(item => LabelOf(item) == "Two Colors"))
+            ?? throw new InvalidOperationException("the Dither panel has no Ink and paper list");
+        inkAndPaper.SelectedIndex = inkAndPaper.Items.Cast<object>().ToList().FindIndex(item => LabelOf(item) == "Two Colors");
         Dispatcher.UIThread.RunJobs();
+        if (ditherPanel.GetVisualDescendants().OfType<ColorSwatch>().FirstOrDefault() is not { } ink)
+        {
+            throw new InvalidOperationException("the Dither panel's ink is not a swatch");
+        }
+        ClickIn(ditherPanel, ink, 0.5);
+        var inkPicker = ditherPanel.OwnedWindows.OfType<ColorPickerDialog>().FirstOrDefault()
+            ?? throw new InvalidOperationException("the Dither panel's swatch opened no picker");
+        inkPicker.UpdateLayout();
+        Press(inkPicker, At(inkPicker, inkPicker.Field, 0.9, 0.15));
+        Press(inkPicker, At(inkPicker, inkPicker.Ok, 0.5));
+        Dispatcher.UIThread.RunJobs();
+        var inkNow = ditherPanel.Current();
+        report.Add($"the Dither panel's ink swatch opened the picker: the ink is now "
+            + $"{inkNow.DarkRed:0.00},{inkNow.DarkGreen:0.00},{inkNow.DarkBlue:0.00}");
+        if (inkNow.DarkRed <= 0.5) throw new InvalidOperationException("the picker's colour never reached the ink");
+        if (inkNow.Colors != DitherColors.TwoColors) throw new InvalidOperationException("the ink choice was lost");
         // Contrast is an amount every look shows, so it is the one to click.
         var contrast = AmountIn(ditherPanel, "Contrast");
         ClickIn(ditherPanel, contrast, 0.9);
@@ -2310,6 +2400,15 @@ public sealed class MainWindow : Window
     private static Point At(Window dialog, Control control, double across, double down = 0.5) =>
         control.TranslatePoint(new Point(control.Bounds.Width * across, control.Bounds.Height * down), dialog)
         ?? throw new InvalidOperationException($"the dialog's {control.GetType().Name} is out of reach");
+
+    /// <summary>What a pop-up item says, whether it was added as text or as an item of its own — the grouped
+    /// lists carry items, a plain list of choices carries the strings themselves.</summary>
+    private static string? LabelOf(object item) => item switch
+    {
+        string text => text,
+        ComboBoxItem box => box.Content as string,
+        _ => null,
+    };
 
     /// <summary>
     /// One of a dialog's amounts, found by the label its row carries rather than by its place in the panel: a
@@ -3233,7 +3332,8 @@ public sealed class MainWindow : Window
         var start = foreground
             ? (_options.Brush.Red, _options.Brush.Green, _options.Brush.Blue)
             : _options.GradientBackground;
-        var picker = new ColorPickerDialog(foreground ? "Foreground color" : "Background color", start);
+        var picker = new ColorPickerDialog(
+            foreground ? "Color Picker (Foreground Color)" : "Color Picker (Background Color)", start);
         picker.Applied += colour => TakeColour(foreground, toBackground, colour);
         picker.Cancelled += () =>
         {

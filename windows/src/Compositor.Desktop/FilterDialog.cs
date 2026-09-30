@@ -24,6 +24,9 @@ internal sealed class FilterDialog : DialogWindow
     private readonly List<(Slider Slider, Action<FilterSettings, double> Set)> _rows = [];
     private readonly List<double> _fallbacks = [];
     private readonly List<(CheckBox Box, Action<FilterSettings, bool> Set, bool Fallback)> _checks = [];
+    /// <summary>The colours the panel offers as swatches, and what they started as for Reset.</summary>
+    private readonly List<(ColorSwatch Swatch, Action<FilterSettings, (double Red, double Green, double Blue)> Set,
+        (double Red, double Green, double Blue) Fallback)> _swatches = [];
     /// <summary>
     /// The amounts being edited: a copy of the ones the panel was opened with, which are the amounts that
     /// filter was last used with. Editing a copy is what lets a Cancel leave them as they were.
@@ -70,10 +73,17 @@ internal sealed class FilterDialog : DialogWindow
                 Check(group, "Monochromatic", start.NoiseMonochromatic, (s, v) => s.NoiseMonochromatic = v);
                 break;
             case FilterKind.Vignette:
+                // The colour is a swatch that opens the picker, as the Mac's sheet has it, where this panel
+                // used to offer three numbers for it.
+                Swatch(group, "Color", (start.VignetteRed, start.VignetteGreen, start.VignetteBlue),
+                    (defaults.VignetteRed, defaults.VignetteGreen, defaults.VignetteBlue),
+                    (s, colour) =>
+                    {
+                        s.VignetteRed = colour.Red;
+                        s.VignetteGreen = colour.Green;
+                        s.VignetteBlue = colour.Blue;
+                    }, "Color Picker (Vignette Color)", "Choose the vignette color");
                 Add(group, "Amount", 0, 100, start.VignetteAmount, defaults.VignetteAmount, (s, v) => s.VignetteAmount = v);
-                Add(group, "Red", 0, 1, start.VignetteRed, defaults.VignetteRed, (s, v) => s.VignetteRed = v, "0.00");
-                Add(group, "Green", 0, 1, start.VignetteGreen, defaults.VignetteGreen, (s, v) => s.VignetteGreen = v, "0.00");
-                Add(group, "Blue", 0, 1, start.VignetteBlue, defaults.VignetteBlue, (s, v) => s.VignetteBlue = v, "0.00");
                 Add(group, "Midpoint", 0, 100, start.VignetteMidpoint, defaults.VignetteMidpoint, (s, v) => s.VignetteMidpoint = v);
                 Add(group, "Roundness", -100, 100, start.VignetteRoundness, defaults.VignetteRoundness, (s, v) => s.VignetteRoundness = v);
                 Add(group, "Feather", 0, 100, start.VignetteFeather, defaults.VignetteFeather, (s, v) => s.VignetteFeather = v);
@@ -146,11 +156,45 @@ internal sealed class FilterDialog : DialogWindow
         _fallbacks.Add(fallback);
     }
 
+    /// <summary>
+    /// A colour the panel offers as a swatch, which opens the app's picker on it. What the picker reports is
+    /// written into the amounts and previewed, so the picture follows the colour while it is being chosen; a
+    /// Cancel reports the colour it opened on and puts both back.
+    /// </summary>
+    private void Swatch(StackPanel parent, string label, (double Red, double Green, double Blue) colour,
+        (double Red, double Green, double Blue) fallback,
+        Action<FilterSettings, (double Red, double Green, double Blue)> set, string title, string hint)
+    {
+        var swatch = new ColorSwatch(hint) { Colour = colour };
+        swatch.Click += (_, _) => _ = ColorPickerDialog.Pick(this, title, swatch.Colour, moved =>
+        {
+            swatch.Colour = moved;
+            set(_amounts, moved);
+            Preview?.Invoke(Current());
+        });
+        parent.Children.Add(new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            Children =
+            {
+                new TextBlock { Text = label, Width = 130, VerticalAlignment = VerticalAlignment.Center },
+                swatch,
+            },
+        });
+        _swatches.Add((swatch, set, fallback));
+    }
+
     /// <summary>Back to the filter's own defaults, which for a vignette is not zero.</summary>
     private void Restore()
     {
         for (var i = 0; i < _rows.Count; i++) _rows[i].Slider.Value = _fallbacks[i];
         foreach (var (box, _, fallback) in _checks) box.IsChecked = fallback;
+        foreach (var (swatch, set, fallback) in _swatches)
+        {
+            swatch.Colour = fallback;
+            set(_amounts, fallback);
+        }
     }
 
     /// <summary>The amounts as the panel has them, for a preview of what they would do. The self check reads
@@ -160,6 +204,7 @@ internal sealed class FilterDialog : DialogWindow
         var settings = _amounts;
         foreach (var (slider, set) in _rows) set(settings, slider.Value);
         foreach (var (box, set, _) in _checks) set(settings, box.IsChecked == true);
+        foreach (var (swatch, set, _) in _swatches) set(settings, swatch.Colour);
         return settings;
     }
 
