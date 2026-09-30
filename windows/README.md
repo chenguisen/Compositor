@@ -27,7 +27,7 @@ update feed is compared against). Nothing newer is tracked. See *Keeping this al
 | `src/Compositor.Core` | Everything that is not Windows-specific: the document model, the tiled renderer, all 24 blend modes, selections, every tool's session rules, the filters and adjustments, the `.comp` reader and writer, undo. No UI dependency, so it is testable on its own. |
 | `src/Compositor.Desktop` | The editor window: Avalonia 12, the canvas control, the layers panel, the tool rail, the options bar, the status line, and the panels that are not dialogs. Also the headless self-checks below. |
 | `src/Compositor.Cli` | A console tool for reading, writing and rendering projects without a window — the same engine, so a project renders identically to what the window shows. |
-| `tests/Compositor.Core.Tests` | 841 xunit tests. The macOS `CompositorTests` are the behavior spec, so a ported kernel is held to the same expectation the Swift one is. |
+| `tests/Compositor.Core.Tests` | 848 xunit tests. The macOS `CompositorTests` are the behavior spec, so a ported kernel is held to the same expectation the Swift one is. |
 
 **Requires the .NET 10 SDK.** Build, test and publish:
 
@@ -79,7 +79,7 @@ To port a feature from the Mac to here:
 1. **Read the Swift that does it** — `Compositor/Document`, `Compositor/Rendering` — and its test in
    `CompositorTests`. The test is the specification: a ported kernel that passes the same expectation is right.
 2. **Put the rule in `Compositor.Core`, not in the window.** Every tool that is a drag or a keyboard session is
-   a core object the window merely feeds; that is what makes 841 core tests possible and the window thin.
+   a core object the window merely feeds; that is what makes 848 core tests possible and the window thin.
 3. **Hold it to the Mac's expectation in a test** — the same buffer, the same numbers, and a note in the test
    where the port deliberately differs.
 4. **Wire it to the window** and, where the window's own paths are involved, extend one of the self-checks.
@@ -107,10 +107,13 @@ Nothing on this list is hidden in the code — each is either a deliberate refus
 
 **Smaller divergences**
 
-- **Colors inside a panel are still numbers**: the app has the Mac's picker — a saturation and brightness field,
-  a hue strip, RGB and hex — and the rail's swatches, the brush's Color button and the Gradient menu's background
-  color all open it, with a click on the canvas sampling into it. The Color Range, Vignette, Gradient Map and
-  Dither amounts are the exception: they are sliders there, where the Mac opens the same picker on a swatch.
+- **Every color is now the Mac's**: the picker (a saturation and brightness field, a hue strip, RGB and hex) is
+  opened by the rail's swatches, the brush's Color button, the Gradient menu's background color, and by the swatch
+  each panel shows for a color it owns — Vignette's Color, Dither's Dark and Light, the Gradient Map's Shadows and
+  Highlights, over the bar they make. A sheet previews what the color would do as the picker is moved. **Select ▸
+  Color Range is the Mac's panel too**: not modal, with its Replace/Add/Remove eyedroppers, its selection drawn
+  small in black and white, Fuzziness and Invert, and the picture live behind it — a color is picked by clicking the
+  picture, Shift adds it and Alt takes it away, and the whole session is one undo step.
 - **Bloom / Glow** is a take on the look, not Core Image's arithmetic, and the code says so where a reader will
   look. Every other filter and adjustment is a port of the Mac's own kernel or operator.
 - **Updates**: the feed both builds read publishes a macOS `.dmg`, so Help ▸ Check for Updates reports the news
@@ -125,9 +128,13 @@ Nothing on this list is hidden in the code — each is either a deliberate refus
   own widgets: the verb the menu calls opens the panel, the check finds it among the windows the editor owns,
   clicks its amount, presses its Apply and runs the jobs a dispatcher loop would, so the filter, the curve editor
   and the Dither look all reach the layer through their own controls. Reopening Dither checks that it opens on the
-  look and amounts it was left with. A script that clicks the *published* app has also opened menus, made a
-  document from the New Project dialog, driven the shortcut sheet's recorder with real keys and driven this
-  picker, which is where its amount boxes were found squeezed to nothing by a box too narrow to show a number.
+  look and amounts it was left with. The panels' own color swatches open the picker in turn — a click in its field
+  arriving in the sheet's amounts — and Color Range is driven as its panel is used: a click on the picture picks a
+  color, the panel's Fuzziness rebuilds the selection, Add joins a second color and Alt takes one away, OK closes
+  one history step and a second panel cancelled puts the selection back. A script that clicks the *published* app
+  has also opened menus, made a document from the New Project dialog, driven the shortcut sheet's recorder with
+  real keys, and driven the picker and the Color Range panel, which is where the picker's amount boxes were found
+  squeezed to nothing by a box too narrow to show a number.
 
 ## Keeping this alive, or handing it on
 

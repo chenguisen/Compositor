@@ -125,8 +125,9 @@ public sealed class CanvasView : Control
     /// <summary>When set, clicking reports the colour under the pointer instead of painting.</summary>
     public bool EyedropperOnClick { get; set; }
 
-    /// <summary>Handed the point the eyedropper was clicked at, in document pixels.</summary>
-    public Action<SKPoint>? EyedropperClicked { get; set; }
+    /// <summary>Handed the point the eyedropper was clicked at, in document pixels, and the keys held:
+    /// a colour-range pick adds the colour with Shift and takes it away with Alt, as the Mac build's does.</summary>
+    public Action<SKPoint, KeyModifiers>? EyedropperClicked { get; set; }
 
     /// <summary>
     /// Whether the ring that follows an eyedropper drag is drawn — the colour under the pointer across its top
@@ -1248,6 +1249,22 @@ public sealed class CanvasView : Control
             InvalidateVisual();
             return;
         }
+        // Sampling comes next, and before the tool: a panel that picks a colour off the picture (the eyedropper,
+        // and Select ▸ Colour Range while its panel is up) takes the press whatever tool is in hand, as the
+        // Mac build's canvas does.
+        if (EyedropperOnClick && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+        {
+            _sampling = true;
+            _sampleAt = e.GetPosition(this);
+            // The colour the pick replaces, which the ring's lower half goes on showing while the drag does.
+            _sampleOriginal = new SKColor((byte)Math.Round(Brush.Red * 255), (byte)Math.Round(Brush.Green * 255),
+                (byte)Math.Round(Brush.Blue * 255));
+            Sample();
+            e.Pointer.Capture(this);
+            e.Handled = true;
+            EyedropperClicked?.Invoke(ToDocument(_sampleAt), e.KeyModifiers);
+            return;
+        }
         if (GuidesMovable && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed
             && GuideAt(ToDocument(e.GetPosition(this))) is { } guide)
         {
@@ -1322,19 +1339,6 @@ public sealed class CanvasView : Control
         {
             e.Handled = true;
             TextClicked?.Invoke(ToDocument(e.GetPosition(this)));
-            return;
-        }
-        if (EyedropperOnClick && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
-        {
-            _sampling = true;
-            _sampleAt = e.GetPosition(this);
-            // The colour the pick replaces, which the ring's lower half goes on showing while the drag does.
-            _sampleOriginal = new SKColor((byte)Math.Round(Brush.Red * 255), (byte)Math.Round(Brush.Green * 255),
-                (byte)Math.Round(Brush.Blue * 255));
-            Sample();
-            e.Pointer.Capture(this);
-            e.Handled = true;
-            EyedropperClicked?.Invoke(ToDocument(_sampleAt));
             return;
         }
         if (SampleSourceOnClick && e.KeyModifiers.HasFlag(KeyModifiers.Alt)

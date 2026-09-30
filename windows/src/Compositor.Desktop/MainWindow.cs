@@ -71,6 +71,12 @@ public sealed class MainWindow : Window
     /// the one that is open to the front rather than opening a second.</summary>
     private ColorPickerDialog? _picker;
 
+    /// <summary>Select ▸ Colour Range while its panel is up: the colours picked and the selection they make.</summary>
+    private ColorRangeSession? _colorRange;
+    private ColorRangePanel? _colorRangePanel;
+    /// <summary>The selection there was before the panel opened, which a Cancel puts back.</summary>
+    private DocumentSelection? _colorRangeWas;
+
     /// <summary>The picker while the self check has it up, so the caller can photograph that window too — the
     /// picture of the editor does not hold a window of its own.</summary>
     internal ColorPickerDialog? Picker => _picker;
@@ -634,7 +640,7 @@ public sealed class MainWindow : Window
                         Command("Layer's _Pixels", SelectLayerPixels),
                         Command("_Mask's Black Areas", SelectMaskBlack),
                         new Separator(),
-                        Command("Color _Range…", () => _ = ColorRange()),
+                        Command("Color _Range…", ColorRange),
                     },
                 },
                 new MenuItem
@@ -1757,6 +1763,21 @@ public sealed class MainWindow : Window
         }
         report.Add($"the canvas sits at {corner.X:0},{corner.Y:0} in the window, "
             + $"{_canvas.Bounds.Width:0}x{_canvas.Bounds.Height:0} of it");
+        // How many document pixels the selection holds: what the Colour Range panel is rebuilding as it is used.
+        int Covered()
+        {
+            using var coverage = document.Selection.Coverage(SKRectI.Create(0, 0, document.Width, document.Height));
+            if (coverage is null) return 0;
+            var count = 0;
+            for (var y = 0; y < coverage.Height; y++)
+            {
+                for (var x = 0; x < coverage.Width; x++)
+                {
+                    if (coverage.GetPixel(x, y).Red > 128) count++;
+                }
+            }
+            return count;
+        }
         var probe = Aim(new SKPoint(30, 30));
         report.Add($"aiming at document 30,30 lands on window {probe.X:0.#},{probe.Y:0.#}, "
             + $"{(corner.X <= probe.X && probe.X <= corner.X + _canvas.Bounds.Width && corner.Y <= probe.Y && probe.Y <= corner.Y + _canvas.Bounds.Height ? "on the canvas" : "off the canvas")}");
@@ -2331,6 +2352,84 @@ public sealed class MainWindow : Window
             + $"{ring.Sampled.Red},{ring.Sampled.Green},{ring.Sampled.Blue}");
         if (ring.Original == ring.Sampled) throw new InvalidOperationException("the ring names one colour twice");
         this.MouseUp(Aim(new SKPoint(60, 60)), MouseButton.Left, RawInputModifiers.None);
+
+        // Select ▸ Colour Range, as the Mac build presents it: the panel is a window of its own and the picture
+        // stays live behind it, so a colour is picked by clicking the picture rather than typed into a dialog.
+        // Every pick rebuilds the selection on the document, so the canvas draws the ants while the panel is
+        // used, and OK closes the one history step the whole session is.
+        Deselect();
+        SetTool(Tool.Brush);
+        ColorRange();
+        if (OwnedWindows.OfType<ColorRangePanel>().FirstOrDefault() is not { } range)
+        {
+            throw new InvalidOperationException("the Color Range verb opened no panel");
+        }
+        range.UpdateLayout();
+        report.Add($"the Color Range panel is up, {range.Width:0} wide, over a document with no selection");
+        if (document.Selection.Path is not null) throw new InvalidOperationException("the range did not start clear");
+
+        Click(Aim(new SKPoint(30, 30)));
+        if (document.Selection.Path is not { IsEmpty: false } pickedSo)
+        {
+            throw new InvalidOperationException("the click picked no colour");
+        }
+        var first = pickedSo.Bounds;
+        report.Add($"a click on the picture with the panel up selected {first.Width:0}x{first.Height:0} of it, "
+            + $"and the panel is {(range.ShowingMask ? "showing the selection" : "showing NOTHING")}");
+        if (!range.ShowingMask) throw new InvalidOperationException("the panel drew no preview of the selection");
+        if (_colorRange is not { Include.Count: 1 }) throw new InvalidOperationException("the panel took no colour");
+
+        // The panel's own Fuzziness is not only one of its amounts: it is what the selection is rebuilt from, so
+        // moving it has to move the selection.
+        var rangeFuzziness = AmountIn(range, "Fuzziness");
+        var coveredWas = Covered();
+        ClickIn(range, rangeFuzziness, 0.05);
+        var coveredNow = Covered();
+        report.Add($"the panel's Fuzziness clicked down: {coveredWas} → {coveredNow} pixel(s) covered, at a "
+            + $"fuzziness of {_colorRange?.Fuzziness:0}");
+        if (_colorRange is null || _colorRange.Fuzziness > 15) throw new InvalidOperationException("the fuzziness did not take");
+        if (coveredNow >= coveredWas) throw new InvalidOperationException("the fuzziness changed nothing");
+
+        // Add, and Alt held while a click is made, are the panel's two ways of picking more than one colour.
+        PressIn(range, "Add");
+        Click(Aim(new SKPoint(90, 50)));
+        report.Add($"a second click with Add chosen makes the range {_colorRange?.Include.Count} colour(s)");
+        if (_colorRange is not { Include.Count: 2 }) throw new InvalidOperationException("Add did not join the range");
+        this.MouseDown(Aim(new SKPoint(90, 50)), MouseButton.Left,
+            RawInputModifiers.LeftMouseButton | RawInputModifiers.Alt);
+        this.MouseUp(Aim(new SKPoint(90, 50)), MouseButton.Left, RawInputModifiers.None);
+        report.Add($"the same colour taken away again with Alt: {_colorRange?.Include.Count} picked, "
+            + $"{_colorRange?.Exclude.Count} taken away");
+        if (_colorRange is not { Include.Count: 2, Exclude.Count: 1 })
+        {
+            throw new InvalidOperationException("Alt did not take the colour out of the range");
+        }
+
+        // OK keeps the selection as one step; the panel and its sample go with it.
+        var stood = document.Selection.Path?.Bounds ?? SKRect.Empty;
+        PressIn(range, "OK");
+        Dispatcher.UIThread.RunJobs();
+        if (_colorRange is not null) throw new InvalidOperationException("OK left the panel up");
+        if (_history.UndoName != "Color Range") throw new InvalidOperationException($"the range made a \"{_history.UndoName}\" step");
+        report.Add($"OK: the panel is away and the history holds \"{_history.UndoName}\"");
+
+        // Opened again and cancelled, the selection there was stands and no step is added for it.
+        ColorRange();
+        if (OwnedWindows.OfType<ColorRangePanel>().FirstOrDefault() is not { } second)
+        {
+            throw new InvalidOperationException("the Color Range panel did not open a second time");
+        }
+        second.UpdateLayout();
+        // A second panel starts with no colours of its own: the ones that made the selection went with the panel.
+        if (second.ShowingMask) throw new InvalidOperationException("the second panel started with a selection of its own");
+        Click(Aim(new SKPoint(30, 30)));
+        PressIn(second, "Cancel");
+        Dispatcher.UIThread.RunJobs();
+        if (_colorRange is not null) throw new InvalidOperationException("Cancel left the panel up");
+        var back = document.Selection.Path?.Bounds ?? SKRect.Empty;
+        report.Add($"cancelled: the selection is back at {back.Left:0},{back.Top:0} {back.Width:0}x{back.Height:0}");
+        if (!back.Equals(stood)) throw new InvalidOperationException("Cancel did not put the selection back");
+        if (_history.UndoName != "Color Range") throw new InvalidOperationException($"Cancel added a \"{_history.UndoName}\" step");
 
         // And the picker opened once more on the background colour and left up, so the caller can photograph it:
         // it is a window of its own, so the picture of the main window does not hold it.
@@ -3121,7 +3220,9 @@ public sealed class MainWindow : Window
     {
         _tool = tool;
         _canvas.SampleSourceOnClick = tool == Tool.Clone;
-        _canvas.EyedropperOnClick = tool == Tool.Eyedropper;
+        // A colour range being picked takes the press whatever tool is in hand, so the canvas keeps sampling
+        // until its panel is put away.
+        _canvas.EyedropperOnClick = tool == Tool.Eyedropper || _colorRange is not null;
         _canvas.TypeOnClick = tool == Tool.Type;
         if (tool != Tool.Type) CommitText();
         _canvas.CropEnabled = tool == Tool.Crop;
@@ -4554,18 +4655,79 @@ public sealed class MainWindow : Window
     /// <summary>
     /// Select ▸ Colour Range: everything in the picture near a colour, wherever it is. What is matched is the
     /// canvas as shown, as the Mac build matches, so a colour counts wherever it appears.
+    /// <para>
+    /// The panel is the Mac's — not modal, so the picture stays live and a colour is picked by clicking it.
+    /// The selection is built into the document as each colour goes in, so the canvas draws the ants while the
+    /// panel is up; the history step is opened before the first of them and closed by OK, so the whole session
+    /// undoes in one, and a Cancel puts the selection there was back and leaves no step behind at all.
+    /// </para>
     /// </summary>
-    private async Task ColorRange()
+    private void ColorRange()
     {
         if (_document is not { } document) return;
-        if (document.Width <= 0 || document.Height <= 0) return;
-        var start = new SKColor((byte)Math.Round(_options.Brush.Red * 255), (byte)Math.Round(_options.Brush.Green * 255),
-            (byte)Math.Round(_options.Brush.Blue * 255));
-        if (await ColorRangeDialog.Ask(this, start) is not { } asked) return;
-        using var sample = DocumentRenderer.Render(document);
-        Edit($"Color Range {asked.Fuzziness}", () => SelectionEdits.SelectColorRange(
-            document, sample, [asked.Colour], [], asked.Fuzziness, asked.Invert, asked.Mode));
-        Say($"Selected what is near {asked.Colour} within {asked.Fuzziness}");
+        if (_colorRange is not null)
+        {
+            _colorRangePanel?.Activate();
+            return;
+        }
+        if (ColorRangeSession.Begin(document) is not { } session)
+        {
+            Say("There is no picture to pick a color from");
+            return;
+        }
+        _colorRange = session;
+        _colorRangeWas = document.Selection;
+        _history.Begin("Color Range", document, Selected);
+        var panel = new ColorRangePanel(session);
+        panel.Changed += () =>
+        {
+            // An amount or a switch moved: the selection is built again from the colours picked and shown.
+            if (_document is { } current) ShowColorRange(current, session.Rebuild(current));
+        };
+        panel.Applied += () =>
+        {
+            if (_document is { } current) _history.End(current, Selected);
+            CloseColorRange();
+            Refresh();
+            Say($"Selected what is near {session.Include.Count} color(s) within {session.Fuzziness:0}");
+        };
+        panel.Cancelled += () =>
+        {
+            if (_document is { } current)
+            {
+                current.Selection = _colorRangeWas ?? DocumentSelection.All;
+                // Ends as it began: the history drops a step whose document is what it started from.
+                _history.End(current, Selected);
+                _canvas.InvalidateVisual();
+            }
+            CloseColorRange();
+        };
+        _colorRangePanel = panel;
+        // The picture is live and every press on it samples, whichever tool is in hand, as the Mac's does.
+        _canvas.EyedropperOnClick = true;
+        panel.Show(this);
+        ShowColorRange(document, false);
+        Say("Color Range: click the picture to pick the color to select");
+    }
+
+    /// <summary>Shows the panel the selection as it now stands, and lets the canvas draw it.</summary>
+    private void ShowColorRange(CanvasDocument document, bool changed)
+    {
+        _canvas.InvalidateVisual();
+        _colorRangePanel?.Showing(_colorRange?.Mask(document), _colorRange?.Include.Count ?? 0,
+            _colorRange?.Exclude.Count ?? 0);
+        if (!changed) return;
+        Say(_colorRange?.Problem ?? $"{_colorRange?.Include.Count ?? 0} color(s) picked");
+    }
+
+    /// <summary>Puts the panel away and lets the session and its sample go.</summary>
+    private void CloseColorRange()
+    {
+        _colorRangePanel = null;
+        _colorRange?.Dispose();
+        _colorRange = null;
+        _colorRangeWas = null;
+        _canvas.EyedropperOnClick = _tool == Tool.Eyedropper;
     }
 
     /// <summary>Image ▸ Canvas Size: the canvas in pixels, with the picture kept at one of nine anchors.</summary>
@@ -4903,8 +5065,11 @@ public sealed class MainWindow : Window
         Say(erasing ? "The brush erases" : "The brush paints");
     }
 
-    /// <summary>The eyedropper: the colour under the click becomes the brush's.</summary>
-    private void Picked(SKPoint point)
+    /// <summary>
+    /// The eyedropper: the colour under the click becomes the brush's — or, when a panel that picks colours is
+    /// up, goes into that instead, because that is what the click was for.
+    /// </summary>
+    private void Picked(SKPoint point, KeyModifiers keys)
     {
         if (_document is not { } document) return;
         if ((long)document.Width * document.Height > DocumentLimits.MaxSurfacePixels)
@@ -4920,6 +5085,16 @@ public sealed class MainWindow : Window
         if (colour.Alpha == 0)
         {
             Say("Nothing is drawn there");
+            return;
+        }
+        // Colour Range is up: the colour is one of the ones being looked for, and Shift or Alt says whether it
+        // joins the range or is taken out of it — as the Mac build's panel does with the same two keys.
+        if (_colorRange is { } ranging)
+        {
+            var mode = keys.HasFlag(KeyModifiers.Alt) ? ColorRangeSession.Picking.Remove
+                : keys.HasFlag(KeyModifiers.Shift) ? ColorRangeSession.Picking.Add
+                : ranging.Mode;
+            ShowColorRange(document, ranging.Pick(document, colour, mode));
             return;
         }
         // Sampling goes into the picker while it is open rather than to the brush, as the Mac build's does:
