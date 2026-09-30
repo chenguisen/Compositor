@@ -18,7 +18,11 @@ conflict against Swift code it has nothing to do with. So if you are working on 
 port the feature, do not `git merge main`.**
 
 The port tracks **macOS 1.3.7** (the version `src/Compositor.Desktop` reports, which is also the version the
-update feed is compared against). Nothing newer is tracked. See *Keeping this alive* at the end.
+update feed is compared against), and that is where it stops: **nothing newer is tracked.** Upstream has
+released up to **v1.4.5** since. Features are ported by hand one at a time, so the gap is a lag rather than a
+plan, and nothing here guarantees it closes. **This is not parity with the current macOS build — not in
+features and not in detail** — and what is known to be missing is listed under *Known differences* below. See
+*Keeping this alive* at the end.
 
 ## What is here
 
@@ -103,7 +107,8 @@ Nothing on this list is hidden in the code — each is either a deliberate refus
   items. All three are Apple Vision subject masks on the Mac. Adding them means an ONNX segmentation dependency
   (a model, its licence, its size), and that decision was taken deliberately: parked, with no dependency added.
   Everything downstream of a selection is complete, so the loss is the segmentation step alone — a subject must
-  be cut out here with the wand, a lasso or Color Range. **This is the only feature-level gap left.**
+  be cut out here with the wand, a lasso or Color Range. **It is the only missing feature within the version
+  this port tracks** — the version lag above is the larger gap, and it is a list that keeps growing upstream.
 
 **Smaller divergences**
 
@@ -141,9 +146,15 @@ Nothing on this list is hidden in the code — each is either a deliberate refus
 This port was built to be *finished*, not to be a treadmill, and the honest position is written down here rather
 than promised elsewhere.
 
-**The branch stands on its own.** It is a complete, working Windows build at macOS 1.3.7 parity. If nobody ever
-touches it again it does not rot into something broken — it stays what it is, and this README says which version
-of the Mac it was made against. That is a deliverable, not a failure.
+**The branch stands on its own.** It is a complete, working Windows build of the macOS 1.3.7 feature set — a
+lagging fork of a moving target, not parity with the macOS build of today, and this README names both the
+version it was made against and the gap to the latest release. If nobody ever touches it again it does not rot
+into something broken — it stays what it is. That is a deliverable, not a failure.
+
+**And nobody is actively maintaining it.** Keeping a second platform's codebase going — its dependencies, its
+CI, its users — is not something this branch can promise, so it is offered as a finished snapshot rather than
+as a supported build. That is the honest reason for putting it upstream instead of only publishing it:
+whatever becomes of it should be something that survives its author stepping away.
 
 **If you can only do one thing to keep it honest:** there is now a CI workflow at
 `.github/workflows/windows.yml` — `dotnet build -warnaserror`, `dotnet test`, and the window driven with a
