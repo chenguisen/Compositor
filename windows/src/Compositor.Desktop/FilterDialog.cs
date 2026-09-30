@@ -24,10 +24,16 @@ internal sealed class FilterDialog : DialogWindow
     private readonly List<(Slider Slider, Action<FilterSettings, double> Set)> _rows = [];
     private readonly List<double> _fallbacks = [];
     private readonly List<(CheckBox Box, Action<FilterSettings, bool> Set, bool Fallback)> _checks = [];
+    /// <summary>
+    /// The amounts being edited: a copy of the ones the panel was opened with, which are the amounts that
+    /// filter was last used with. Editing a copy is what lets a Cancel leave them as they were.
+    /// </summary>
+    private readonly FilterSettings _amounts;
     private FilterSettings? _result;
 
     private FilterDialog(FilterKind kind, FilterSettings start)
     {
+        _amounts = start.Copy();
         Title = kind switch
         {
             FilterKind.GaussianBlur => "Gaussian Blur",
@@ -150,7 +156,7 @@ internal sealed class FilterDialog : DialogWindow
     /// <summary>The amounts as the panel has them, for a preview of what they would do.</summary>
     private FilterSettings Current()
     {
-        var settings = new FilterSettings();
+        var settings = _amounts;
         foreach (var (slider, set) in _rows) set(settings, slider.Value);
         foreach (var (box, set, _) in _checks) set(settings, box.IsChecked == true);
         return settings;

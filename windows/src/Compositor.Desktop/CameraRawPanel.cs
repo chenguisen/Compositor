@@ -223,6 +223,12 @@ internal sealed class CameraRawPanel
         slider.Value = value;
     }
 
+    /// <summary>What one of the panel's amounts is set to, which the self check reads to see where the panel
+    /// opened: the same slider <see cref="Amount"/> hands back. The self check is the only caller.</summary>
+    internal double SetTo(string label) => Amount(label) is { } slider
+        ? slider.Value
+        : throw new InvalidOperationException($"the panel has no amount called {label}");
+
     /// <summary>The amounts as the panel has them, for a preview of what they would do.</summary>
     public CameraRawSettings Current()
     {

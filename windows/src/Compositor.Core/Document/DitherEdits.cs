@@ -105,6 +105,12 @@ public sealed class DitherSettings
     private static double Clamp(double value, double least, double most, double fallback) =>
         double.IsFinite(value) ? Math.Clamp(value, least, most) : fallback;
 
+    /// <summary>
+    /// Another object holding the same look and amounts, which is what the panel edits: the window remembers
+    /// the look Dither was last used with, and the panel writes into a copy so a Cancel leaves them alone.
+    /// </summary>
+    public DitherSettings Copy() => (DitherSettings)MemberwiseClone();
+
     /// <summary>The same amounts within the ranges the filter allows, as the Mac build clamps them.</summary>
     public DitherSettings Normalized() => new()
     {

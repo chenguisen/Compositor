@@ -66,6 +66,15 @@ public sealed class MainWindow : Window
     /// <summary>The scope the last Camera Raw preview counted, for the panel to draw when that picture is shown.</summary>
     private CameraRawScope? _cameraRawScope;
 
+    /// <summary>
+    /// What the filter panels were last used with, which is where they open again: the Mac build keeps one set
+    /// of filter settings for the session and its sheets read them. A panel edits a copy of these, so only
+    /// Apply changes them, and a Cancel leaves every filter's amounts as they were.
+    /// </summary>
+    private FilterSettings _filterAmounts = new();
+    private DitherSettings _ditherAmounts = new();
+    private CameraRawSettings _cameraRawAmounts = new();
+
     /// <summary>One row, because what ⌘E does depends on the panel selection: it is named for it here.</summary>
     private readonly MenuItem _merge = new();
 
@@ -1483,10 +1492,19 @@ public sealed class MainWindow : Window
         }
         report.Add($"applied: the panel is away, the Layers panel is back, the history holds '{_history.UndoName}'");
 
-        // Opened again and cancelled, the layer is left exactly as Apply left it.
+        // Opened again and cancelled, the layer is left exactly as Apply left it. It opens where it was left:
+        // the amounts the last Apply used, which is what the Mac's one set of filter settings keeps.
         var applied = target.Asset.Image.GetPixel(0, 0);
         CameraRawFilter();
         if (_cameraRaw is not { } again) throw new InvalidOperationException("the panel did not open a second time");
+        if (again.SetTo("Exposure, stops") != 1.5 || again.SetTo("Contrast") != 40)
+        {
+            throw new InvalidOperationException(
+                $"the panel opened with exposure {again.SetTo("Exposure, stops")} and contrast "
+                + $"{again.SetTo("Contrast")} rather than what it was last used with");
+        }
+        report.Add($"opened again where it was left: exposure {again.SetTo("Exposure, stops")}, "
+            + $"contrast {again.SetTo("Contrast")}");
         again.Move("Exposure, stops", -1);
         ShowPreviewOnce(null, EventArgs.Empty);
         again.Cancel();
@@ -1501,6 +1519,12 @@ public sealed class MainWindow : Window
         // the line over the picture are what there is to look at in that drawing.
         CameraRawFilter();
         if (_cameraRaw is not { } shown) throw new InvalidOperationException("the panel did not stay open");
+        // The amount the cancelled panel was moved to is not the one it is opened with: a Cancel keeps the
+        // amounts that were last applied.
+        if (shown.SetTo("Exposure, stops") != 1.5)
+        {
+            throw new InvalidOperationException("the amount a cancelled panel was moved to was kept");
+        }
         shown.Move("Exposure, stops", 0.8);
         shown.Move("Clarity", 30);
         shown.PressDrawGuides();
@@ -3105,7 +3129,7 @@ public sealed class MainWindow : Window
         CloseCameraRaw();
         StartPreview(document, id);
         _cameraRawLayer = id;
-        var panel = new CameraRawPanel(new CameraRawSettings(), BrushColour());
+        var panel = new CameraRawPanel(_cameraRawAmounts, BrushColour());
         // The preview carries the panel's overlay switches: clipped shadows and highlights and the sharpening
         // mask are shown over the grade while the amounts are moved, and the overlay is what is shown when one
         // is on. The edit that is finally made is the grade alone, never the overlay.
@@ -3217,6 +3241,8 @@ public sealed class MainWindow : Window
         // Read before the panel is let go, since putting it away forgets which layer it was opened on.
         var id = _cameraRawLayer;
         CloseCameraRaw();
+        // Kept for the next time the panel is opened, as the Mac's filter settings keep the last grade.
+        _cameraRawAmounts = settings;
         if (_document is not { } current || id is not { } layer || settings.IsIdentity) return;
         Edit("Camera Raw Filter", () => CameraRawEdits.Apply(current, layer, settings));
         Reselect(layer);
@@ -3258,7 +3284,7 @@ public sealed class MainWindow : Window
             return;
         }
         StartPreview(document, id);
-        var asked = await FilterDialog.Ask(this, kind, new FilterSettings(), settings =>
+        var asked = await FilterDialog.Ask(this, kind, _filterAmounts, settings =>
         {
             if (settings is { } amounts)
             {
@@ -3269,6 +3295,9 @@ public sealed class MainWindow : Window
         });
         StopPreview();
         if (asked is not { } settings) return;
+        // The amounts this filter was used with are kept for the next time it is opened, as the Mac's one set
+        // of filter settings does.
+        _filterAmounts = settings;
         if (_document is not { } current) return;
         Edit($"{kind} Filter", () => FilterEdits.Apply(current, id, kind, settings));
         Reselect(id);
@@ -3288,10 +3317,11 @@ public sealed class MainWindow : Window
             return;
         }
         StartPreview(document, id);
-        var asked = await DitherDialog.Ask(this, new DitherSettings(),
+        var asked = await DitherDialog.Ask(this, _ditherAmounts,
             (style, settings) => RequestPreview((target, layer) => DitherEdits.Apply(target, layer, style, settings)));
         StopPreview();
         if (asked is not { } chosen) return;
+        _ditherAmounts = chosen.Settings;
         if (_document is not { } current) return;
         Edit("Dither", () => DitherEdits.Apply(current, id, chosen.Style, chosen.Settings));
         Reselect(id);

@@ -34,6 +34,11 @@ internal sealed class DitherDialog : DialogWindow
     private readonly TextBox _characters = new();
     private readonly Slider _pixelSize;
     private List<Control>? _under;
+    /// <summary>
+    /// The look and amounts being edited: a copy of the ones the panel was opened with, which are the ones
+    /// Dither was last used with. Editing a copy is what lets a Cancel leave them as they were.
+    /// </summary>
+    private readonly DitherSettings _amounts;
     private DitherSettings? _result;
 
     /// <summary>Asks for the picture to be shown with this look and its amounts as they stand.</summary>
@@ -47,6 +52,7 @@ internal sealed class DitherDialog : DialogWindow
 
     private DitherDialog(DitherSettings start)
     {
+        _amounts = start.Copy();
         Title = "Dither";
         Width = 460;
         Height = 660;
@@ -252,13 +258,11 @@ internal sealed class DitherDialog : DialogWindow
     /// <summary>The amounts as the panel has them, for a preview of what they would do.</summary>
     private DitherSettings Current()
     {
-        var settings = new DitherSettings
-        {
-            PixelShape = (DitherPixelShape)Math.Max(0, _shape.SelectedIndex),
-            Colors = (DitherColors)Math.Max(0, _colors.SelectedIndex),
-            LightOnDark = _lightOnDark.IsChecked == true,
-            Characters = _characters.Text ?? DitherSettings.DefaultCharacters,
-        };
+        var settings = _amounts;
+        settings.PixelShape = (DitherPixelShape)Math.Max(0, _shape.SelectedIndex);
+        settings.Colors = (DitherColors)Math.Max(0, _colors.SelectedIndex);
+        settings.LightOnDark = _lightOnDark.IsChecked == true;
+        settings.Characters = _characters.Text ?? DitherSettings.DefaultCharacters;
         foreach (var (slider, set) in _sliders) set(settings, slider.Value);
         return settings;
     }

@@ -601,4 +601,64 @@ public class FilterEditsTests
             $"the visible half was hidden: {rendered.GetPixel(10, 10)}");
         Assert.True(rendered.GetPixel(30, 10).Alpha < 20, $"the hidden half showed: {rendered.GetPixel(30, 10)}");
     }
+
+    /// <summary>
+    /// A panel edits a copy of the amounts the window remembers, which is what keeps a Cancel from changing
+    /// them: the copy has to hold every amount the original had, and writing into it must not reach back.
+    /// </summary>
+    [Fact]
+    public void CopyingTheAmountsLeavesTheOnesItCopiedAlone()
+    {
+        var start = new FilterSettings
+        {
+            BlurRadius = 12, BloomAmount = 70, BloomRadius = 90, MotionAngle = -30, MotionDistance = 200,
+            NoiseAmount = 55, NoiseGaussian = true, NoiseMonochromatic = true, VignetteAmount = 80,
+            VignetteRed = 0.2, VignetteGreen = 0.4, VignetteBlue = 0.6, VignetteMidpoint = 30,
+            VignetteRoundness = -40, VignetteFeather = 20, VignetteHighlights = 10, TonalAmount = 65,
+            TonalRadius = 22, TonalShadows = -25, TonalMidtones = 35, TonalHighlights = 15, Distortion = 45,
+        };
+        var edited = start.Copy();
+        edited.BlurRadius = 1;
+        edited.VignetteBlue = 0;
+        edited.Distortion = 0;
+        edited.NoiseGaussian = false;
+        Assert.Equal(12, start.BlurRadius);
+        Assert.Equal(0.6, start.VignetteBlue);
+        Assert.Equal(45, start.Distortion);
+        Assert.True(start.NoiseGaussian);
+        // And the copy has the rest of the amounts, or a panel would open with the wrong ones for its filter.
+        edited.BlurRadius = 12;
+        edited.VignetteBlue = 0.6;
+        edited.Distortion = 45;
+        edited.NoiseGaussian = true;
+        Assert.Equal(
+            System.Text.Json.JsonSerializer.Serialize(start, Compositor.Core.Format.ManifestJson.Options),
+            System.Text.Json.JsonSerializer.Serialize(edited, Compositor.Core.Format.ManifestJson.Options));
+    }
+
+    /// <summary>The same for the Dither panel's look and amounts.</summary>
+    [Fact]
+    public void CopyingTheDitherAmountsLeavesTheOnesItCopiedAlone()
+    {
+        var start = new DitherSettings
+        {
+            PixelSize = 7, PixelShape = DitherPixelShape.Dot, CellSize = 20, TextSize = 30, Angle = -15,
+            Levels = 5, Diffusion = 60, Density = 25, Contrast = -35, Colors = DitherColors.TwoColors,
+            DarkRed = 0.1, DarkGreen = 0.2, DarkBlue = 0.3, LightRed = 0.7, LightGreen = 0.8, LightBlue = 0.9,
+            LightOnDark = false, Characters = "#@",
+        };
+        var edited = start.Copy();
+        edited.Levels = 2;
+        edited.Colors = DitherColors.Original;
+        edited.Characters = DitherSettings.DefaultCharacters;
+        Assert.Equal(5, start.Levels);
+        Assert.Equal(DitherColors.TwoColors, start.Colors);
+        Assert.Equal("#@", start.Characters);
+        edited.Levels = 5;
+        edited.Colors = DitherColors.TwoColors;
+        edited.Characters = "#@";
+        Assert.Equal(
+            System.Text.Json.JsonSerializer.Serialize(start, Compositor.Core.Format.ManifestJson.Options),
+            System.Text.Json.JsonSerializer.Serialize(edited, Compositor.Core.Format.ManifestJson.Options));
+    }
 }

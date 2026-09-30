@@ -94,6 +94,12 @@ public sealed class FilterSettings
     // Lens correction
     public double Distortion { get; set; }
 
+    /// <summary>
+    /// Another object holding the same amounts, which is what a panel edits: the window remembers the amounts
+    /// a filter was last used with, and a panel that writes into a copy leaves them alone until Apply.
+    /// </summary>
+    public FilterSettings Copy() => (FilterSettings)MemberwiseClone();
+
     /// <summary>Whether the amounts this filter reads are ones it may use.</summary>
     public bool IsValid(FilterKind kind) => kind switch
     {
