@@ -2099,16 +2099,44 @@ public sealed class MainWindow : Window
         Press(colourPicker, At(colourPicker, colourPicker.Field, 0.85, 0.15));
         Press(colourPicker, At(colourPicker, colourPicker.Ok, 0.5));
         Dispatcher.UIThread.RunJobs();
-        var picked = filterPanel.Current();
+        // The panel hands back the amounts it is editing, so what a step is compared against is read into
+        // numbers here rather than held as an object that goes on changing.
+        var withColour = filterPanel.Current();
+        var (pickedRed, pickedGreen, pickedBlue) = (withColour.VignetteRed, withColour.VignetteGreen, withColour.VignetteBlue);
         report.Add($"the panel's colour swatch opened the picker: the colour is now "
-            + $"{picked.VignetteRed:0.00},{picked.VignetteGreen:0.00},{picked.VignetteBlue:0.00}");
-        if (picked.VignetteRed + picked.VignetteGreen + picked.VignetteBlue < 0.2)
+            + $"{pickedRed:0.00},{pickedGreen:0.00},{pickedBlue:0.00}");
+        if (pickedRed + pickedGreen + pickedBlue < 0.2)
         {
             throw new InvalidOperationException("the picker's colour never reached the panel");
         }
-        if (picked.VignetteAmount != asked)
+        if (withColour.VignetteAmount != asked)
         {
             throw new InvalidOperationException("picking a colour changed the amount beside it");
+        }
+
+        // And a Cancel puts it back: the picker reports the colour it opened on, which is what the swatch and the
+        // preview behind it go back to.
+        ClickIn(filterPanel, vignetteSwatch, 0.5);
+        if (filterPanel.OwnedWindows.OfType<ColorPickerDialog>().LastOrDefault() is not { } backedOut)
+        {
+            throw new InvalidOperationException("the swatch opened no second picker");
+        }
+        backedOut.UpdateLayout();
+        Press(backedOut, At(backedOut, backedOut.Field, 0.1, 0.9));
+        var afterMove = filterPanel.Current();
+        if (afterMove.VignetteRed == pickedRed && afterMove.VignetteGreen == pickedGreen)
+        {
+            throw new InvalidOperationException("the picker's move never reached the panel");
+        }
+        Press(backedOut, At(backedOut, backedOut.Cancel, 0.5));
+        Dispatcher.UIThread.RunJobs();
+        var restored = filterPanel.Current();
+        report.Add($"the picker closed with Cancel: the colour is back at "
+            + $"{restored.VignetteRed:0.00},{restored.VignetteGreen:0.00},{restored.VignetteBlue:0.00}");
+        if (restored.VignetteRed != pickedRed || restored.VignetteGreen != pickedGreen
+            || restored.VignetteBlue != pickedBlue)
+        {
+            throw new InvalidOperationException("Cancel did not put the panel's colour back");
         }
         // The panel's buttons are below the fold of its own scroll view, and a click outside the viewport does
         // not reach them: the view is scrolled the way a hand would scroll it first.
@@ -2228,8 +2256,8 @@ public sealed class MainWindow : Window
         // Contrast is an amount every look shows, so it is the one to click.
         var contrast = AmountIn(ditherPanel, "Contrast");
         ClickIn(ditherPanel, contrast, 0.9);
-        var wanted = ditherPanel.Current();
-        if (Math.Abs(wanted.Contrast) < 20) throw new InvalidOperationException($"the click left contrast at {wanted.Contrast}");
+        var wantedContrast = ditherPanel.Current().Contrast;
+        if (Math.Abs(wantedContrast) < 20) throw new InvalidOperationException($"the click left contrast at {wantedContrast}");
         ScrollToEnd(ditherPanel);
         PressIn(ditherPanel, "Apply");
         Dispatcher.UIThread.RunJobs();
@@ -2247,15 +2275,15 @@ public sealed class MainWindow : Window
         reopened.UpdateLayout();
         var kept = reopened.Current();
         report.Add($"opened again: {reopened.Style()} with contrast {kept.Contrast:0.#}, "
-            + $"against the {wanted.Contrast:0.#} it was left with");
+            + $"against the {wantedContrast:0.#} it was left with");
         if (reopened.Style() != DitherStyle.Dots)
         {
             throw new InvalidOperationException($"the Dither panel opened on {reopened.Style()}, not the look it was left with");
         }
-        if (Math.Abs(kept.Contrast - wanted.Contrast) > 1e-9)
+        if (Math.Abs(kept.Contrast - wantedContrast) > 1e-9)
         {
             throw new InvalidOperationException(
-                $"the Dither panel opened with contrast {kept.Contrast} rather than {wanted.Contrast}");
+                $"the Dither panel opened with contrast {kept.Contrast} rather than {wantedContrast}");
         }
         ScrollToEnd(reopened);
         PressIn(reopened, "Cancel");
