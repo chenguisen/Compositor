@@ -80,6 +80,10 @@ internal static class Skin
     public static readonly IBrush TabFrontEdge = new SolidColorBrush(Color.FromArgb(0x38, 0xFF, 0xFF, 0xFF));
     public static readonly IBrush TabBackEdge = new SolidColorBrush(Color.FromArgb(0x14, 0xFF, 0xFF, 0xFF));
 
+    /// <summary>The line between the groups of a list, as AppKit draws <c>NSMenuItem.separator()</c> in the
+    /// dark appearance: white at 0.15.</summary>
+    public static readonly IBrush MenuRule = new SolidColorBrush(Color.FromArgb(0x26, 0xFF, 0xFF, 0xFF));
+
     /// <summary>Pens for the canvas's own drawing.</summary>
     public static readonly IPen PictureEdgePen = new Pen(new SolidColorBrush(PictureEdge), 1);
     public static readonly IPen GuidePen = new Pen(new SolidColorBrush(Guide), 1);

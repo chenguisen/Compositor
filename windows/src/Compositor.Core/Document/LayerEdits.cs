@@ -10,6 +10,24 @@ namespace Compositor.Core.Document;
 public static class LayerEdits
 {
     /// <summary>
+    /// The modes in the groups the Mac build lists them in — normal, then the darkening, lightening, contrast,
+    /// comparative and component modes — with a rule drawn between the groups wherever they are offered. It
+    /// holds every mode the format defines, once each, in the enum's own order.
+    /// </summary>
+    public static readonly LayerBlendMode[][] BlendGroups =
+    [
+        [LayerBlendMode.Normal],
+        [LayerBlendMode.Darken, LayerBlendMode.Multiply, LayerBlendMode.ColorBurn, LayerBlendMode.LinearBurn],
+        [LayerBlendMode.Lighten, LayerBlendMode.Screen, LayerBlendMode.ColorDodge, LayerBlendMode.LinearDodgeAdd],
+        [
+            LayerBlendMode.Overlay, LayerBlendMode.SoftLight, LayerBlendMode.HardLight, LayerBlendMode.VividLight,
+            LayerBlendMode.LinearLight, LayerBlendMode.PinLight, LayerBlendMode.HardMix,
+        ],
+        [LayerBlendMode.Difference, LayerBlendMode.Exclusion, LayerBlendMode.Subtract, LayerBlendMode.Divide],
+        [LayerBlendMode.Hue, LayerBlendMode.Saturation, LayerBlendMode.Color, LayerBlendMode.Luminosity],
+    ];
+
+    /// <summary>
     /// Flips the named layers about a line through the middle of the box around them — so a single layer
     /// turns about its own middle. A folder named here brings its contents with it. Masks follow the link: a
     /// linked mask flips with its layer, an unlinked one stays where it is.

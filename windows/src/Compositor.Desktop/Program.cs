@@ -176,12 +176,17 @@ internal static class Program
         var look = panel.Children.OfType<StackPanel>()
             .SelectMany(row => row.Children.OfType<Control>()).OfType<ComboBox>().First();
         var built = panel.Children.Count;
-        foreach (var (index, name) in new[]
-                 {
-                     (0, "Atkinson"), (2, "Bayer 2 x 2"), (5, "Halftone Dots"), (8, "Mac Patterns"), (9, "ASCII"),
-                 })
+        // A look is chosen by its name rather than its place in the list: the list draws a rule between its
+        // groups, so an item's index is not the look's.
+        foreach (var name in new[] { "Atkinson (Classic Mac)", "Bayer 2 × 2", "Halftone Dots", "Mac Patterns", "ASCII" })
         {
-            look.SelectedIndex = index;
+            var chosen = look.Items.OfType<ComboBoxItem>().ToList().FindIndex(item => (item.Content as string) == name);
+            if (chosen < 0)
+            {
+                Console.WriteLine($"the Dither panel has no look called {name}");
+                continue;
+            }
+            look.SelectedIndex = chosen;
             var shown = panel.Children.Count(child => child.IsVisible);
             Console.WriteLine($"Dither, {name}: {shown} of {built} controls shown "
                 + $"({string.Join(", ", panel.Children.Where(row => row.IsVisible).OfType<TextBlock>().Select(text => text.Text))})");

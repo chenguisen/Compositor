@@ -310,4 +310,35 @@ public class DitherEditsTests
         document.Layers.Add(blank);
         Assert.False(DitherEdits.Apply(document, blank.ID, DitherStyle.Atkinson, new DitherSettings()));
     }
+
+    /// <summary>
+    /// The groups the look list is offered in have to hold every look exactly once, in the order the panel
+    /// lists them, or a look could not be picked or would be listed twice.
+    /// </summary>
+    [Fact]
+    public void TheDitherGroupsHoldEveryLookOnceInThePanelsOrder()
+    {
+        var listed = DitherSettings.Groups.SelectMany(group => group).ToList();
+        Assert.Equal(Enum.GetValues<DitherStyle>(), listed);
+        Assert.Equal(listed.Count, listed.Distinct().Count());
+        Assert.All(DitherSettings.Groups, group => Assert.NotEmpty(group));
+    }
+
+    /// <summary>
+    /// The looks are grouped by what they do — a diffusion passes its error on, an ordered screen has tones,
+    /// a half-tone has cells, the rest draw marks — and the panel's rules have to fall between those groups.
+    /// </summary>
+    [Fact]
+    public void TheGroupsAreTheOnesThePredicatesDraw()
+    {
+        Assert.All(DitherSettings.Groups[0], look => Assert.True(DitherSettings.Diffuses(look)));
+        Assert.All(DitherSettings.Groups[1], look => Assert.False(DitherSettings.Diffuses(look)));
+        Assert.Equal(
+            DitherSettings.Groups[0].Concat(DitherSettings.Groups[1]),
+            Enum.GetValues<DitherStyle>().Where(DitherSettings.HasTones));
+        Assert.Equal(DitherSettings.Groups[2], Enum.GetValues<DitherStyle>().Where(DitherSettings.IsHalftone));
+        Assert.Equal(
+            DitherSettings.Groups[3],
+            Enum.GetValues<DitherStyle>().Where(look => !DitherSettings.HasTones(look) && !DitherSettings.IsHalftone(look)));
+    }
 }

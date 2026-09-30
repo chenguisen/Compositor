@@ -43,6 +43,19 @@ public sealed class DitherSettings
     /// <summary>The characters ASCII mode draws with, least ink first as the kernel reads them.</summary>
     public const string DefaultCharacters = " .:-=+*#%@";
 
+    /// <summary>
+    /// The looks in the groups the Mac build's panel lists them in — the diffusions, the ordered screens, the
+    /// half-tone shapes, then the patterns and characters — with a rule drawn between the groups wherever they
+    /// are offered. It holds every look once, in the enum's own order.
+    /// </summary>
+    public static readonly DitherStyle[][] Groups =
+    [
+        [DitherStyle.Atkinson, DitherStyle.FloydSteinberg],
+        [DitherStyle.Bayer2, DitherStyle.Bayer4, DitherStyle.Bayer8],
+        [DitherStyle.Dots, DitherStyle.Lines, DitherStyle.Diamonds],
+        [DitherStyle.Patterns, DitherStyle.Ascii],
+    ];
+
     /// <summary>Each dithered pixel covers this many layer pixels on a side, for chunky old-screen pixels.</summary>
     public double PixelSize { get; set; } = 2;
     public DitherPixelShape PixelShape { get; set; } = DitherPixelShape.Square;

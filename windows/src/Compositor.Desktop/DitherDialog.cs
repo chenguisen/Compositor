@@ -26,6 +26,8 @@ internal sealed class DitherDialog : DialogWindow
     private readonly List<(Slider Slider, Action<DitherSettings, double> Set)> _sliders = [];
     private readonly List<double> _fallbacks = [];
     private readonly ComboBox _style = new();
+    /// <summary>What each item of the look list stands for: the look, or nothing for a rule between groups.</summary>
+    private readonly List<DitherStyle?> _styleRows = [];
     private readonly ComboBox _shape = new();
     private readonly ComboBox _colors = new();
     private readonly CheckBox _lightOnDark = new();
@@ -54,7 +56,20 @@ internal sealed class DitherDialog : DialogWindow
         var defaults = new DitherSettings();
         var group = new StackPanel { Margin = new Thickness(16), Spacing = 4 };
 
-        Choice(group, "Look", _style, StyleNames, 0, () => true);
+        // The looks are grouped as the Mac's panel groups them, with a rule between the groups, so the list is
+        // filled here rather than by Choice and _styleRows says which look an item is.
+        _styleRows.AddRange(GroupedChoice.Fill(_style, DitherSettings.Groups, style => StyleNames[(int)style]));
+        _style.SelectedIndex = 0;
+        Row(group, new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            Children =
+            {
+                new TextBlock { Text = "Look", Width = 130, VerticalAlignment = VerticalAlignment.Center },
+                _style,
+            },
+        }, () => true);
 
         Heading(group, "Pixels");
         _pixelSize = Add(group, "Pixel size", 1, 32, start.PixelSize, defaults.PixelSize,
@@ -227,8 +242,12 @@ internal sealed class DitherDialog : DialogWindow
         Refresh();
     }
 
-    /// <summary>The look the panel has chosen.</summary>
-    private DitherStyle Style() => (DitherStyle)Math.Max(0, _style.SelectedIndex);
+    /// <summary>The look the panel has chosen, which is what its item stands for rather than its index.</summary>
+    private DitherStyle Style()
+    {
+        var index = _style.SelectedIndex;
+        return index >= 0 && index < _styleRows.Count && _styleRows[index] is { } style ? style : DitherStyle.Atkinson;
+    }
 
     /// <summary>The amounts as the panel has them, for a preview of what they would do.</summary>
     private DitherSettings Current()

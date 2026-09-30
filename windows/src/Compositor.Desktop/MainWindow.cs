@@ -103,6 +103,8 @@ public sealed class MainWindow : Window
     /// <summary>The view's switches as they were left last time, which the View menu opens with.</summary>
     private readonly ToolDefaults _tools = ToolDefaults.Load(ToolDefaults.DefaultPath);
     private readonly ComboBox _blend = new();
+    /// <summary>What each item of the blend list stands for: the mode, or nothing for a rule between groups.</summary>
+    private readonly List<LayerBlendMode?> _blendRows = [];
     private readonly Slider _opacity = new() { Minimum = 0, Maximum = 100, Width = 130 };
     private readonly TextBlock _opacityReadout = new() { Width = 40, VerticalAlignment = VerticalAlignment.Center };
     private bool _showingAppearance;
@@ -2078,6 +2080,36 @@ public sealed class MainWindow : Window
         report.Add($"colors: {Spell(before.Foreground)}/{Spell(before.Background)} swapped to " +
             $"{Spell(after.Foreground)}/{Spell(after.Background)}, and reset to black over white");
 
+        // The blend list is offered in groups with a rule between them, so an item is not the mode at its
+        // index: what each item stands for is what has to reach the layer, rules and all.
+        var rules = _blendRows.Count(row => row is null);
+        if (rules != LayerEdits.BlendGroups.Length - 1)
+        {
+            throw new InvalidOperationException(
+                $"the blend list drew {rules} rules for {LayerEdits.BlendGroups.Length} groups of modes");
+        }
+        if (Selected is not { } blended || _document is not { } blending)
+        {
+            throw new InvalidOperationException("nothing is selected to blend");
+        }
+        // Hard Mix sits past two rules, so an off-by-one in the mapping would land on a mode that is not it.
+        var wanted = LayerBlendMode.HardMix;
+        var item = _blendRows.IndexOf(wanted);
+        if (item < 0) throw new InvalidOperationException($"{wanted} is not in the blend list");
+        _blend.SelectedIndex = item;
+        var chosen = blending.Layers.First(layer => layer.ID == blended).BlendMode;
+        if (chosen != wanted)
+        {
+            throw new InvalidOperationException($"picking {Spell(wanted)} at item {item} set the layer to {Spell(chosen)}");
+        }
+        _blend.SelectedIndex = _blendRows.IndexOf(LayerBlendMode.Normal);
+        if (blending.Layers.First(layer => layer.ID == blended).BlendMode != LayerBlendMode.Normal)
+        {
+            throw new InvalidOperationException("the blend list did not go back to Normal");
+        }
+        report.Add($"blend list: {_blendRows.Count} items with {rules} rules between the {LayerEdits.BlendGroups.Length} groups; "
+            + $"{Spell(wanted)} picked and set, then back to Normal");
+
         // The toolbar's zoom controls are the View menu's own commands, so the status line has to follow them.
         var start = _canvas.Zoom;
         _canvas.ZoomBy(1.25);
@@ -2321,15 +2353,18 @@ public sealed class MainWindow : Window
     /// </summary>
     private Control Appearance()
     {
-        _blend.ItemsSource = BlendModes.Select(mode => Spell(mode)).ToList();
+        // The list is grouped as the Mac's pop-up is, with a rule between the groups, so an item is not the
+        // mode at its index: _blendRows says what each one is.
+        _blendRows.Clear();
+        _blendRows.AddRange(GroupedChoice.Fill(_blend, LayerEdits.BlendGroups, mode => Spell(mode)));
         _blend.Width = 150;
         _blend.SelectionChanged += (_, _) =>
         {
             if (_showingAppearance) return;
             var index = _blend.SelectedIndex;
-            if (index < 0 || index >= BlendModes.Length) return;
+            if (index < 0 || index >= _blendRows.Count || _blendRows[index] is not { } mode) return;
             if (_document is not { } document || Selected is not { } id) return;
-            Edit("Blend Mode", () => LayerEdits.SetBlendMode(document, id, BlendModes[index]));
+            Edit("Blend Mode", () => LayerEdits.SetBlendMode(document, id, mode));
         };
 
         _opacity.PropertyChanged += (_, change) =>
@@ -2396,7 +2431,7 @@ public sealed class MainWindow : Window
         _showingAppearance = true;
         try
         {
-            _blend.SelectedIndex = layer is null ? -1 : Array.IndexOf(BlendModes, layer.BlendMode);
+            _blend.SelectedIndex = layer is null ? -1 : _blendRows.IndexOf(layer.BlendMode);
             _opacity.Value = (layer?.Opacity ?? 1) * 100;
             _opacityReadout.Text = $"{_opacity.Value:0}%";
             _blend.IsEnabled = _opacity.IsEnabled = layer is not null;

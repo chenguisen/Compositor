@@ -117,4 +117,18 @@ public class LayerAppearanceTests
         Assert.True(LayerEdits.SetVisible(document, top.ID, false));
         Assert.Equal(new SKColor(0, 0, 0), Middle(document));
     }
+
+    /// <summary>
+    /// The groups the list is offered in have to hold every mode exactly once, in the order the menu lists
+    /// them: a mode left out of them could not be picked from the panel at all, and one listed twice would
+    /// appear as two rows that do the same thing.
+    /// </summary>
+    [Fact]
+    public void TheBlendGroupsHoldEveryModeOnceInTheMenusOrder()
+    {
+        var listed = LayerEdits.BlendGroups.SelectMany(group => group).ToList();
+        Assert.Equal(Enum.GetValues<LayerBlendMode>(), listed);
+        Assert.Equal(listed.Count, listed.Distinct().Count());
+        Assert.All(LayerEdits.BlendGroups, group => Assert.NotEmpty(group));
+    }
 }
